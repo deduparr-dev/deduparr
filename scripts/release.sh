@@ -47,12 +47,32 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
     exit 1
 fi
 
+# Update version in manifest.json
+echo "Updating version in manifest.json to $VERSION"
+sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" manifest.json
+
+# Update version in frontend/package.json
+echo "Updating version in frontend/package.json to $VERSION"
+sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
+
+# Update package-lock.json
+echo "Updating frontend/package-lock.json"
+cd frontend
+npm install --package-lock-only
+cd ..
+
+# Commit version changes
+echo "Committing version bump to $VERSION"
+git add manifest.json frontend/package.json frontend/package-lock.json
+git commit -m "chore: bump version to $VERSION"
+
 # Create the tag
 echo "Creating tag: $TAG"
 git tag -a "$TAG" -m "Release $TAG"
 
-# Push the tag
-echo "Pushing tag to origin..."
+# Push changes and tag
+echo "Pushing to origin..."
+git push origin main
 git push origin "$TAG"
 
 echo "Release $TAG created and pushed successfully"

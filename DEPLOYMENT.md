@@ -94,10 +94,15 @@ Deduparr provides multiple Docker image tags for different deployment scenarios:
 
 | Tag | Description | Use Case | Updates |
 |-----|-------------|----------|---------|
-| `latest` | Stable release | **Production** (recommended) | Only on version releases (v1.0.0, etc.) |
-| `v1.0.0`, `v1.1.0` | Specific versions | Production (pinned) | Never (immutable) |
-| `dev` | Development branch | Testing latest features | Every commit to `develop` |
-| `sha-<commit>` | Specific commit | Testing/debugging | Never (immutable) |
+| `latest` | Latest stable release | **Production** (recommended) | Only on version tag releases (v0.1.2, etc.) |
+| `0.1.2`, `0.1` | Specific versions (semver) | Production (pinned) | Never (immutable) |
+| `dev` | Development branch | Testing latest features | Nightly builds (midnight UTC) |
+| `sha-<commit>` | Specific commit SHA from `develop` | Testing/debugging dev builds | Never (immutable) |
+
+**Recommendations:**
+- **Production:** Use `latest` for automatic updates or pin to specific version like `0.1.2`
+- **Testing:** Use `dev` to test upcoming features before release
+- **Debugging:** Use `sha-*` tags only when troubleshooting specific develop commits
 
 **Examples:**
 
@@ -106,7 +111,7 @@ Deduparr provides multiple Docker image tags for different deployment scenarios:
 image: ghcr.io/deduparr-dev/deduparr:latest
 
 # Specific version (pinned)
-image: ghcr.io/deduparr-dev/deduparr:v1.0.0
+image: ghcr.io/deduparr-dev/deduparr:0.1.2
 
 # Latest development features
 image: ghcr.io/deduparr-dev/deduparr:dev

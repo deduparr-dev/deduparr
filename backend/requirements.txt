@@ -13,7 +13,7 @@ greenlet==3.2.4  # Required for SQLAlchemy async
 
 # API Clients
 plexapi==4.17.1
-qbittorrent-api==2025.7.0
+qbittorrent-api==2025.11.0
 pyarr==5.2.0
 
 # Scheduling

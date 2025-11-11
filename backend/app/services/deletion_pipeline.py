@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.models import DeletionHistory, DuplicateFile, DuplicateSet
 from app.models.duplicate import MediaType
+from app.services.arr_helpers import refresh_media_item
 from app.services.plex_service import PlexService
 from app.services.qbittorrent_service import QBittorrentService
 from app.services.radarr_service import RadarrService
@@ -1080,6 +1081,7 @@ class DeletionPipeline:
         2. *arr won't accidentally re-import the file we just deleted
         3. *arr can scan the directory and find the better file we kept
         4. The better file gets automatically imported
+        5. Orphaned database entries are cleaned up via RefreshMovie/RefreshSeries
 
         This ensures the movie/series stays tracked with the higher quality version.
 
@@ -1096,10 +1098,24 @@ class DeletionPipeline:
                         f"[DRY-RUN] Would trigger Radarr rescan for movie {media_id}"
                     )
                 else:
+                    # First, rescan for the better file
                     await self.radarr_service.rescan_movie(media_id, kept_file_path)
                     logger.info(
                         f"Triggered Radarr rescan for movie {media_id} "
                         f"(will find and import the better file we kept)"
+                    )
+
+                    # Then refresh metadata to clean up orphaned DB entries
+                    radarr_client = await self.radarr_service._get_client()
+                    await refresh_media_item(
+                        client=radarr_client,
+                        media_id=media_id,
+                        media_type="movie",
+                        logger_instance=logger,
+                    )
+                    logger.info(
+                        f"Triggered Radarr refresh for movie {media_id} "
+                        f"(will clean up orphaned database entries)"
                     )
             elif arr_type == "sonarr":
                 if self.dry_run:
@@ -1107,10 +1123,24 @@ class DeletionPipeline:
                         f"[DRY-RUN] Would trigger Sonarr rescan for series {media_id}"
                     )
                 else:
+                    # First, rescan for the better file
                     await self.sonarr_service.rescan_series(media_id, kept_file_path)
                     logger.info(
                         f"Triggered Sonarr rescan for series {media_id} "
                         f"(will find and import the better file we kept)"
+                    )
+
+                    # Then refresh metadata to clean up orphaned DB entries
+                    sonarr_client = await self.sonarr_service._get_client()
+                    await refresh_media_item(
+                        client=sonarr_client,
+                        media_id=media_id,
+                        media_type="series",
+                        logger_instance=logger,
+                    )
+                    logger.info(
+                        f"Triggered Sonarr refresh for series {media_id} "
+                        f"(will clean up orphaned database entries)"
                     )
             else:
                 logger.warning(f"Unknown arr_type for rescan: {arr_type}")

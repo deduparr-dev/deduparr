@@ -1,10 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { systemAPI } from "@/services/api";
-import {
-  PageContainer,
-  PageHeader,
-  ContentGrid,
-} from "@/components/DefaultPageLayout";
+import { PageContainer, PageHeader, ContentGrid } from "@/components/DefaultPageLayout";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,7 +20,7 @@ function formatUptime(seconds: number | null): string {
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  
+
   if (days > 0) return `${days}d ${hours}h ${minutes}m`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
@@ -85,7 +81,11 @@ export default function System() {
     refetchInterval: autoRefresh ? 5000 : false, // 5 seconds
   });
 
-  const { data: logsData, isLoading: logsLoading, refetch: refetchLogs } = useQuery({
+  const {
+    data: logsData,
+    isLoading: logsLoading,
+    refetch: refetchLogs,
+  } = useQuery({
     queryKey: ["systemLogs", logLimit],
     queryFn: () => systemAPI.getLogs(logLimit),
     refetchInterval: autoRefresh ? 2000 : false, // 2 seconds for logs
@@ -103,8 +103,8 @@ export default function System() {
 
   return (
     <PageContainer>
-      <PageHeader 
-        title="System Information" 
+      <PageHeader
+        title="System Information"
         description="Live system status, logs, and configuration details"
       />
 
@@ -132,7 +132,9 @@ export default function System() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Scheduled Scans:</span>
                 <Badge variant={appInfo.config.enable_scheduled_scans ? "default" : "secondary"}>
-                  {appInfo.config.enable_scheduled_scans ? `Every ${appInfo.config.scan_interval_hours}h` : "Disabled"}
+                  {appInfo.config.enable_scheduled_scans
+                    ? `Every ${appInfo.config.scan_interval_hours}h`
+                    : "Disabled"}
                 </Badge>
               </div>
             </div>
@@ -185,7 +187,9 @@ export default function System() {
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">OS:</span>
-                <span className="font-medium">{systemInfo.platform.system} {systemInfo.platform.release}</span>
+                <span className="font-medium">
+                  {systemInfo.platform.system} {systemInfo.platform.release}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Platform:</span>
@@ -245,13 +249,18 @@ export default function System() {
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">URL:</span>
-                <span className="font-medium text-xs truncate max-w-[200px]" title={appInfo.database.url}>
+                <span
+                  className="font-medium text-xs truncate max-w-[200px]"
+                  title={appInfo.database.url}
+                >
                   {appInfo.database.url}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Status:</span>
-                <Badge variant={appInfo.database.status === "connected" ? "default" : "destructive"}>
+                <Badge
+                  variant={appInfo.database.status === "connected" ? "default" : "destructive"}
+                >
                   {appInfo.database.status}
                 </Badge>
               </div>
@@ -317,12 +326,10 @@ export default function System() {
               <Badge variant="outline">{logsData.total} entries</Badge>
             </div>
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setAutoRefresh(!autoRefresh)}
-              >
-                <Activity className={`w-4 h-4 mr-2 ${autoRefresh ? "animate-pulse text-primary" : ""}`} />
+              <Button variant="outline" size="sm" onClick={() => setAutoRefresh(!autoRefresh)}>
+                <Activity
+                  className={`w-4 h-4 mr-2 ${autoRefresh ? "animate-pulse text-primary" : ""}`}
+                />
                 {autoRefresh ? "Auto ON" : "Auto OFF"}
               </Button>
               <select
@@ -341,7 +348,7 @@ export default function System() {
               </Button>
             </div>
           </div>
-          
+
           <div className="bg-black rounded-lg p-4 font-mono text-xs overflow-auto max-h-[600px] space-y-1">
             {logsData.logs.length === 0 ? (
               <div className="text-gray-500">No logs available</div>
@@ -351,8 +358,8 @@ export default function System() {
                   <span className="text-gray-500 shrink-0">
                     {new Date(log.timestamp).toLocaleString()}
                   </span>
-                  <Badge 
-                    variant={getLevelBadgeVariant(log.level)} 
+                  <Badge
+                    variant={getLevelBadgeVariant(log.level)}
                     className="shrink-0 h-5 text-[10px]"
                   >
                     {log.level}

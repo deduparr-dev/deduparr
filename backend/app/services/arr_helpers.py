@@ -367,3 +367,48 @@ async def trigger_full_library_scan(
             f"Error triggering full {media_type.capitalize()}arr library scan: {e}"
         )
         raise
+
+
+async def refresh_media_item(
+    client, media_id: int, media_type: MediaType, logger_instance: logging.Logger
+) -> bool:
+    """
+    Refresh a movie or series metadata and clean up orphaned database entries
+
+    This command will:
+    - Update metadata from indexers (TMDB/TVDB)
+    - Check if files still exist on disk
+    - Remove orphaned database entries if files are missing
+
+    Useful for cleaning up after external deletions (e.g., qBittorrent removed a file
+    but *arr still has it in the database).
+
+    Args:
+        client: Radarr or Sonarr API client instance
+        media_id: ID of the movie/series to refresh
+        media_type: Type of media ("movie" or "series")
+        logger_instance: Logger instance to use
+
+    Returns:
+        True if command was successfully queued
+    """
+    try:
+        if media_type == "movie":
+            command_name = "RefreshMovie"
+            id_param = "movieId"
+        elif media_type == "series":
+            command_name = "RefreshSeries"
+            id_param = "seriesId"
+        else:
+            raise ValueError(f"Unknown media type: {media_type}")
+
+        result = client.post_command(command_name, **{id_param: media_id})
+        logger_instance.info(
+            f"Queued {media_type} refresh for ID {media_id}, "
+            f"command ID: {result.get('id')} (will clean up orphaned DB entries)"
+        )
+        return True
+
+    except Exception as e:
+        logger_instance.error(f"Error refreshing {media_type} {media_id}: {e}")
+        raise

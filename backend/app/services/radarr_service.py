@@ -10,6 +10,7 @@ from pyarr.exceptions import PyarrAccessRestricted, PyarrConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.arr_helpers import (
+    find_media_by_file_path,
     manual_import_file,
     rescan_media_item,
     trigger_full_library_scan,
@@ -37,28 +38,7 @@ class RadarrService(BaseExternalService):
             Movie data if found, None otherwise
         """
         client = await self._get_client()
-
-        try:
-
-            movies = client.get_movie()
-
-            for movie in movies:
-                if "movieFile" in movie and movie["movieFile"]:
-                    radarr_path = movie["movieFile"].get("path")
-                    if radarr_path:
-                        # Match by FULL PATH to avoid deleting wrong file when filenames match
-                        # (e.g., same file in different folders like /Movie (2025)/file.mkv vs /file.mkv)
-                        if radarr_path == file_path:
-                            logger.info(
-                                f"Found movie '{movie['title']}' for file {file_path}"
-                            )
-                            return movie
-
-            logger.warning(f"Movie not found in Radarr for file path: {file_path}")
-            return None
-        except Exception as e:
-            logger.error(f"Error finding movie for {file_path}: {e}")
-            raise
+        return find_media_by_file_path(client, file_path, "movie", logger)
 
     async def _get_client(self) -> RadarrAPI:
         """Get Radarr client instance"""

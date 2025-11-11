@@ -10,6 +10,7 @@ from pyarr.exceptions import PyarrAccessRestricted, PyarrConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.arr_helpers import (
+    find_media_by_file_path,
     manual_import_file,
     rescan_media_item,
     trigger_full_library_scan,
@@ -43,49 +44,7 @@ class SonarrService(BaseExternalService):
             Episode data with episodeFile if found, None otherwise
         """
         client = await self._get_client()
-
-        try:
-            # Get all episode files by iterating through series
-            # PyArr API no longer supports get_episode_file() without id_
-            episode_files = []
-            all_series = client.get_series()
-            for series in all_series:
-                series_id = series.get("id")
-                if series_id:
-                    files = client.get_episode_files_by_series_id(series_id)
-                    if files:
-                        episode_files.extend(files)
-
-            for episode_file in episode_files:
-                sonarr_path = episode_file.get("path")
-                if sonarr_path:
-                    # Match by FULL PATH to avoid deleting wrong file when filenames match
-                    # (e.g., same episode file in different folders or quality variants)
-                    if sonarr_path == file_path:
-                        # Get episode details - episodeFile data contains episodeIds
-                        episode_ids = episode_file.get("episodeIds", [])
-                        if episode_ids:
-                            # Get the first episode (for multi-episode files, this is sufficient)
-                            episodes = client.get_episode(episode_ids[0])
-                            if isinstance(episodes, list) and episodes:
-                                episode = episodes[0]
-                            else:
-                                episode = episodes
-
-                            # Attach the episodeFile data to the episode
-                            episode["episodeFile"] = episode_file
-
-                            episode_title = episode.get("title", "Unknown Episode")
-                            logger.info(
-                                f"Found episode '{episode_title}' for file {file_path}"
-                            )
-                            return episode
-
-            logger.warning(f"Episode not found in Sonarr for file path: {file_path}")
-            return None
-        except Exception as e:
-            logger.error(f"Error finding episode for {file_path}: {e}")
-            raise
+        return find_media_by_file_path(client, file_path, "series", logger)
 
     async def _get_client(self) -> SonarrAPI:
         """Get Sonarr client instance"""

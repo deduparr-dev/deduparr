@@ -1078,11 +1078,11 @@ class DeletionPipeline:
 
             if arr_media_id:
                 logger.info(
-                    f"✅ Found {arr_type} media ID {arr_media_id} from deletion history for duplicate set {duplicate_set_id}"
+                    f"Found {arr_type} media ID {arr_media_id} from deletion history for duplicate set {duplicate_set_id}"
                 )
             else:
                 logger.warning(
-                    f"❌ No {arr_type} media ID found in deletion history for duplicate set {duplicate_set_id}"
+                    f"No {arr_type} media ID found in deletion history for duplicate set {duplicate_set_id}"
                 )
 
             return arr_media_id

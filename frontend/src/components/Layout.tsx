@@ -1,12 +1,13 @@
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Home, Search, Settings, Wand2, Menu, X } from "lucide-react";
+import { Home, Search, Settings, Wand2, Menu, X, Activity } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: Home },
   { name: "Scan", href: "/scan", icon: Search },
   { name: "Settings", href: "/settings", icon: Settings },
+  { name: "System", href: "/system", icon: Activity },
 ];
 
 interface LayoutProps {

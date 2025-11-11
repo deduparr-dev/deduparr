@@ -17,6 +17,7 @@ services:
       - DATABASE_URL=sqlite:////config/deduparr.db
       - ENABLE_SCHEDULED_SCANS=yes
       - SCAN_INTERVAL_HOURS=1
+      - LOG_LEVEL=DEBUG
     restart: unless-stopped
 
   frontend:

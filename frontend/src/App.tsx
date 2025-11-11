@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Layout } from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Scan from "./pages/Scan";
+import System from "./pages/System";
 import Settings from "./pages/Settings";
 import SetupWizard from "./pages/SetupWizard";
 import NotFound from "./pages/NotFound";
@@ -53,6 +54,14 @@ function AppRoutes() {
           </Layout>
         }
         path="/settings"
+      />
+      <Route
+        element={
+          <Layout>
+            <System />
+          </Layout>
+        }
+        path="/system"
       />
       {/* Redirect to setup if not configured */}
       {!plexConfigured && config !== undefined && (

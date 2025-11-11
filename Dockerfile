@@ -55,6 +55,9 @@ COPY --from=backend-builder /usr/local/bin /usr/local/bin
 # Copy backend application
 COPY backend/app ./app
 
+# Copy manifest.json (version source of truth)
+COPY manifest.json ./manifest.json
+
 # Copy frontend build
 COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 

@@ -97,6 +97,70 @@ export interface PlexLibrary {
   agent: string;
 }
 
+export interface SystemVersionInfo {
+  deduparr: string;
+  python: string;
+  fastapi: string;
+  sqlalchemy: string;
+  platform: string;
+  architecture: string;
+}
+
+export interface SystemInfo {
+  hostname: string;
+  platform: {
+    system: string;
+    release: string;
+    version: string;
+    machine: string;
+    processor: string;
+  };
+  python: {
+    version: string;
+    implementation: string;
+    executable: string;
+  };
+  process: {
+    pid: number;
+    memory_rss: number;
+    memory_vms: number;
+    cpu_percent: number;
+    threads: number;
+  };
+  uptime_seconds: number | null;
+  timezone: string;
+}
+
+export interface AppInfo {
+  name: string;
+  description: string;
+  version: string;
+  database: {
+    url: string;
+    status: string;
+    size_bytes: number | null;
+  };
+  config: {
+    log_level: string;
+    enable_scheduled_scans: boolean;
+    scan_interval_hours: number;
+    data_dir: string;
+  };
+}
+
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  logger: string;
+  message: string;
+}
+
+export interface LogsResponse {
+  logs: LogEntry[];
+  total: number;
+  limit: number;
+}
+
 export interface PlexConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
@@ -255,3 +319,11 @@ export const setupAPI = {
       { auth_token: authToken, server_name: serverName }
     ),
 };
+
+export const systemAPI = {
+  getVersionInfo: () => fetchAPI<SystemVersionInfo>("/api/system/version"),
+  getSystemInfo: () => fetchAPI<SystemInfo>("/api/system/info"),
+  getAppInfo: () => fetchAPI<AppInfo>("/api/system/app"),
+  getLogs: (limit = 100) => fetchAPI<LogsResponse>(`/api/system/logs?limit=${limit}`),
+};
+

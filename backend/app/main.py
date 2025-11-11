@@ -12,8 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import DEDUPARR_VERSION
 from app.core.config import settings
 from app.core.database import init_db
-from app.api.routes import config, setup, scoring, stats, scan
+from app.api.routes import config, setup, scoring, stats, scan, system
 from app.services.scheduler import get_scheduler
+from app.services.system_service import SystemService
 
 
 # Configure logging based on environment variable
@@ -25,6 +26,9 @@ logging.basicConfig(
 
 # Suppress plexapi library noise - only log critical failures
 logging.getLogger("plexapi").setLevel(logging.CRITICAL)
+
+# Setup log capture for system page
+SystemService.setup_log_capture()
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +91,7 @@ app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
 app.include_router(scoring.router, prefix="/api/scoring", tags=["scoring"])
 app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
 app.include_router(scan.router, prefix="/api/scan", tags=["scan"])
+app.include_router(system.router, prefix="/api", tags=["system"])
 
 # Additional routes will be added as they are implemented
 # from app.api.routes import duplicates, history, stats

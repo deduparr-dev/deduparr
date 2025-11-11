@@ -19,7 +19,7 @@ function AppRoutes() {
   const { data: config } = useQuery({
     queryKey: ["config"],
     queryFn: async () => {
-      const response = await fetch("/api/config");
+      const response = await fetch("/api/config/");
       if (!response.ok) return null;
       return response.json();
     },

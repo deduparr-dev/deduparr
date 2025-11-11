@@ -851,27 +851,53 @@ class DeletionPipeline:
                 # File is already in *arr - just trigger a rescan for that specific item
                 if media_type == MediaType.MOVIE:
                     if not self.dry_run:
+                        # First, scan for new files
                         await self.radarr_service.rescan_movie(
                             arr_media_id, kept_file_path
                         )
                         logger.info(
                             f"Triggered Radarr rescan for movie {arr_media_id} to import: {kept_file_path}"
                         )
+
+                        # Then refresh to clean up orphaned DB entries
+                        radarr_client = await self.radarr_service._get_client()
+                        await refresh_media_item(
+                            client=radarr_client,
+                            media_id=arr_media_id,
+                            media_type="movie",
+                            logger_instance=logger,
+                        )
+                        logger.info(
+                            f"Triggered Radarr refresh for movie {arr_media_id} (cleans orphaned DB entries)"
+                        )
                     else:
                         logger.info(
-                            f"[DRY-RUN] Would trigger Radarr rescan for movie {arr_media_id}"
+                            f"[DRY-RUN] Would trigger Radarr rescan and refresh for movie {arr_media_id}"
                         )
                 else:
                     if not self.dry_run:
+                        # First, scan for new files
                         await self.sonarr_service.rescan_series(
                             arr_media_id, kept_file_path
                         )
                         logger.info(
                             f"Triggered Sonarr rescan for series {arr_media_id} to import: {kept_file_path}"
                         )
+
+                        # Then refresh to clean up orphaned DB entries
+                        sonarr_client = await self.sonarr_service._get_client()
+                        await refresh_media_item(
+                            client=sonarr_client,
+                            media_id=arr_media_id,
+                            media_type="series",
+                            logger_instance=logger,
+                        )
+                        logger.info(
+                            f"Triggered Sonarr refresh for series {arr_media_id} (cleans orphaned DB entries)"
+                        )
                     else:
                         logger.info(
-                            f"[DRY-RUN] Would trigger Sonarr rescan for series {arr_media_id}"
+                            f"[DRY-RUN] Would trigger Sonarr rescan and refresh for series {arr_media_id}"
                         )
             else:
                 # File not tracked in *arr - try manual import, then fall back to full library scan

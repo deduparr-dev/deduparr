@@ -9,13 +9,13 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "🎨 Formatting backend code with black..."
 cd "$REPO_DIR"
-black .
+python -m black .
 
 echo ""
-echo "�� Linting and fixing backend with ruff..."
-ruff check --fix .
+echo "🔍 Linting and fixing backend with ruff..."
+python -m ruff check --fix .
 
-if ! ruff check .; then
+if ! python -m ruff check .; then
     echo ""
     echo "❌ You need to fix the remaining backend issues before you can proceed."
     echo "   When fixed, please run the test again."

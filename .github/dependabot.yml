@@ -5,6 +5,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    target-branch: "develop"
     open-pull-requests-limit: 10
     versioning-strategy: increase
     groups:
@@ -23,6 +24,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    target-branch: "develop"
     open-pull-requests-limit: 10
     versioning-strategy: increase
     groups:
@@ -47,6 +49,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    target-branch: "develop"
     open-pull-requests-limit: 5
 
   - package-ecosystem: "github-actions"
@@ -54,4 +57,5 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    target-branch: "develop"
     open-pull-requests-limit: 5

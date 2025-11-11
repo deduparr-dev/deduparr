@@ -1,5 +1,10 @@
 # Multi-stage build for optimized image size
 
+# Build arguments for metadata
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
 # Stage 1: Build frontend
 FROM node:25-alpine AS frontend-builder
 
@@ -69,8 +74,24 @@ RUN mkdir -p /config /media && \
 ENV PYTHONUNBUFFERED=1
 ENV DATABASE_TYPE=sqlite
 ENV DATABASE_URL=sqlite:////config/deduparr.db
-ENV ENCRYPTION_KEY_FILE=/config/.encryption_key
+ENV ENCRYPTION_KEY_FILE=/app/data/.encryption_key
 ENV LOG_LEVEL=INFO
+
+# Metadata labels
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+LABEL org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.authors="deduparr-dev" \
+      org.opencontainers.image.url="https://github.com/deduparr-dev/deduparr" \
+      org.opencontainers.image.documentation="https://github.com/deduparr-dev/deduparr/blob/main/README.md" \
+      org.opencontainers.image.source="https://github.com/deduparr-dev/deduparr" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.vendor="deduparr-dev" \
+      org.opencontainers.image.title="Deduparr" \
+      org.opencontainers.image.description="Intelligent duplicate management for the *arr stack" \
+      org.opencontainers.image.licenses="MIT"
 
 # Expose port
 EXPOSE 8655

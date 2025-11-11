@@ -10,16 +10,19 @@ services:
       - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
       - DATABASE_URL=${DATABASE_URL:-sqlite:////config/deduparr.db}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      # Optional: Scheduled Scans
+      - ENABLE_SCHEDULED_SCANS=${ENABLE_SCHEDULED_SCANS:-false}
+      - SCAN_INTERVAL_HOURS=${SCAN_INTERVAL_HOURS:-24}
       # Optional: Override media directory if auto-detection doesn't work
       # - MEDIA_DIR=/same-path-as-plex-uses
     volumes:
       - ${CONFIG_PATH:-./config}:/config
-      - ${DATA_PATH:-./data}:/app/data
-      # IMPORTANT: Mount media at the SAME path that Plex uses!
+      - ${DATA_PATH:-./data}:/app/data:rw
+      # IMPORTANT: Mount media at SAME path Plex uses for hardlink detection!
       # If Plex has: /mnt/media:/plexdownloads
       # Then use:    /mnt/media:/plexdownloads (not /media!)
-      # This allows hardlink detection to work correctly.
-      - ${MEDIA_PATH:-/path/to/media}:/media:ro
+      # :rw = full cleanup (recommended), :ro = API-only deletion
+      - ${MEDIA_PATH:-/path/to/media}:/media:rw
     ports:
       - "${UI_PORT:-8655}:8655"
     restart: unless-stopped

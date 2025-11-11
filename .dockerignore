@@ -1,0 +1,63 @@
+# Git
+.git/
+.gitignore
+.github/
+
+# Python
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache/
+**/.coverage
+**/*.egg-info/
+**/venv/
+**/env/
+
+# Node
+**/node_modules/
+**/dist/
+**/.next/
+**/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation
+docs/
+todo/
+*.md
+!README.md
+LICENSE
+
+# Config examples
+.env.example
+config/config.example.yml
+
+# Testing
+backend/tests/
+frontend/src/**/*.test.ts
+frontend/src/**/*.test.tsx
+backend/pytest.ini
+coverage.xml
+.coverage
+
+# Development
+docker-compose.dev.yml
+backend/Dockerfile.dev
+frontend/Dockerfile.dev
+scripts/
+manifest.json
+
+# Data directories (mounted as volumes)
+config/
+data/
+postgres-data/
+
+# OS
+.DS_Store
+Thumbs.db

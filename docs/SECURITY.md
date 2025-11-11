@@ -11,7 +11,7 @@ https://www.trendmicro.com/en_us/research/25/i/npm-supply-chain-attack.html
 2. **Registry Pinning**: Only official npm registry allowed
 3. **Integrity Checking**: Package integrity verified via checksums
 4. **Version Pinning**: Exact versions saved (no `^` or `~`)
-5. **Regular Audits**: `npm audit` runs during CI/CD
+5. **Regular Audits**: `npm audit` is recommended before releases.
 
 ### Running Security Checks
 

@@ -44,7 +44,7 @@
 
 ## 📋 **Core Features**
 
-### **Phase 1: MVP (Minimum Viable Product)** ✅ **MOSTLY COMPLETE**
+### **Phase 1: MVP (Minimum Viable Product)** ✅ **COMPLETE**
 
 #### **1.1 Duplicate Detection**
 - [x] Scan Plex libraries for duplicates
@@ -57,8 +57,7 @@
   - Bitrate
   - Source (Remux > BluRay > WEB-DL > HDTV)
 - [x] Manual file path pattern scoring (regex-based)
-- [ ] Option to use Plex smart collections as input
-- [ ] **Kometa Integration:** Import collections as duplicate sources
+- [x] Quick actions
 
 #### **1.2 Review & Approval System**
 - [x] **Dry-run mode by default**
@@ -75,13 +74,19 @@
 
 #### **1.3 Deletion Pipeline**
 - [x] Multi-stage deletion process:
-  1. **qBittorrent:** Remove item (with/without data - configurable)
-  2. **Radarr/Sonarr:** Delete movie/episode file via API
-  3. **Filesystem:** Delete file (if not already deleted)
-  4. **Plex:** Refresh library section
+  1. **Stage 1 - Radarr/Sonarr API:** Delete file via *arr API
+  2. **Stage 2 - qBittorrent API:** Remove torrent item (with file deletion)
+  3. **Stage 3 - *arr Rescan:** Refresh *arr library to update state
+  4. **Stage 4 - Fallback Disk Cleanup:** Direct filesystem cleanup for:
+     - Manually added media files (not managed by *arr)
+     - Associated files (.srt subtitles, .nfo metadata, fanart, etc.)
+     - Common subdirectories (Sample, Subs, Proof, Extras)
+     - Empty parent directories (recursive cleanup)
+  5. **Stage 5 - Plex Refresh:** Update Plex library
 - [x] Transaction-like behavior (rollback on failure)
 - [x] Detailed logging for each step
 - [x] Activity history/audit log
+- [x] Configurable media mount permissions (`:ro` for API-only, `:rw` for full cleanup)
 
 #### **1.4 Configuration Management**
 - [x] Setup wizard on first run
@@ -100,25 +105,44 @@
 - [x] Recent activity log
 - [x] Quick actions
 
+#### **1.6 Automation** ✅ **COMPLETE**
+- [x] Scheduled scans (interval-based with APScheduler)
+- [x] Environment variable configuration (`ENABLE_SCHEDULED_SCANS`, `SCAN_INTERVAL_HOURS`)
+- [x] Background scanning without blocking UI
+- [x] Detects duplicates automatically (manual approval still required for deletion)
+- [x] Configurable scan intervals (6h, 12h, 24h, 48h, weekly, etc.)
+- [x] Quick actions
+
 ---
 
-### **Phase 2: Advanced Features** 🚧 **PLANNED**
+### **Phase 2: Advanced Features** 🚧 **IN PROGRESS**
 
-#### **2.1 Automation**
-- [ ] Scheduled scans (cron-like)
+#### **2.1 Enhanced UI/UX**
+- [ ] Preview thumbnails from Plex
+- [ ] Bulk actions (approve all, reject all, selective approval)
+- [ ] "Keep both" option with reason logging
+- [ ] Advanced filtering and search
+- [ ] Keyboard shortcuts
+
+#### **2.2 Smart Features**
 - [ ] Auto-approve rules:
   - "Always keep highest quality"
   - "Always delete files < X GB"
   - Custom rule engine
-- [ ] Webhook notifications (Discord, Slack, etc.)
-- [ ] Email notifications
-
-#### **2.2 Smart Detection**
+- [ ] Plex smart collections support
+- [ ] Kometa integration
 - [ ] Machine learning scoring (optional)
 - [ ] HDR vs SDR detection
 - [ ] Audio track language detection
 - [ ] Subtitle availability scoring
 - [ ] Release group reputation scoring
+
+#### **2.3 Notifications & Integrations**
+- [ ] Webhook notifications (Discord, Slack, etc.)
+- [ ] Email notifications
+- [ ] Notifiarr integration
+- [ ] Export/import configuration
+- [ ] API for external integrations
 
 #### **2.3 Enhanced Integrations**
 - [ ] **Overseerr/Jellyseerr:** Update request status

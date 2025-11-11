@@ -37,10 +37,10 @@ pip install -r requirements.txt
 ```bash
 cd frontend
 npm install  # Uses package-lock.json for integrity verification
-npm run audit  # Check for security vulnerabilities
+npm run audit  # (Optional) Check for security vulnerabilities locally
 ```
 
-**Security Note**: We enforce package integrity via `package-lock.json` and `.npmrc` to prevent supply chain attacks. See [docs/SECURITY.md](docs/SECURITY.md) for details.
+**Security Note**: We recommend using `package-lock.json` for package integrity. Supply chain protection is not enforced by CI/CD. See [docs/SECURITY.md](docs/SECURITY.md) for details.
 
 4. **Run Development Servers**
 

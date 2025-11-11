@@ -11,6 +11,7 @@
   <a href="https://github.com/deduparr-dev/deduparr/issues"><img src="https://img.shields.io/github/issues/deduparr-dev/deduparr?style=flat&logo=github" alt="GitHub Issues"></a>
   <a href="https://github.com/deduparr-dev/deduparr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/deduparr-dev/deduparr?style=flat" alt="License"></a>
   <a href="https://hub.docker.com/r/deduparr-dev/deduparr"><img src="https://img.shields.io/docker/pulls/deduparr-dev/deduparr?style=flat&logo=docker" alt="Docker Pulls"></a>
+  <a href="https://github.com/deduparr-dev/deduparr"><img src="https://img.shields.io/badge/Python-3.13-blue?style=flat&logo=python" alt="Python 3.13"></a>
 </p>
 
 ---
@@ -75,22 +76,26 @@ Create a `docker-compose.yml`:
 ```yaml
 services:
   deduparr:
-    image: deduparr-dev/deduparr:latest
+    image: ghcr.io/deduparr-dev/deduparr:latest
     container_name: deduparr
     environment:
       - PUID=1000
       - PGID=1000
       - TZ=Etc/UTC
       - DATABASE_TYPE=sqlite  # or 'postgres'
+      # Optional: Enable scheduled scans
+      - ENABLE_SCHEDULED_SCANS=false
+      - SCAN_INTERVAL_HOURS=24
     volumes:
       - ./config:/config
-      - /path/to/media:/media:ro  # Read-only access
+      - ./data:/app/data
+      - /path/to/media:/media:rw  # Use :ro for API-only deletion, :rw for full cleanup
     ports:
-      - 8655:8655  # Web UI
+      - 8655:8655
     restart: unless-stopped
 ```
 
-> **Note:** The media volume mount path must match the container path used by Plex for hardlink detection to function correctly. For example, if Plex mounts media at `/plexdownloads`, use the same path in Deduparr: `- /mnt/media:/plexdownloads:rw`
+> **Media Mount:** Use `:rw` (recommended) for complete cleanup including associated files and empty directories. Use `:ro` if you only want API-based deletion via Radarr/Sonarr/qBittorrent. See [DEPLOYMENT.md](DEPLOYMENT.md#media-mount-permissions-ro-vs-rw) for details.
 
 2. **Start the container:**
 
@@ -112,7 +117,7 @@ The setup wizard will guide you through initial configuration.
 
 On first run, the setup wizard guides you through configuration:
 
-1. **Plex Authentication** - OAuth sign-in (no manual token needed)
+1. **Plex Authentication** - OAuth sign-in
 2. **Server Selection** - Choose your Plex server
 3. **Library Selection** - Pick which libraries to scan
 4. **Service Configuration** - Connect qBittorrent, Radarr, and/or Sonarr

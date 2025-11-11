@@ -94,9 +94,17 @@ deletion:
   refresh_plex: true
 
 # Scheduling (optional)
+# Note: Scheduling is now configured via environment variables in Docker
+# Set ENABLE_SCHEDULED_SCANS=true and SCAN_INTERVAL_HOURS=24 in docker-compose.yml
+# This config file section is for reference only
 schedule:
-  enabled: false
-  cron: "0 2 * * *"  # Run at 2 AM daily
+  enabled: false  # Use ENABLE_SCHEDULED_SCANS env var instead
+  interval_hours: 24  # Use SCAN_INTERVAL_HOURS env var instead
+  # Examples:
+  # - Every 6 hours: SCAN_INTERVAL_HOURS=6
+  # - Every 12 hours: SCAN_INTERVAL_HOURS=12
+  # - Daily: SCAN_INTERVAL_HOURS=24
+  # - Every 2 days: SCAN_INTERVAL_HOURS=48
 
 # Notifications (optional)
 notifications:

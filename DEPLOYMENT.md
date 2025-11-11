@@ -16,7 +16,7 @@ Before you begin, ensure you have:
 
 ---
 
-## 🚀 Quick Start (5 minutes)
+## 🚀 Quick Start
 
 ### Step 1: Create Docker Compose File
 
@@ -32,17 +32,20 @@ Create `docker-compose.yml`:
 ```yaml
 services:
   deduparr:
-    image: deduparr-dev/deduparr:latest
+    image: ghcr.io/deduparr-dev/deduparr:latest
     container_name: deduparr
     environment:
       - PUID=1000
       - PGID=1000
       - TZ=America/New_York  # Change to your timezone
       - DATABASE_TYPE=sqlite
+      # Optional: Enable scheduled scans
+      - ENABLE_SCHEDULED_SCANS=false  # Set to 'true' to enable
+      - SCAN_INTERVAL_HOURS=24        # Scan every 24 hours
     volumes:
       - ./config:/config
       - ./data:/app/data
-      - /path/to/media:/media:rw  # Read-write for hardlink detection
+      - /path/to/media:/media:rw  # See table below for :ro vs :rw
     ports:
       - 8655:8655
     restart: unless-stopped
@@ -76,7 +79,7 @@ docker-compose up -d
 Open your browser to: **http://127.0.0.1:8655/setup**
 
 You'll see the Setup Wizard to configure:
-1. ✅ Plex (OAuth authentication)
+1. ✅ Plex
 2. ✅ Radarr API connection
 3. ✅ Sonarr API connection
 4. ✅ qBittorrent credentials
@@ -129,16 +132,50 @@ labels:
 
 ## 📊 Volume Mounts Explained
 
-| Path | Purpose | Permission |
-|------|---------|------------|
-| `./config:/config` | Database & settings | Read/Write |
-| `./data:/app/data` | Encryption keys | Read/Write |
-| `/path/to/media:/media:rw` | Media files scan & hardlink detection | Read/Write |
+| Path | Purpose | Permission | Required |
+|------|---------|------------|----------|
+| `./config:/config` | Database & settings | Read/Write | Yes |
+| `./data:/app/data` | Encryption keys | Read/Write | Yes |
+| `/path/to/media:/media` | Media files scan & deletion | Read-Only or Read/Write | Yes |
 
-**Important:** 
-- Media path should be **read-write (`:rw`)** to enable hardlink detection
-- Hardlink detection requires reading file inodes, which needs write access to the mount
-- If you're concerned about accidental modifications, ensure Deduparr runs as a non-root user (PUID/PGID)
+### Media Mount Permissions: `:ro` vs `:rw`
+
+**Choose based on your deletion strategy:**
+
+| Mode | When to Use | What Works |
+|------|-------------|------------|
+| `:ro` | API-only deletion via Radarr/Sonarr/qBittorrent | Stages 1-3, 5 (API deletion only) |
+| `:rw` | Complete cleanup including associated files ⭐ | All stages 1-5 (full cleanup) |
+
+#### Deletion Pipeline (5 Stages)
+
+1. **Radarr/Sonarr API** - Deletes file via *arr API
+2. **qBittorrent API** - Removes torrent
+3. ***arr Rescan** - Updates library state
+4. **Fallback Disk Cleanup** - Requires `:rw` for:
+   - Manually added files (not in *arr)
+   - Associated files (`.srt`, `.nfo`, fanart)
+   - Subdirectories (`Sample/`, `Subs/`, `Proof/`, `Extras/`)
+   - Empty directories
+5. **Plex Refresh** - Updates Plex library
+
+**Note:** Stage 4 only runs as fallback for files missed by API deletion. All deletions require manual approval (dry-run by default).
+
+### Scheduled Automated Scans
+
+Enable automatic duplicate detection:
+
+```yaml
+environment:
+  - ENABLE_SCHEDULED_SCANS=true
+  - SCAN_INTERVAL_HOURS=24
+```
+
+**Options:**
+- `ENABLE_SCHEDULED_SCANS`: `true`/`false` (default: `false`)
+- `SCAN_INTERVAL_HOURS`: Scan frequency - `6`, `12`, `24`, `48`, `168` (weekly)
+
+Scans detect duplicates in background. Deletions still require manual approval via UI.
 
 ---
 

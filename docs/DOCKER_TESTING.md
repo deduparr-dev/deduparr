@@ -43,7 +43,7 @@ docker build -t deduparr-backend:dev -f Dockerfile.dev .
 docker run -dp 3001:3001 --name deduparr-backend deduparr-backend:dev
 ```
 
-Access API docs at: http://localhost:3001/api/docs
+Access API docs at: http://localhost:3001/docs
 
 ### Option 2: Frontend Only (UI Testing)
 

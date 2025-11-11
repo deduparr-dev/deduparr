@@ -1,24 +1,30 @@
 name: Build and Publish Docker Images
 
+# Build Strategy:
+# - Push to main/develop: Build only (test CI/CD, no publish) - saves GHCR resources
+# - Version tags (v*.*.*): Build and publish as 'latest' + version tags
+# - Nightly schedule: Build and publish 'dev' + SHA tags from develop branch
+# - Manual dispatch: Build and publish based on selected branch
+
 on:
   push:
     branches:
       - main
       - develop
     tags:
-      - 'v*.*.*'
+      - 'v*.*.*'  # Only build on version tags
   schedule:
-    - cron: '0 0 * * *' # dev branch build once per day
-  pull_request:
-    branches:
-      - main
-      - develop
+    - cron: '0 0 * * *'  # Nightly dev build at midnight UTC
   workflow_dispatch:
     inputs:
-      manual_dev_build:
-        description: 'Run dev branch build manually (repo members only)'
+      build_branch:
+        description: 'Branch to build (develop or main)'
         required: false
-        type: boolean
+        default: 'develop'
+        type: choice
+        options:
+          - develop
+          - main
 
 env:
   REGISTRY: ghcr.io
@@ -37,6 +43,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.build_branch || (github.event_name == 'schedule' && 'develop') || github.ref }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -45,7 +53,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -58,16 +66,16 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            # Tag 'latest' for main branch only
-            type=raw,value=latest,enable={{is_default_branch}}
-            # Tag 'dev' for develop branch
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/develop' }}
-            # Tag with semver for version tags
+            # Tag 'latest' only for version releases (v*.*.*)
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # Tag 'dev' for develop branch (nightly builds and manual dispatch)
+            type=raw,value=dev,enable=${{ github.event_name == 'schedule' || github.event.inputs.build_branch == 'develop' }}
+            # Tag with semver for version tags (v1.0.0 -> 1.0.0, 1.0, 1)
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # Tag with SHA for traceability
-            type=sha
+            # Tag with SHA for develop branch only (nightly/manual dev builds)
+            type=sha,enable=${{ github.event_name == 'schedule' || github.event.inputs.build_branch == 'develop' }}
           flavor: |
             latest=false
 
@@ -77,7 +85,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          # Only push for: version tags, nightly builds, or manual dispatch (not branch pushes)
+          push: ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -88,7 +97,7 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
 
       - name: Generate artifact attestation
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}

@@ -95,7 +95,7 @@ services:
     restart: unless-stopped
 ```
 
-> **Media Mount:** Use `:rw` (recommended) for complete cleanup including associated files and empty directories. Use `:ro` if you only want API-based deletion via Radarr/Sonarr/qBittorrent. See [DEPLOYMENT.md](DEPLOYMENT.md#media-mount-permissions-ro-vs-rw) for details.
+> **Media Mount:** Use `:rw` (recommended) for complete cleanup including associated files and empty directories. Use `:ro` if you only want API-based deletion via Radarr/Sonarr/qBittorrent. See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed configuration options.
 
 2. **Start the container:**
 

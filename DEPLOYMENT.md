@@ -32,7 +32,7 @@ Create `docker-compose.yml`:
 ```yaml
 services:
   deduparr:
-    image: ghcr.io/deduparr-dev/deduparr:latest
+    image: ghcr.io/deduparr-dev/deduparr:latest  # Use 'latest' for stable releases, 'dev' for latest features
     container_name: deduparr
     environment:
       - PUID=1000
@@ -87,6 +87,33 @@ You'll see the Setup Wizard to configure:
 ---
 
 ## 🔧 Advanced Configuration
+
+### Docker Image Tags
+
+Deduparr provides multiple Docker image tags for different deployment scenarios:
+
+| Tag | Description | Use Case | Updates |
+|-----|-------------|----------|---------|
+| `latest` | Stable release | **Production** (recommended) | Only on version releases (v1.0.0, etc.) |
+| `v1.0.0`, `v1.1.0` | Specific versions | Production (pinned) | Never (immutable) |
+| `dev` | Development branch | Testing latest features | Every commit to `develop` |
+| `sha-<commit>` | Specific commit | Testing/debugging | Never (immutable) |
+
+**Examples:**
+
+```yaml
+# Production (stable, recommended)
+image: ghcr.io/deduparr-dev/deduparr:latest
+
+# Specific version (pinned)
+image: ghcr.io/deduparr-dev/deduparr:v1.0.0
+
+# Latest development features
+image: ghcr.io/deduparr-dev/deduparr:dev
+
+# Specific commit for testing
+image: ghcr.io/deduparr-dev/deduparr:sha-7c86cb49
+```
 
 ### Using PostgreSQL Instead of SQLite
 

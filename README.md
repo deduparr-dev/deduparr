@@ -51,6 +51,28 @@ All with a beautiful web UI and dry-run mode for safety!
 
 ---
 
+## 📸 Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" alt="Dashboard" width="800"/>
+  <br/>
+  <em>Dashboard - Overview of your duplicate detection system</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/scan.png" alt="Scan for Duplicates" width="800"/>
+  <br/>
+  <em>Scan Page - Find and manage duplicate media files</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="Settings" width="800"/>
+  <br/>
+  <em>Settings - Configure Plex, Radarr, Sonarr, and qBittorrent connections</em>
+</p>
+
+---
+
 ## 🏗️ Architecture
 
 - **Backend:** Python 3.13 + FastAPI + SQLAlchemy

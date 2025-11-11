@@ -70,12 +70,13 @@ jobs:
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             # Tag 'dev' for develop branch (nightly builds and manual dispatch)
             type=raw,value=dev,enable=${{ github.event_name == 'schedule' || github.event.inputs.build_branch == 'develop' }}
-            # Tag with semver for version tags (v1.0.0 -> 1.0.0, 1.0, 1)
+            # Tag with semver for version tags (v1.0.0 -> 1.0.0, 1.0)
+            # Note: {{major}} tag disabled until v1.0.0+ to avoid confusing '0' tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             # Tag with SHA for develop branch only (nightly/manual dev builds)
-            type=sha,enable=${{ github.event_name == 'schedule' || github.event.inputs.build_branch == 'develop' }}
+            # Explicitly disabled for version tag releases
+            type=sha,enable=${{ (github.event_name == 'schedule' || github.event.inputs.build_branch == 'develop') && !startsWith(github.ref, 'refs/tags/v') }}
           flavor: |
             latest=false
 

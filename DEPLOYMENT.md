@@ -12,7 +12,7 @@ Before you begin, ensure you have:
 - ✅ Plex Media Server running
 - ✅ Radarr and/or Sonarr configured
 - ✅ qBittorrent with Web UI enabled
-- ✅ At least 1GB of disk space for the application
+- ✅ At least 500MB of disk space for the application
 
 ---
 

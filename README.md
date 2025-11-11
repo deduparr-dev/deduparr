@@ -7,11 +7,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/deduparr-dev/deduparr/stargazers"><img src="https://img.shields.io/github/stars/deduparr-dev/deduparr?style=flat&logo=github" alt="GitHub Stars"></a>
-  <a href="https://github.com/deduparr-dev/deduparr/issues"><img src="https://img.shields.io/github/issues/deduparr-dev/deduparr?style=flat&logo=github" alt="GitHub Issues"></a>
+  <a href="https://github.com/deduparr-dev/deduparr/stargazers"><img src="https://img.shields.io/github/stars/deduparr-dev/deduparr?style=flat&logo=github&cacheSeconds=3600" alt="GitHub Stars"></a>
+  <a href="https://github.com/deduparr-dev/deduparr/issues"><img src="https://img.shields.io/github/issues/deduparr-dev/deduparr?style=flat&logo=github&cacheSeconds=3600" alt="GitHub Issues"></a>
   <a href="https://github.com/deduparr-dev/deduparr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/deduparr-dev/deduparr?style=flat" alt="License"></a>
-  <a href="https://hub.docker.com/r/deduparr-dev/deduparr"><img src="https://img.shields.io/docker/pulls/deduparr-dev/deduparr?style=flat&logo=docker" alt="Docker Pulls"></a>
   <a href="https://github.com/deduparr-dev/deduparr"><img src="https://img.shields.io/badge/Python-3.13-blue?style=flat&logo=python" alt="Python 3.13"></a>
+  <a href="https://github.com/deduparr-dev/deduparr"><img src="https://img.shields.io/badge/Docker-ghcr.io-blue?style=flat&logo=docker" alt="Docker"></a>
 </p>
 
 ---

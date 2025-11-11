@@ -1,68 +1,54 @@
 # Deduparr - Docker Development & Testing Guide
 
-## Quick Start - Test the Docker Setup
+## Quick Start - Production Build
 
-### 1. Build the Docker Image
-
-```bash
-# Navigate to the project directory
-cd deduparr
-
-# Build the image
-docker build -t deduparr:test .
-```
-
-### 2. Run the Container
+**ALWAYS** use the rebuild script for building Docker containers:
 
 ```bash
-# Run in detached mode with port mapping
-docker run -dp 8655:8655 --name deduparr-test deduparr:test
+# Production rebuild (default)
+bash scripts/rebuild-docker.sh --prod
 ```
 
-### 3. Access the Setup Wizard
+This script handles:
+1. Port cleanup (stops containers using port 8655)
+2. Docker compose down
+3. Database and encryption key removal
+4. Docker system prune
+5. Image rebuild (no cache)
+6. Container startup
 
-Open your browser to: **http://127.0.0.1:8655/setup**
-
-You should see the Deduparr setup wizard!
+**Access the Setup Wizard:** http://127.0.0.1:8655/setup
 
 ---
 
-## Development Docker Setup (Simplified)
+## Development Docker Setup
 
-For development and testing, we'll use a simpler Docker setup that doesn't require building the full multi-stage image.
-
-### Option 1: Backend Only (API Testing)
+For development with hot reload, use the development rebuild script:
 
 ```bash
-cd backend
-
-# Build backend image
-docker build -t deduparr-backend:dev -f Dockerfile.dev .
-
-# Run backend
-docker run -dp 3001:3001 --name deduparr-backend deduparr-backend:dev
+# Development rebuild
+bash scripts/rebuild-docker.sh --dev
 ```
 
-Access API docs at: http://localhost:3001/docs
+This script handles:
+1. Port cleanup (stops containers using ports 3000 and 3001)
+2. Docker compose down
+3. Database and encryption key removal
+4. Docker system prune
+5. Image rebuild (no cache) for both frontend and backend
+6. Container startup with hot reload
 
-### Option 2: Frontend Only (UI Testing)
+**Access Points:**
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:3001
+- API Docs: http://localhost:3001/docs
+
+### Development Without Rebuild
+
+If you only need to start/stop without rebuilding:
 
 ```bash
-cd frontend
-
-# Build frontend image
-docker build -t deduparr-frontend:dev -f Dockerfile.dev .
-
-# Run frontend
-docker run -dp 3000:3000 --name deduparr-frontend deduparr-frontend:dev
-```
-
-Access UI at: http://localhost:3000
-
-### Option 3: Full Stack with Docker Compose (Recommended)
-
-```bash
-# Start development environment (both frontend and backend with hot reload)
+# Start development environment
 docker-compose -f docker-compose.dev.yml up -d
 
 # View logs
@@ -70,15 +56,22 @@ docker-compose -f docker-compose.dev.yml logs -f
 
 # Stop everything
 docker-compose -f docker-compose.dev.yml down
-
-# Rebuild after changes
-docker-compose -f docker-compose.dev.yml up -d --build
 ```
 
-**Access Points:**
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:3001
-- API Docs: http://localhost:3001/docs
+### Production Without Rebuild
+
+If you only need to start/stop without rebuilding:
+
+```bash
+# Start production environment
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop everything
+docker-compose down
+```
 
 ---
 
@@ -123,10 +116,11 @@ docker rmi deduparr:test
 
 # Remove unused images
 docker image prune
-
-# Build without cache (fresh build)
-docker build --no-cache -t deduparr:test .
 ```
+
+**Note:** For rebuilding images, always use the rebuild script instead of manual `docker build` commands:
+- Production: `bash scripts/rebuild-docker.sh --prod`
+- Development: `bash scripts/rebuild-docker.sh --dev`
 
 ### Cleanup
 
@@ -161,15 +155,22 @@ The tutorial recommends using the **Docker extension for VS Code**:
 
 ---
 
-## Testing Checklist
-
-
 ## Production Testing Checklist
 
+- [ ] Run `bash scripts/rebuild-docker.sh --prod`
 - [ ] Image builds without errors
 - [ ] Container starts successfully
 - [ ] Can access http://127.0.0.1:8655/setup
 - [ ] Setup wizard loads
+
+## Development Testing Checklist
+
+- [ ] Run `bash scripts/rebuild-docker.sh --dev`
+- [ ] Both frontend and backend containers start
+- [ ] Frontend accessible at http://localhost:3000
+- [ ] Backend API accessible at http://localhost:3001
+- [ ] API docs load at http://localhost:3001/docs
+- [ ] Hot reload works when making code changes
 
 ---
 
@@ -180,22 +181,18 @@ The tutorial recommends using the **Docker extension for VS Code**:
 - Check: `docker --version`
 
 **"Port already in use"**
-- Stop conflicting container: `docker stop <container>`
-- 
-### Port Conflicts
-
-If port 8655 is already in use:
-- Or use different port: `docker run -dp 8656:8655 ...`
-
+- The rebuild script automatically stops containers using the relevant ports
+- For manual cleanup: `docker stop <container>`
+- Or use different port in docker-compose.yml
 
 **"Build fails"**
-- Check Dockerfile syntax
-- Build without cache: `docker build --no-cache`
-- Check logs for specific error
+- Check Docker logs for specific errors
+- The rebuild script uses `--no-cache` to ensure fresh builds
+- Verify all dependencies are available
 
 **"Container exits immediately"**
-- Check logs: `docker logs deduparr-test`
-- Likely an application error
+- Check logs: `docker compose logs` (prod) or `docker compose -f docker-compose.dev.yml logs` (dev)
+- Likely an application error in the logs
 
 ---
 

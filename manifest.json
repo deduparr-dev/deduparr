@@ -1,6 +1,6 @@
 {
   "name": "deduparr",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Duplicate media management for the *arr ecosystem",
   "author": "hello@deduparr.com",
   "license": "MIT",

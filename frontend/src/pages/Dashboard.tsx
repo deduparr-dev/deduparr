@@ -94,6 +94,7 @@ export default function Dashboard() {
           value={formatBytes(stats.space_to_reclaim)}
           subtitle={`${stats.pending_duplicates} pending review`}
           icon={Clock}
+          highlight
         />
       </StatsGrid>
 

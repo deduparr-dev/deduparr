@@ -568,13 +568,13 @@ export default function SetupWizard() {
                       >
                         <Checkbox
                           id={library.key}
-                          checked={selectedLibraries.includes(library.key)}
+                          checked={selectedLibraries.includes(library.title)}
                           onCheckedChange={(checked) => {
                             if (checked) {
-                              setSelectedLibraries([...selectedLibraries, library.key]);
+                              setSelectedLibraries([...selectedLibraries, library.title]);
                             } else {
                               setSelectedLibraries(
-                                selectedLibraries.filter((k) => k !== library.key)
+                                selectedLibraries.filter((k) => k !== library.title)
                               );
                             }
                           }}

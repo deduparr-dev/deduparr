@@ -173,9 +173,15 @@ class DeletionPipeline:
         if not token_config:
             raise ValueError("Plex authentication token not found in database")
 
+        # Convert to plain string to detach from SQLAlchemy session
+        encrypted_token = str(token_config.value) if token_config.value else None
+        server_name = (
+            str(server_config.value) if server_config and server_config.value else None
+        )
+
         return PlexService(
-            encrypted_token=token_config.value,
-            server_name=server_config.value if server_config else None,
+            encrypted_token=encrypted_token,
+            server_name=server_name,
         )
 
     async def delete_file(

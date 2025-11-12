@@ -369,7 +369,7 @@ export default function Scan() {
           </div>
           <div>
             <div className="text-xs md:text-sm text-muted-foreground mb-1">Space Reclaimable</div>
-            <div className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+            <div className="text-2xl md:text-3xl font-bold text-primary">
               {formatBytes(scanStatus?.total_space_reclaimable ?? 0)}
             </div>
           </div>

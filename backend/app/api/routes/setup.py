@@ -325,9 +325,11 @@ async def get_stored_plex_libraries(db: AsyncSession = Depends(get_db)):
         if not token_config or not server_config:
             raise ValueError("Plex not configured - complete setup first")
 
-        libraries = await setup_service.get_plex_libraries(
-            token_config.value, server_config.value
-        )
+        # Convert to plain string to detach from SQLAlchemy session
+        encrypted_token = str(token_config.value) if token_config.value else None
+        server_name = str(server_config.value) if server_config.value else None
+
+        libraries = await setup_service.get_plex_libraries(encrypted_token, server_name)
 
         # Filter to only supported library types (movie and show)
         supported_libraries = [

@@ -49,7 +49,8 @@ class BaseExternalService:
                     f"{service_name} configuration not found in database (missing: {db_key})"
                 )
 
-            config_values[internal_key] = config.value
+            # Convert to plain string to detach from SQLAlchemy session
+            config_values[internal_key] = str(config.value) if config.value else None
 
         encrypted_keys = ["api_key", "password"]
         for key in encrypted_keys:

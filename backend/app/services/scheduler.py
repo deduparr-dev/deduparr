@@ -54,8 +54,35 @@ class ScanScheduler:
                     logger.warning("No libraries configured - skipping scheduled scan")
                     return
 
+                # Get Plex credentials from config
+                result = await db.execute(
+                    select(Config).where(Config.key == "plex_auth_token")
+                )
+                token_config = result.scalar_one_or_none()
+
+                result = await db.execute(
+                    select(Config).where(Config.key == "plex_server_name")
+                )
+                server_config = result.scalar_one_or_none()
+
+                if not token_config:
+                    logger.error("Plex not configured - cannot run scheduled scan")
+                    return
+
+                # Convert to plain string to detach from SQLAlchemy session
+                encrypted_token = (
+                    str(token_config.value) if token_config.value else None
+                )
+                server_name = (
+                    str(server_config.value)
+                    if server_config and server_config.value
+                    else None
+                )
+
                 # Initialize services
-                plex_service = PlexService(db)
+                plex_service = PlexService(
+                    encrypted_token=encrypted_token, server_name=server_name
+                )
                 scoring_engine = ScoringEngine()
 
                 # Get custom scoring rules

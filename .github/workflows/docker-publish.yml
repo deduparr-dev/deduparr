@@ -45,15 +45,36 @@ jobs:
         uses: actions/checkout@v5
         with:
           ref: ${{ github.event.inputs.build_branch || (github.event_name == 'schedule' && 'develop') || github.ref }}
+          fetch-depth: 0  # Fetch all history including tags
+
+      # Skip this job if triggered by a branch push AND the commit has a version tag
+      # This prevents duplicate builds when release.sh pushes both the commit and tag
+      - name: Check if commit is tagged
+        id: check_tag
+        run: |
+          # Only check for tags on push events to branches (not manual/schedule/tag triggers)
+          if [[ "${{ github.event_name }}" == "push" && ! "${{ github.ref }}" =~ ^refs/tags/ ]]; then
+            if git describe --exact-match --tags HEAD 2>/dev/null | grep -q '^v[0-9]'; then
+              echo "is_tagged=true" >> $GITHUB_OUTPUT
+              echo "⏭️ This commit has a version tag - skipping branch build to avoid duplicate"
+            else
+              echo "is_tagged=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            # For manual/schedule/tag triggers, always proceed
+            echo "is_tagged=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set up QEMU
+        if: steps.check_tag.outputs.is_tagged != 'true'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
+        if: steps.check_tag.outputs.is_tagged != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')
+        if: steps.check_tag.outputs.is_tagged != 'true' && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/'))
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -61,6 +82,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels)
+        if: steps.check_tag.outputs.is_tagged != 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -81,6 +103,7 @@ jobs:
             latest=false
 
       - name: Build and push Docker image
+        if: steps.check_tag.outputs.is_tagged != 'true'
         id: docker_build
         uses: docker/build-push-action@v6
         with:
@@ -98,7 +121,7 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
 
       - name: Generate artifact attestation
-        if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/')
+        if: steps.check_tag.outputs.is_tagged != 'true' && (github.event_name != 'push' || startsWith(github.ref, 'refs/tags/'))
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}

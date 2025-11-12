@@ -696,7 +696,7 @@ class DeletionPipeline:
                             )
                         history.deleted_from_disk = True
             else:
-                # File not found - was already deleted by *arr services
+                # File not found - was already deleted by *arr services or qBittorrent
                 # But we still need to clean up orphaned files (subtitles, NFO, etc.)
                 if not history.deleted_from_disk:
                     history.deleted_from_disk = True
@@ -706,8 +706,27 @@ class DeletionPipeline:
                     f"Main file already deleted: {filename} "
                     f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
                 )
+                
+                # First, check if the original parent directory still exists with orphaned files
+                parent_dir = os.path.dirname(file_path)
+                base_name = os.path.splitext(filename)[0]
+                
+                if os.path.exists(parent_dir) and os.path.isdir(parent_dir):
+                    # Clean up any orphaned files in the original directory
+                    deleted = self._cleanup_associated_files(parent_dir, base_name, exclude_filename=filename)
+                    
+                    # Try to remove the directory if it's now empty
+                    try:
+                        if not os.listdir(parent_dir):
+                            if self.dry_run:
+                                logger.info(f"[DRY-RUN] Would remove empty directory: {parent_dir}")
+                            else:
+                                os.rmdir(parent_dir)
+                                logger.info(f"Removed empty directory: {parent_dir}")
+                    except Exception as e:
+                        logger.debug(f"Could not remove directory {parent_dir}: {e}")
 
-                # Try to find and clean up the parent directory with orphaned files
+                # Try to find and clean up other copies in the library with orphaned files
                 # Search for instances of this file but be careful about hardlinks
                 path_parts = file_path.split("/")
                 if len(path_parts) >= 2:

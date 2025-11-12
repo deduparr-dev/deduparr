@@ -78,9 +78,12 @@ async def test_find_item_by_file_path_found(test_db):
         mock_client.torrents_info.return_value = [mock_item]
         mock_client.torrents_files.return_value = [mock_file]
 
-        item_hash = await service.find_item_by_file_path("/downloads/Movie.mkv")
+        result = await service.find_item_by_file_path("/downloads/Movie.mkv")
 
+        assert result is not None
+        item_hash, count = result
         assert item_hash == "abc123"
+        assert count == 1
         mock_client.torrents_info.assert_called_once()
         mock_client.torrents_files.assert_called_once_with(torrent_hash="abc123")
 
@@ -113,9 +116,9 @@ async def test_find_item_by_file_path_not_found(test_db):
         mock_client.torrents_info.return_value = [mock_item]
         mock_client.torrents_files.return_value = [mock_file]
 
-        item_hash = await service.find_item_by_file_path("/downloads/NonExistent.mkv")
+        result = await service.find_item_by_file_path("/downloads/NonExistent.mkv")
 
-        assert item_hash is None
+        assert result is None
 
 
 @pytest.mark.asyncio

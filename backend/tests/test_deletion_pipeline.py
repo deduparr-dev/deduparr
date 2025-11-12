@@ -150,6 +150,7 @@ async def test_delete_movie_full_pipeline_success(
         mock_qbit_instance = MagicMock()
         mock_qbit.return_value = mock_qbit_instance
 
+        # Mock TWO torrents (safety check requires >1 torrent)
         mock_item = MagicMock()
         mock_item.hash = "abc123"
         mock_item.name = "Test Movie"
@@ -157,8 +158,19 @@ async def test_delete_movie_full_pipeline_success(
         mock_file = MagicMock()
         mock_file.name = "Test Movie.mkv"
 
-        mock_qbit_instance.torrents_info.return_value = [mock_item]
-        mock_qbit_instance.torrents_files.return_value = [mock_file]
+        # Second torrent (the one we're keeping)
+        mock_item2 = MagicMock()
+        mock_item2.hash = "def456"
+        mock_item2.name = "Test Movie"
+        mock_item2.save_path = "/media/movies"
+        mock_file2 = MagicMock()
+        mock_file2.name = "Test Movie.mkv"
+
+        mock_qbit_instance.torrents_info.return_value = [mock_item, mock_item2]
+        mock_qbit_instance.torrents_files.side_effect = [
+            [mock_file],  # First call for first torrent
+            [mock_file2],  # Second call for second torrent (during count)
+        ]
 
         mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
@@ -601,3 +613,88 @@ async def test_delete_file_plex_failure(
         assert history.deleted_from_arr is True
         assert history.deleted_from_disk is True
         assert history.plex_refreshed is False
+
+
+@pytest.mark.asyncio
+async def test_protected_files_not_deleted(
+    deletion_pipeline, test_db, setup_configs
+):
+    """
+    Test that files marked keep=True are NOT deleted during cleanup
+    
+    Regression test for bug where deletion pipeline would search for
+    files with the same name and delete ALL of them, including the
+    file we wanted to keep.
+    """
+    import os
+    import tempfile
+    from pathlib import Path
+    
+    # Create a duplicate set with real temp files
+    dup_set = DuplicateSet(
+        plex_item_id="movie999",
+        title="Sonic the Hedgehog 2",
+        media_type=MediaType.MOVIE,
+        status=DuplicateStatus.APPROVED,
+    )
+    test_db.add(dup_set)
+    await test_db.flush()
+
+    # Create temp directories to simulate the structure
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create the "keep" file in organized folder
+        keep_dir = Path(tmpdir) / "Sonic the Hedgehog 2 (2022)"
+        keep_dir.mkdir()
+        keep_file_path = keep_dir / "Sonic.the.Hedgehog.2.2022.mkv"
+        keep_file_path.write_text("keep this file")
+        
+        # Create the "delete" file in release folder
+        delete_dir = Path(tmpdir) / "Sonic.the.Hedgehog.2.2022.Release"
+        delete_dir.mkdir()
+        delete_file_path = delete_dir / "Sonic.the.Hedgehog.2.2022.mkv"
+        delete_file_path.write_text("delete this file")
+
+        # Create kept file record
+        kept_file = DuplicateFile(
+            set_id=dup_set.id,
+            file_path=str(keep_file_path),
+            file_size=14,
+            score=100,
+            keep=True,
+        )
+        test_db.add(kept_file)
+
+        # Create the file to delete
+        dup_file = DuplicateFile(
+            set_id=dup_set.id,
+            file_path=str(delete_file_path),
+            file_size=16,
+            score=50,
+            keep=False,
+        )
+        test_db.add(dup_file)
+        await test_db.commit()
+
+        # Mock services to simulate orphaned file case (not found in qBit/Radarr)
+        # Also mock Plex service creation
+        mock_plex = MagicMock()
+        mock_plex.refresh_item.return_value = True
+        
+        with patch.object(
+            deletion_pipeline.qbit_service, "find_item_by_file_path", return_value=None
+        ), patch.object(
+            deletion_pipeline.radarr_service, "find_movie_by_file_path", return_value=None
+        ), patch.object(
+            deletion_pipeline, "_get_plex_service", return_value=mock_plex
+        ):
+            # Execute deletion
+            await deletion_pipeline.delete_file(dup_file.id)
+
+            # CRITICAL: The kept file should still exist
+            assert keep_file_path.exists(), "PROTECTED FILE WAS DELETED! This is the bug we're testing for."
+            assert keep_file_path.read_text() == "keep this file"
+            
+            # The deleted file should be gone
+            assert not delete_file_path.exists(), "File to delete should be removed"
+
+

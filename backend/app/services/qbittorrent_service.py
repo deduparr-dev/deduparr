@@ -44,29 +44,41 @@ class QBittorrentService(BaseExternalService):
         except APIConnectionError as e:
             raise ValueError(f"qBittorrent connection failed: {e}")
 
-    async def find_item_by_file_path(self, file_path: str) -> Optional[str]:
+    async def find_item_by_file_path(self, file_path: str) -> Optional[tuple[str, int]]:
         """
-        Find torrent hash by file path
+        Find torrent hash by file path and count total torrents for this file.
+        Matches if the file path ends with the torrent's file path.
 
         Args:
             file_path: Full path to the file
 
         Returns:
-            Torrent hash if found, None otherwise
+            Tuple of (torrent_hash, count) if found, None otherwise
+            - torrent_hash: Hash of the first matching torrent
+            - count: Total number of torrents containing this file
         """
         client = await self._get_client()
 
         try:
             torrents = client.torrents_info()
+            found_hash = None
+            count = 0
+            
             for torrent in torrents:
                 torrent_files = client.torrents_files(torrent_hash=torrent.hash)
                 for torrent_file in torrent_files:
                     full_path = f"{torrent.save_path}/{torrent_file.name}"
-                    if full_path == file_path or file_path.endswith(torrent_file.name):
-                        logger.info(
-                            f"Found torrent {torrent.hash} for file {file_path}"
-                        )
-                        return torrent.hash
+                    if file_path.endswith(torrent_file.name) or full_path == file_path:
+                        if not found_hash:
+                            found_hash = torrent.hash
+                        count += 1
+                        break  # Only count each torrent once
+            
+            if found_hash:
+                logger.info(f"Found torrent {found_hash} for file {file_path} ({count} total)")
+                return (found_hash, count)
+                        
+            logger.debug(f"No torrent found for file {file_path}")
             return None
         except Exception as e:
             logger.error(f"Error finding torrent for {file_path}: {e}")

@@ -320,7 +320,14 @@ class DeletionPipeline:
                     await self.db.commit()
 
             # Stage 4: Fallback disk cleanup (for any stragglers)
-            await self._stage_disk_removal(file_path, history)
+            # Build list of files to protect (all files marked keep=True in this duplicate set)
+            protected_files = set()
+            if duplicate_file.duplicate_set:
+                for file in duplicate_file.duplicate_set.files:
+                    if file.keep and file.id != duplicate_file.id:
+                        protected_files.add(file.file_path)
+            
+            await self._stage_disk_removal(file_path, history, protected_files)
             await self.db.commit()
 
             # Stage 5: Refresh only the specific media in Plex (targeted refresh)
@@ -349,14 +356,36 @@ class DeletionPipeline:
 
         CRITICAL: This must complete BEFORE *arr rescan to ensure the deleted file
         is fully removed and won't be re-imported.
+        
+        SAFETY CHECK: Will NOT delete if this is the only torrent for this file
+        (prevents deleting all copies).
 
         Returns:
             Item hash if found and removed
         """
         try:
-            item_hash = await self.qbit_service.find_item_by_file_path(file_path)
+            result = await self.qbit_service.find_item_by_file_path(file_path)
 
-            if item_hash:
+            if result:
+                item_hash, torrent_count = result
+                
+                # SAFETY CHECK: Don't delete if this is the only torrent for this file
+                if torrent_count <= 1:
+                    logger.warning(
+                        f"Skipping qBittorrent deletion - only 1 torrent found. "
+                        f"Cannot delete the last copy! File: {file_path}"
+                    )
+                    history.error = (
+                        f"{history.error}; Only 1 torrent exists - cannot delete last copy" 
+                        if history.error 
+                        else "Only 1 torrent exists - cannot delete last copy"
+                    )
+                    return None
+                
+                logger.info(
+                    f"Found {torrent_count} torrents for file - safe to delete one copy"
+                )
+                
                 if self.dry_run:
                     logger.info(
                         f"[DRY-RUN] Would remove item {item_hash} from qBittorrent (with files)"
@@ -513,7 +542,9 @@ class DeletionPipeline:
             logger.error(f"*arr removal failed: {e}")
             raise
 
-    async def _stage_disk_removal(self, file_path: str, history: DeletionHistory):
+    async def _stage_disk_removal(
+        self, file_path: str, history: DeletionHistory, protected_files: set[str] = None
+    ):
         """
         Stage 4: Fallback disk cleanup and associated files removal
 
@@ -526,7 +557,15 @@ class DeletionPipeline:
 
         If qBittorrent already deleted the file (deleted_from_disk=True), this stage
         focuses on cleaning up associated files and directories only.
+        
+        Args:
+            file_path: Path to the file being deleted
+            history: DeletionHistory record
+            protected_files: Set of file paths that must NOT be deleted (files we're keeping)
         """
+        if protected_files is None:
+            protected_files = set()
+            
         try:
             # If qBittorrent already deleted the file, we just clean up remnants
             if history.deleted_from_disk:
@@ -732,6 +771,7 @@ class DeletionPipeline:
 
                 # Try to find and clean up other copies in the library with orphaned files
                 # Search for instances of this file but be careful about hardlinks
+                # CRITICAL: DO NOT delete files we're keeping (protected_files)
                 path_parts = file_path.split("/")
                 if len(path_parts) >= 2:
                     base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -755,6 +795,13 @@ class DeletionPipeline:
                     for root, dirs, files in os.walk(library_path):
                         if filename in files:
                             file_full_path = os.path.join(root, filename)
+                            
+                            # CRITICAL: Skip protected files (files we're keeping)
+                            if file_full_path in protected_files:
+                                logger.info(
+                                    f"Skipping protected file (marked to keep): {file_full_path}"
+                                )
+                                continue
 
                             # Check if this is a hardlink we've already processed
                             try:

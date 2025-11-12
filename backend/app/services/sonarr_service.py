@@ -5,10 +5,14 @@ Sonarr service for TV show episode file management
 import logging
 from typing import Dict, Optional
 
-from pyarr import SonarrAPI
-from pyarr.exceptions import PyarrAccessRestricted, PyarrConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.arr_client import (
+    ArrAuthError,
+    ArrClientError,
+    ArrConnectionError,
+    SonarrClient,
+)
 from app.services.arr_helpers import (
     find_media_by_file_path,
     manual_import_file,
@@ -25,7 +29,7 @@ class SonarrService(BaseExternalService):
 
     def __init__(self, db: AsyncSession):
         super().__init__(db)
-        self._client: Optional[SonarrAPI] = None
+        self._client: Optional[SonarrClient] = None
 
     async def find_episode_by_file_path(self, file_path: str) -> Optional[dict]:
         """
@@ -44,9 +48,9 @@ class SonarrService(BaseExternalService):
             Episode data with episodeFile if found, None otherwise
         """
         client = await self._get_client()
-        return find_media_by_file_path(client, file_path, "series", logger)
+        return await find_media_by_file_path(client, file_path, "series", logger)
 
-    async def _get_client(self) -> SonarrAPI:
+    async def _get_client(self) -> SonarrClient:
         """Get Sonarr client instance"""
         if self._client is not None:
             return self._client
@@ -57,9 +61,11 @@ class SonarrService(BaseExternalService):
         )
 
         try:
-            self._client = SonarrAPI(config["url"], config["api_key"])
+            self._client = SonarrClient(
+                base_url=config["url"], api_key=config["api_key"]
+            )
             return self._client
-        except (PyarrConnectionError, PyarrAccessRestricted) as e:
+        except (ArrConnectionError, ArrAuthError) as e:
             raise ValueError(f"Sonarr connection failed: {e}")
 
     async def delete_episode_file(self, series_id: int, episode_file_id: int) -> bool:
@@ -76,12 +82,12 @@ class SonarrService(BaseExternalService):
         client = await self._get_client()
 
         try:
-            client.del_episode_file(episode_file_id)
+            await client.del_episode_file(episode_file_id)
             logger.info(
                 f"Deleted episode file {episode_file_id} for series {series_id} from Sonarr"
             )
             return True
-        except Exception as e:
+        except ArrClientError as e:
             logger.error(
                 f"Error deleting episode file {episode_file_id} for series {series_id}: {e}"
             )
@@ -164,8 +170,8 @@ class SonarrService(BaseExternalService):
         """
         try:
             client = await self._get_client()
-            status = client.get_system_status()
+            status = await client.get_system_status()
             return {"success": True, "version": status.get("version", "unknown")}
-        except Exception as e:
+        except ArrClientError as e:
             logger.error(f"Sonarr connection test failed: {e}")
             return {"success": False, "error": str(e)}

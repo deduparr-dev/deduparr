@@ -5,7 +5,7 @@ Tests for arr_helpers module
 import logging
 import os
 import tempfile
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -20,14 +20,16 @@ from app.services.arr_helpers import (
 async def test_rescan_media_item_movie_with_kept_file():
     """Test rescanning a movie with a kept file path"""
     mock_client = MagicMock()
-    mock_client.get_movie.return_value = {
-        "id": 1,
-        "title": "Test Movie",
-        "year": 2024,
-        "path": "/movies/Test Movie (2024)",
-    }
-    mock_client.get_root_folder.return_value = [{"path": "/movies"}]
-    mock_client.post_command = MagicMock()
+    mock_client.get_movie = AsyncMock(
+        return_value={
+            "id": 1,
+            "title": "Test Movie",
+            "year": 2024,
+            "path": "/movies/Test Movie (2024)",
+        }
+    )
+    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/movies"}])
+    mock_client.post_command = AsyncMock()
 
     logger = logging.getLogger("test")
 
@@ -50,14 +52,16 @@ async def test_rescan_media_item_movie_with_kept_file():
 async def test_rescan_media_item_series_with_kept_file():
     """Test rescanning a series with a kept file path"""
     mock_client = MagicMock()
-    mock_client.get_series.return_value = {
-        "id": 1,
-        "title": "Test Series",
-        "year": 2024,
-        "path": "/tv/Test Series (2024)",
-    }
-    mock_client.get_root_folder.return_value = [{"path": "/tv"}]
-    mock_client.post_command = MagicMock()
+    mock_client.get_series = AsyncMock(
+        return_value={
+            "id": 1,
+            "title": "Test Series",
+            "year": 2024,
+            "path": "/tv/Test Series (2024)",
+        }
+    )
+    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/tv"}])
+    mock_client.post_command = AsyncMock()
 
     logger = logging.getLogger("test")
 
@@ -80,13 +84,15 @@ async def test_rescan_media_item_series_with_kept_file():
 async def test_rescan_media_item_without_kept_file():
     """Test rescanning when no kept file path is provided"""
     mock_client = MagicMock()
-    mock_client.get_movie.return_value = {
-        "id": 1,
-        "title": "Test Movie",
-        "year": 2024,
-        "path": "/movies/Test Movie (2024)",
-    }
-    mock_client.post_command = MagicMock()
+    mock_client.get_movie = AsyncMock(
+        return_value={
+            "id": 1,
+            "title": "Test Movie",
+            "year": 2024,
+            "path": "/movies/Test Movie (2024)",
+        }
+    )
+    mock_client.post_command = AsyncMock()
 
     logger = logging.getLogger("test")
 
@@ -108,15 +114,17 @@ async def test_rescan_media_item_without_kept_file():
 async def test_rescan_media_item_path_mismatch():
     """Test that path is updated when it doesn't match the kept file's directory"""
     mock_client = MagicMock()
-    mock_client.get_movie.return_value = {
-        "id": 1,
-        "title": "Test Movie",
-        "year": 2024,
-        "path": "/movies/Old Path",
-    }
-    mock_client.get_root_folder.return_value = [{"path": "/movies"}]
-    mock_client.upd_movie = MagicMock()
-    mock_client.post_command = MagicMock()
+    mock_client.get_movie = AsyncMock(
+        return_value={
+            "id": 1,
+            "title": "Test Movie",
+            "year": 2024,
+            "path": "/movies/Old Path",
+        }
+    )
+    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/movies"}])
+    mock_client.update_movie = AsyncMock()
+    mock_client.post_command = AsyncMock()
 
     logger = logging.getLogger("test")
 
@@ -129,8 +137,8 @@ async def test_rescan_media_item_path_mismatch():
     )
 
     assert result is True
-    mock_client.upd_movie.assert_called_once()
-    updated_movie = mock_client.upd_movie.call_args[1]["data"]
+    mock_client.update_movie.assert_called_once()
+    updated_movie = mock_client.update_movie.call_args[1]["data"]
     assert updated_movie["path"] == "/movies/New Path"
 
 
@@ -138,7 +146,7 @@ async def test_rescan_media_item_path_mismatch():
 async def test_rescan_media_item_media_not_found():
     """Test error handling when media item is not found"""
     mock_client = MagicMock()
-    mock_client.get_movie.return_value = None
+    mock_client.get_movie = AsyncMock(return_value=None)
 
     logger = logging.getLogger("test")
 
@@ -157,11 +165,13 @@ async def test_rescan_media_item_media_not_found():
 async def test_trigger_full_library_scan_movie():
     """Test triggering full library scan for movies"""
     mock_client = MagicMock()
-    mock_client.get_root_folder.return_value = [
-        {"path": "/movies"},
-        {"path": "/movies2"},
-    ]
-    mock_client.post_command = MagicMock()
+    mock_client.get_root_folder = AsyncMock(
+        return_value=[
+            {"path": "/movies"},
+            {"path": "/movies2"},
+        ]
+    )
+    mock_client.post_command = AsyncMock()
 
     logger = logging.getLogger("test")
 
@@ -179,8 +189,8 @@ async def test_trigger_full_library_scan_movie():
 async def test_trigger_full_library_scan_series():
     """Test triggering full library scan for series"""
     mock_client = MagicMock()
-    mock_client.get_root_folder.return_value = [{"path": "/tv"}]
-    mock_client.post_command = MagicMock()
+    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/tv"}])
+    mock_client.post_command = AsyncMock()
 
     logger = logging.getLogger("test")
 

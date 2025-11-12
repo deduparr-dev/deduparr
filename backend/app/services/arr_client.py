@@ -57,29 +57,51 @@ class ArrClient:
     Subclasses specify their API version (RadarrClient uses v3, SonarrClient uses v5).
     """
 
-    def __init__(self, base_url: str, api_key: str):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+        verify_ssl: bool = True,
+    ):
         """
         Initialize *arr client
 
         Args:
             base_url: Base URL of Radarr/Sonarr instance (e.g., http://localhost:7878)
             api_key: API key for authentication
+            timeout: Request timeout in seconds (float) or httpx.Timeout object. Defaults to 30.0
+            verify_ssl: Whether to verify SSL certificates. Defaults to True
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.api_version = "v3"
+        # store optional client configuration for use when creating httpx AsyncClient
+        self.timeout = timeout
+        self.verify_ssl = verify_ssl
         self._client: Optional[httpx.AsyncClient] = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get or create httpx async client"""
         if self._client is None:
+            # determine timeout value (allow float or httpx.Timeout)
+            timeout_val = (
+                httpx.Timeout(self.timeout)
+                if isinstance(self.timeout, (int, float))
+                else self.timeout
+            )
+            if timeout_val is None:
+                # default timeout
+                timeout_val = httpx.Timeout(30.0)
+
             self._client = httpx.AsyncClient(
                 base_url=f"{self.base_url}/api/{self.api_version}",
                 headers={
                     "X-Api-Key": self.api_key,
                     "Content-Type": "application/json",
                 },
-                timeout=httpx.Timeout(30.0),
+                timeout=timeout_val,
+                verify=self.verify_ssl,
             )
         return self._client
 
@@ -309,7 +331,8 @@ class SonarrClient(ArrClient):
     """
     Sonarr-specific API client for TV series management.
     Implements series-specific endpoints on top of the base client.
-    Uses API v5 (current standard, v3 is deprecated).
+
+    Auto-detects API version: tries v5 first (current standard), falls back to v3 if not available.
     """
 
     def __init__(
@@ -322,7 +345,38 @@ class SonarrClient(ArrClient):
         super().__init__(
             base_url=base_url, api_key=api_key, timeout=timeout, verify_ssl=verify_ssl
         )
+        # Start with v5, will auto-detect and fall back to v3 if needed
         self.api_version = "v5"
+        self._version_detected = False
+
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """
+        Make HTTP request with automatic API version detection.
+
+        Tries v5 first, falls back to v3 if v5 returns 404.
+        """
+        try:
+            return await super()._request(method, endpoint, params, json_data)
+        except ArrNotFoundError:
+            # If we get 404 and haven't detected version yet, try v3
+            if not self._version_detected and self.api_version == "v5":
+                logger.info("Sonarr v5 API not found, falling back to v3")
+                self.api_version = "v3"
+                self._version_detected = True
+                # Close existing client to force recreation with new API version
+                if self._client:
+                    await self._client.aclose()
+                    self._client = None
+                # Retry with v3
+                return await super()._request(method, endpoint, params, json_data)
+            # If already using v3 or version already detected, re-raise
+            raise
 
     async def get_series(
         self, series_id: Optional[int] = None

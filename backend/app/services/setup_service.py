@@ -186,6 +186,24 @@ class SetupService:
             Keys: success (bool), version (str) if success, error (str) if failed
         """
         try:
+            # Check if temp config entries already exist and delete them first
+            result = await self.db.execute(
+                select(Config).where(Config.key == "temp_radarr_url")
+            )
+            existing_temp_url = result.scalar_one_or_none()
+            if existing_temp_url:
+                await self.db.delete(existing_temp_url)
+
+            result = await self.db.execute(
+                select(Config).where(Config.key == "temp_radarr_api_key")
+            )
+            existing_temp_key = result.scalar_one_or_none()
+            if existing_temp_key:
+                await self.db.delete(existing_temp_key)
+
+            await self.db.commit()
+
+            # Now create new temp config entries
             temp_config_url = Config(key="temp_radarr_url", value=url)
             temp_config_key = Config(key="temp_radarr_api_key", value=api_key)
             self.db.add(temp_config_url)
@@ -272,6 +290,24 @@ class SetupService:
             Keys: success (bool), version (str) if success, error (str) if failed
         """
         try:
+            # Check if temp config entries already exist and delete them first
+            result = await self.db.execute(
+                select(Config).where(Config.key == "temp_sonarr_url")
+            )
+            existing_temp_url = result.scalar_one_or_none()
+            if existing_temp_url:
+                await self.db.delete(existing_temp_url)
+
+            result = await self.db.execute(
+                select(Config).where(Config.key == "temp_sonarr_api_key")
+            )
+            existing_temp_key = result.scalar_one_or_none()
+            if existing_temp_key:
+                await self.db.delete(existing_temp_key)
+
+            await self.db.commit()
+
+            # Now create new temp config entries
             temp_config_url = Config(key="temp_sonarr_url", value=url)
             temp_config_key = Config(key="temp_sonarr_api_key", value=api_key)
             self.db.add(temp_config_url)

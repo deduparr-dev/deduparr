@@ -99,6 +99,7 @@ class ArrClient:
                 headers={
                     "X-Api-Key": self.api_key,
                     "Content-Type": "application/json",
+                    "User-Agent": "Deduparr (httpx)",
                 },
                 timeout=timeout_val,
                 verify=self.verify_ssl,

@@ -326,4 +326,3 @@ export const systemAPI = {
   getAppInfo: () => fetchAPI<AppInfo>("/api/system/app"),
   getLogs: (limit = 100) => fetchAPI<LogsResponse>(`/api/system/logs?limit=${limit}`),
 };
-

@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.models import DeletionHistory, DuplicateFile, DuplicateSet
 from app.models.duplicate import MediaType
+from app.services.arr_helpers import refresh_media_item
 from app.services.plex_service import PlexService
 from app.services.qbittorrent_service import QBittorrentService
 from app.services.radarr_service import RadarrService
@@ -695,7 +696,7 @@ class DeletionPipeline:
                             )
                         history.deleted_from_disk = True
             else:
-                # File not found - was already deleted by *arr services
+                # File not found - was already deleted by *arr services or qBittorrent
                 # But we still need to clean up orphaned files (subtitles, NFO, etc.)
                 if not history.deleted_from_disk:
                     history.deleted_from_disk = True
@@ -706,7 +707,30 @@ class DeletionPipeline:
                     f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
                 )
 
-                # Try to find and clean up the parent directory with orphaned files
+                # First, check if the original parent directory still exists with orphaned files
+                parent_dir = os.path.dirname(file_path)
+                base_name = os.path.splitext(filename)[0]
+
+                if os.path.exists(parent_dir) and os.path.isdir(parent_dir):
+                    # Clean up any orphaned files in the original directory
+                    self._cleanup_associated_files(
+                        parent_dir, base_name, exclude_filename=filename
+                    )
+
+                    # Try to remove the directory if it's now empty
+                    try:
+                        if not os.listdir(parent_dir):
+                            if self.dry_run:
+                                logger.info(
+                                    f"[DRY-RUN] Would remove empty directory: {parent_dir}"
+                                )
+                            else:
+                                os.rmdir(parent_dir)
+                                logger.info(f"Removed empty directory: {parent_dir}")
+                    except Exception as e:
+                        logger.debug(f"Could not remove directory {parent_dir}: {e}")
+
+                # Try to find and clean up other copies in the library with orphaned files
                 # Search for instances of this file but be careful about hardlinks
                 path_parts = file_path.split("/")
                 if len(path_parts) >= 2:
@@ -850,27 +874,53 @@ class DeletionPipeline:
                 # File is already in *arr - just trigger a rescan for that specific item
                 if media_type == MediaType.MOVIE:
                     if not self.dry_run:
+                        # First, scan for new files
                         await self.radarr_service.rescan_movie(
                             arr_media_id, kept_file_path
                         )
                         logger.info(
                             f"Triggered Radarr rescan for movie {arr_media_id} to import: {kept_file_path}"
                         )
+
+                        # Then refresh to clean up orphaned DB entries
+                        radarr_client = await self.radarr_service._get_client()
+                        await refresh_media_item(
+                            client=radarr_client,
+                            media_id=arr_media_id,
+                            media_type="movie",
+                            logger_instance=logger,
+                        )
+                        logger.info(
+                            f"Triggered Radarr refresh for movie {arr_media_id} (cleans orphaned DB entries)"
+                        )
                     else:
                         logger.info(
-                            f"[DRY-RUN] Would trigger Radarr rescan for movie {arr_media_id}"
+                            f"[DRY-RUN] Would trigger Radarr rescan and refresh for movie {arr_media_id}"
                         )
                 else:
                     if not self.dry_run:
+                        # First, scan for new files
                         await self.sonarr_service.rescan_series(
                             arr_media_id, kept_file_path
                         )
                         logger.info(
                             f"Triggered Sonarr rescan for series {arr_media_id} to import: {kept_file_path}"
                         )
+
+                        # Then refresh to clean up orphaned DB entries
+                        sonarr_client = await self.sonarr_service._get_client()
+                        await refresh_media_item(
+                            client=sonarr_client,
+                            media_id=arr_media_id,
+                            media_type="series",
+                            logger_instance=logger,
+                        )
+                        logger.info(
+                            f"Triggered Sonarr refresh for series {arr_media_id} (cleans orphaned DB entries)"
+                        )
                     else:
                         logger.info(
-                            f"[DRY-RUN] Would trigger Sonarr rescan for series {arr_media_id}"
+                            f"[DRY-RUN] Would trigger Sonarr rescan and refresh for series {arr_media_id}"
                         )
             else:
                 # File not tracked in *arr - try manual import, then fall back to full library scan
@@ -1051,11 +1101,11 @@ class DeletionPipeline:
 
             if arr_media_id:
                 logger.info(
-                    f"✅ Found {arr_type} media ID {arr_media_id} from deletion history for duplicate set {duplicate_set_id}"
+                    f"Found {arr_type} media ID {arr_media_id} from deletion history for duplicate set {duplicate_set_id}"
                 )
             else:
                 logger.warning(
-                    f"❌ No {arr_type} media ID found in deletion history for duplicate set {duplicate_set_id}"
+                    f"No {arr_type} media ID found in deletion history for duplicate set {duplicate_set_id}"
                 )
 
             return arr_media_id
@@ -1080,6 +1130,7 @@ class DeletionPipeline:
         2. *arr won't accidentally re-import the file we just deleted
         3. *arr can scan the directory and find the better file we kept
         4. The better file gets automatically imported
+        5. Orphaned database entries are cleaned up via RefreshMovie/RefreshSeries
 
         This ensures the movie/series stays tracked with the higher quality version.
 
@@ -1096,10 +1147,24 @@ class DeletionPipeline:
                         f"[DRY-RUN] Would trigger Radarr rescan for movie {media_id}"
                     )
                 else:
+                    # First, rescan for the better file
                     await self.radarr_service.rescan_movie(media_id, kept_file_path)
                     logger.info(
                         f"Triggered Radarr rescan for movie {media_id} "
                         f"(will find and import the better file we kept)"
+                    )
+
+                    # Then refresh metadata to clean up orphaned DB entries
+                    radarr_client = await self.radarr_service._get_client()
+                    await refresh_media_item(
+                        client=radarr_client,
+                        media_id=media_id,
+                        media_type="movie",
+                        logger_instance=logger,
+                    )
+                    logger.info(
+                        f"Triggered Radarr refresh for movie {media_id} "
+                        f"(will clean up orphaned database entries)"
                     )
             elif arr_type == "sonarr":
                 if self.dry_run:
@@ -1107,10 +1172,24 @@ class DeletionPipeline:
                         f"[DRY-RUN] Would trigger Sonarr rescan for series {media_id}"
                     )
                 else:
+                    # First, rescan for the better file
                     await self.sonarr_service.rescan_series(media_id, kept_file_path)
                     logger.info(
                         f"Triggered Sonarr rescan for series {media_id} "
                         f"(will find and import the better file we kept)"
+                    )
+
+                    # Then refresh metadata to clean up orphaned DB entries
+                    sonarr_client = await self.sonarr_service._get_client()
+                    await refresh_media_item(
+                        client=sonarr_client,
+                        media_id=media_id,
+                        media_type="series",
+                        logger_instance=logger,
+                    )
+                    logger.info(
+                        f"Triggered Sonarr refresh for series {media_id} "
+                        f"(will clean up orphaned database entries)"
                     )
             else:
                 logger.warning(f"Unknown arr_type for rescan: {arr_type}")

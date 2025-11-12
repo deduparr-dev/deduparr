@@ -136,13 +136,15 @@ async def test_find_episode_multiple_versions_same_filename(
 
 @pytest.mark.asyncio
 async def test_find_episode_without_episode_ids(sonarr_service, mock_sonarr_client):
-    """Test handling episode files without episodeIds"""
+    """Test handling episode files without episodeIds (orphaned files)"""
     mock_sonarr_client.get_series.return_value = [{"id": 1}]
     mock_sonarr_client.get_episode_files_by_series_id.return_value = [
         {
             "id": 100,
             "path": "/plexdownloads/TV/Show/Show S01E01.mkv",
-            # Missing episodeIds
+            "seriesId": 1,
+            "seasonNumber": 1,
+            # Missing episodeIds - orphaned file
         }
     ]
 
@@ -150,19 +152,26 @@ async def test_find_episode_without_episode_ids(sonarr_service, mock_sonarr_clie
         "/plexdownloads/TV/Show/Show S01E01.mkv"
     )
 
-    # Should return None gracefully
-    assert result is None
+    # Should return minimal episode object with orphaned flag
+    assert result is not None
+    assert result["_orphaned"] is True
+    assert result["seriesId"] == 1
+    assert result["seasonNumber"] == 1
+    assert result["episodeFile"]["id"] == 100
+    assert result["id"] is None  # No episode ID for orphaned files
 
 
 @pytest.mark.asyncio
 async def test_find_episode_empty_episode_ids(sonarr_service, mock_sonarr_client):
-    """Test handling episode files with empty episodeIds array"""
+    """Test handling episode files with empty episodeIds array (orphaned files)"""
     mock_sonarr_client.get_series.return_value = [{"id": 1}]
     mock_sonarr_client.get_episode_files_by_series_id.return_value = [
         {
             "id": 100,
             "path": "/plexdownloads/TV/Show/Show S01E01.mkv",
-            "episodeIds": [],  # Empty array
+            "episodeIds": [],  # Empty array - orphaned file
+            "seriesId": 1,
+            "seasonNumber": 1,
         }
     ]
 
@@ -170,8 +179,13 @@ async def test_find_episode_empty_episode_ids(sonarr_service, mock_sonarr_client
         "/plexdownloads/TV/Show/Show S01E01.mkv"
     )
 
-    # Should return None gracefully
-    assert result is None
+    # Should return minimal episode object with orphaned flag
+    assert result is not None
+    assert result["_orphaned"] is True
+    assert result["seriesId"] == 1
+    assert result["seasonNumber"] == 1
+    assert result["episodeFile"]["id"] == 100
+    assert result["id"] is None  # No episode ID for orphaned files
 
 
 @pytest.mark.asyncio

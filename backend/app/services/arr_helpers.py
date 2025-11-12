@@ -422,16 +422,16 @@ def find_media_by_file_path(
 ) -> Optional[dict]:
     """
     Find movie or episode by file path with support for orphaned files
-    
+
     Handles cases where *arr has the file tracked but no proper episode/movie linkage
     (orphaned files). This commonly happens with manual imports or after deletions.
-    
+
     Args:
         client: Radarr or Sonarr API client instance
         file_path: Full path to the media file from Plex
         media_type: Type of media ("movie" or "series")
         logger_instance: Logger instance to use
-        
+
     Returns:
         Media data dict if found, None otherwise. For orphaned files, returns minimal
         data with "_orphaned": True flag.
@@ -440,7 +440,7 @@ def find_media_by_file_path(
         if media_type == "movie":
             # Radarr: Search through all movies
             movies = client.get_movie()
-            
+
             for movie in movies:
                 if "movieFile" in movie and movie["movieFile"]:
                     radarr_path = movie["movieFile"].get("path")
@@ -449,28 +449,30 @@ def find_media_by_file_path(
                             f"Found movie '{movie['title']}' for file {file_path}"
                         )
                         return movie
-            
-            logger_instance.warning(f"Movie not found in Radarr for file path: {file_path}")
+
+            logger_instance.warning(
+                f"Movie not found in Radarr for file path: {file_path}"
+            )
             return None
-            
+
         elif media_type == "series":
             # Sonarr: Search through all episode files
             episode_files = []
             all_series = client.get_series()
-            
+
             for series in all_series:
                 series_id = series.get("id")
                 if series_id:
                     files = client.get_episode_files_by_series_id(series_id)
                     if files:
                         episode_files.extend(files)
-            
+
             for episode_file in episode_files:
                 sonarr_path = episode_file.get("path")
                 if sonarr_path and sonarr_path == file_path:
                     # Found matching file - check if it has episode linkage
                     episode_ids = episode_file.get("episodeIds", [])
-                    
+
                     if episode_ids:
                         # Normal case: file is properly linked to episode(s)
                         episodes = client.get_episode(episode_ids[0])
@@ -478,7 +480,7 @@ def find_media_by_file_path(
                             episode = episodes[0]
                         else:
                             episode = episodes
-                        
+
                         episode["episodeFile"] = episode_file
                         episode_title = episode.get("title", "Unknown Episode")
                         logger_instance.info(
@@ -506,13 +508,15 @@ def find_media_by_file_path(
                             "title": f"Orphaned S{episode_file.get('seasonNumber', 0):02d} file",
                             "_orphaned": True,  # Flag for pipeline to handle specially
                         }
-            
-            logger_instance.warning(f"Episode not found in Sonarr for file path: {file_path}")
+
+            logger_instance.warning(
+                f"Episode not found in Sonarr for file path: {file_path}"
+            )
             return None
-            
+
         else:
             raise ValueError(f"Unknown media type: {media_type}")
-            
+
     except Exception as e:
         logger_instance.error(f"Error finding {media_type} for {file_path}: {e}")
         raise

@@ -144,6 +144,23 @@ class EmailService:
 </html>
 """
 
+    def build_email_template(
+        self,
+        *,
+        title: str,
+        content: str,
+        action_url: Optional[str] = None,
+        action_text: Optional[str] = None,
+    ) -> str:
+        """Expose the branded template builder for other services."""
+
+        return self._get_email_template(
+            title=title,
+            content=content,
+            action_url=action_url,
+            action_text=action_text,
+        )
+
     def send_email(
         self,
         to_email: str,

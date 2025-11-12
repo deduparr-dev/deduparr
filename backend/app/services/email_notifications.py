@@ -52,14 +52,18 @@ async def send_scan_complete_email(
         <p>You can review and manage these duplicates in your Deduparr dashboard.</p>
         """
 
-        # Send email
-        success, error = email_service.send_email(
-            to_email=to_email,
-            subject="Deduparr - Scan Complete",
+        html_content = email_service.build_email_template(
             title="Duplicate Scan Complete",
             content=content,
             action_url="http://localhost:3000/scan",  # TODO: Make this configurable
             action_text="View Duplicates",
+        )
+
+        # Send email
+        success, error = email_service.send_email(
+            to_email=to_email,
+            subject="Deduparr - Scan Complete",
+            html_content=html_content,
         )
 
         if success:

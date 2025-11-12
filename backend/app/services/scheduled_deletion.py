@@ -67,6 +67,7 @@ class ScheduledDeletionService:
 
         for duplicate_set in pending_sets:
             try:
+                set_errors: list[str] = []
                 # Get files marked for deletion
                 files_to_delete = [f for f in duplicate_set.files if f.should_delete]
 
@@ -98,12 +99,14 @@ class ScheduledDeletionService:
                         except Exception as e:
                             error_msg = f"Failed to delete {file.file_path}: {str(e)}"
                             logger.error(error_msg)
-                            errors.append(error_msg)
+                            set_errors.append(error_msg)
 
                     # Mark set as processed if all deletions completed
-                    if not errors:
+                    if not set_errors:
                         duplicate_set.status = DuplicateStatus.PROCESSED
                         sets_processed += 1
+                    else:
+                        errors.extend(set_errors)
 
             except Exception as e:
                 error_msg = f"Error processing set {duplicate_set.id}: {str(e)}"
@@ -179,11 +182,15 @@ class ScheduledDeletionService:
             content += "</div>"
 
         # Send email
-        email_service.send_email(
-            to_email=to_email,
-            subject="Deduparr - Scheduled Deletion Complete",
+        html_content = email_service.build_email_template(
             title="Scheduled Deletion Complete",
             content=content,
             action_url="http://localhost:3000/scan",
             action_text="View Results",
+        )
+
+        email_service.send_email(
+            to_email=to_email,
+            subject="Deduparr - Scheduled Deletion Complete",
+            html_content=html_content,
         )

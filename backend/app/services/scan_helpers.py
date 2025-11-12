@@ -174,13 +174,26 @@ def validate_duplicate_files(
 
     sizes = [m.file_size for m in files_metadata]
     filenames = [os.path.basename(m.file_path).lower() for m in files_metadata]
+    full_paths = [m.file_path for m in files_metadata]
 
+    # Only skip if files have same size, same filename, AND same parent directory
+    # (which would mean Plex has duplicate entries for the same physical file)
     if len(set(sizes)) == 1 and len(set(filenames)) == 1:
-        logger_inst.info(
-            f"Skipping '{title}' - all {len(files_metadata)} files are identical copies "
-            f"(same size: {sizes[0]:,} bytes, same filename: {filenames[0]}), not real duplicates"
-        )
-        return "All files are identical copies, not true duplicates"
+        # Check if all files are in the same directory
+        parent_dirs = [os.path.dirname(path) for path in full_paths]
+        if len(set(parent_dirs)) == 1:
+            # All files are in same directory with same name and size - Plex duplicate entry bug
+            logger_inst.info(
+                f"Skipping '{title}' - all {len(files_metadata)} Plex entries point to same file "
+                f"(same directory: {parent_dirs[0]}, filename: {filenames[0]}), not real duplicates"
+            )
+            return "All Plex entries point to same file, not true duplicates"
+        else:
+            # Same filename and size but different directories - these ARE real duplicates!
+            logger_inst.debug(
+                f"'{title}' has {len(files_metadata)} files with same name and size in different directories - "
+                f"these are real duplicates to process"
+            )
 
     return None
 

@@ -1,6 +1,4 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
 @layer utilities {
   /* Custom color utilities - explicitly defined for JIT */
@@ -78,6 +76,13 @@
   .border-border {
     border-color: hsl(var(--border));
   }
+  .border-muted-foreground {
+    border-color: hsl(var(--muted-foreground));
+  }
+
+  .ring-primary {
+    --tw-ring-color: hsl(var(--primary));
+  }
 
   .from-primary {
     --tw-gradient-from: hsl(var(--primary)) var(--tw-gradient-from-position);
@@ -107,6 +112,28 @@ select option {
 input[type="checkbox"],
 input[type="radio"] {
   accent-color: hsl(var(--primary));
+}
+
+/* Hide number input spinner arrows for cleaner look */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+::selection {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+
+::-moz-selection {
+  background-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
 }
 
 /* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 

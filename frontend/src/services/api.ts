@@ -143,7 +143,7 @@ export interface AppInfo {
   config: {
     log_level: string;
     enable_scheduled_scans: boolean;
-    scan_interval_hours: number;
+    scheduler_description: string;
     data_dir: string;
   };
 }
@@ -173,6 +173,13 @@ export interface PlexConfig {
   qbittorrent_username?: string;
   qbittorrent_password?: string;
   enable_deep_scan?: string; // "true" or "false" string from backend
+  email_notifications_enabled?: string; // "true" or "false" string from backend
+  notification_email?: string;
+  smtp_host?: string;
+  smtp_port?: string;
+  smtp_user?: string;
+  smtp_password?: string;
+  smtp_from_email?: string;
 }
 
 export interface SetupStatus {
@@ -285,6 +292,17 @@ export interface DeepScanSetting {
   enabled: boolean;
 }
 
+export interface SchedulerConfig {
+  enable_scheduled_scans: boolean;
+  scan_schedule_mode: "daily" | "interval";
+  scheduled_scan_time: string;
+  scan_interval_hours: number;
+  enable_scheduled_deletion: boolean;
+  deletion_schedule_mode: "daily" | "interval";
+  scheduled_deletion_time: string;
+  deletion_interval_hours: number;
+}
+
 export const configAPI = {
   getAll: () => fetchAPI<PlexConfig>("/api/config/"),
   // Use GET endpoint that reads credentials from DB
@@ -294,6 +312,14 @@ export const configAPI = {
   getDeepScanSetting: () => fetchAPI<DeepScanSetting>("/api/config/deep-scan"),
   updateDeepScanSetting: (enabled: boolean) =>
     putAPI<DeepScanSetting, { enabled: boolean }>("/api/config/deep-scan", { enabled }),
+
+  // Scheduler configuration
+  getSchedulerConfig: () => fetchAPI<SchedulerConfig>("/api/config/scheduler"),
+  updateSchedulerConfig: (config: Partial<SchedulerConfig>) =>
+    postAPI<{ status: string; message: string }, Partial<SchedulerConfig>>(
+      "/api/config/scheduler",
+      config
+    ),
 };
 
 export const setupAPI = {

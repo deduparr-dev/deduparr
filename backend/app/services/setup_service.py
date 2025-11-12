@@ -555,6 +555,7 @@ class SetupService:
             "plex_auth_token",
             "radarr_api_key",
             "sonarr_api_key",
+            "smtp_password",
         }
 
         for key, value in config_data.items():

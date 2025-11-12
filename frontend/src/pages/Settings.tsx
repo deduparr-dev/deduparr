@@ -12,6 +12,7 @@ import {
   Loader2,
   Settings as SettingsIcon,
   AlertCircle,
+  Mail,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { configAPI } from "@/services/api";
@@ -98,9 +99,69 @@ function TestResultBadge({
 function GeneralSettings({
   deepScanEnabled,
   setDeepScanEnabled,
+  emailNotificationsEnabled,
+  setEmailNotificationsEnabled,
+  smtpHost,
+  setSmtpHost,
+  smtpPort,
+  setSmtpPort,
+  smtpUser,
+  setSmtpUser,
+  smtpPassword,
+  setSmtpPassword,
+  notificationEmail,
+  setNotificationEmail,
+  scheduledScansEnabled,
+  setScheduledScansEnabled,
+  scanMode,
+  setScanMode,
+  scanTime,
+  setScanTime,
+  scanIntervalHours,
+  setScanIntervalHours,
+  scheduledDeletionEnabled,
+  setScheduledDeletionEnabled,
+  deletionMode,
+  setDeletionMode,
+  deletionTime,
+  setDeletionTime,
+  deletionIntervalHours,
+  setDeletionIntervalHours,
+  testResults,
+  setTestResults,
 }: {
   deepScanEnabled: boolean;
   setDeepScanEnabled: (value: boolean) => void;
+  emailNotificationsEnabled: boolean;
+  setEmailNotificationsEnabled: (value: boolean) => void;
+  smtpHost: string;
+  setSmtpHost: (value: string) => void;
+  smtpPort: string;
+  setSmtpPort: (value: string) => void;
+  smtpUser: string;
+  setSmtpUser: (value: string) => void;
+  smtpPassword: string;
+  setSmtpPassword: (value: string) => void;
+  notificationEmail: string;
+  setNotificationEmail: (value: string) => void;
+  scheduledScansEnabled: boolean;
+  setScheduledScansEnabled: (value: boolean) => void;
+  scanMode: "daily" | "interval";
+  setScanMode: (value: "daily" | "interval") => void;
+  scanTime: string;
+  setScanTime: (value: string) => void;
+  scanIntervalHours: number;
+  setScanIntervalHours: (value: number) => void;
+  scheduledDeletionEnabled: boolean;
+  setScheduledDeletionEnabled: (value: boolean) => void;
+  deletionMode: "daily" | "interval";
+  setDeletionMode: (value: "daily" | "interval") => void;
+  deletionTime: string;
+  setDeletionTime: (value: string) => void;
+  deletionIntervalHours: number;
+  setDeletionIntervalHours: (value: number) => void;
+  testResults: Record<string, TestResult>;
+  setTestResults: React.Dispatch<React.SetStateAction<Record<string, TestResult>>>;
 }) {
   return (
     <div className="space-y-6">
@@ -129,7 +190,8 @@ function GeneralSettings({
               Enable Deep Scan
             </label>
             <p className="text-sm text-muted-foreground mt-1">
-              Scans filesystem directly alongside Plex API to find duplicates that might be missed - case-sensitivity, cross-directory files, and similar.
+              Scans filesystem directly alongside Plex API to find duplicates that might be missed -
+              case-sensitivity, cross-directory files, and similar.
             </p>
             <div className="flex items-start gap-2 mt-3">
               <AlertCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
@@ -138,6 +200,339 @@ function GeneralSettings({
               </p>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Email Notifications Section */}
+      <div className="space-y-4">
+        <h3 className="text-base font-semibold text-foreground">Email Notifications</h3>
+
+        <div className="flex items-start space-x-3 p-4 rounded-lg border border-border bg-card">
+          <input
+            type="checkbox"
+            id="enable-email-notifications"
+            checked={emailNotificationsEnabled}
+            onChange={(e) => setEmailNotificationsEnabled(e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+          />
+          <div className="flex-1">
+            <label
+              htmlFor="enable-email-notifications"
+              className="font-medium text-foreground cursor-pointer"
+            >
+              Enable Email Notifications
+            </label>
+            <p className="text-sm text-muted-foreground mt-1">
+              Receive email alerts for scan completion, errors, and deletion summaries.
+            </p>
+          </div>
+        </div>
+
+        {emailNotificationsEnabled && (
+          <div className="space-y-4 p-4 rounded-lg border border-border bg-card">
+            <div className="grid gap-4">
+              <div>
+                <Label htmlFor="notification-email">Notification Email</Label>
+                <Input
+                  id="notification-email"
+                  type="email"
+                  placeholder="notifications@example.com"
+                  value={notificationEmail}
+                  onChange={(e) => setNotificationEmail(e.target.value)}
+                  className="mt-2"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="smtp-host">SMTP Host</Label>
+                  <Input
+                    id="smtp-host"
+                    type="text"
+                    placeholder="mail.example.com"
+                    value={smtpHost}
+                    onChange={(e) => setSmtpHost(e.target.value)}
+                    className="mt-2"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="smtp-port">SMTP Port</Label>
+                  <Input
+                    id="smtp-port"
+                    type="number"
+                    placeholder="587"
+                    value={smtpPort}
+                    onChange={(e) => setSmtpPort(e.target.value)}
+                    className="mt-2"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <Label htmlFor="smtp-user">SMTP Username</Label>
+                <Input
+                  id="smtp-user"
+                  type="text"
+                  placeholder="username"
+                  value={smtpUser}
+                  onChange={(e) => setSmtpUser(e.target.value)}
+                  className="mt-2"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="smtp-password">SMTP Password</Label>
+                <Input
+                  id="smtp-password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={smtpPassword}
+                  onChange={(e) => setSmtpPassword(e.target.value)}
+                  className="mt-2"
+                />
+              </div>
+
+              <div className="flex items-start gap-2 mt-2">
+                <Mail className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-muted-foreground">
+                  Some providers require app-specific passwords instead of your account password.
+                </p>
+              </div>
+
+              {testResults.email && !testResults.email.loading && (
+                <div className="flex items-center gap-2 text-sm mt-3">
+                  {testResults.email.success ? (
+                    <>
+                      <Check className="w-4 h-4 text-primary" />
+                      <span className="text-foreground">Test email sent successfully</span>
+                    </>
+                  ) : (
+                    <>
+                      <X className="w-4 h-4 text-destructive" />
+                      <span className="text-destructive">
+                        {testResults.email.error || "Connection failed"}
+                      </span>
+                    </>
+                  )}
+                </div>
+              )}
+
+              <div className="flex items-center gap-3 pt-2">
+                <Button
+                  onClick={async () => {
+                    setTestResults((prev) => ({
+                      ...prev,
+                      email: { success: false, loading: true },
+                    }));
+                    try {
+                      const response = await fetch("/api/setup/test/email", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          smtp_host: smtpHost,
+                          smtp_port: smtpPort,
+                          smtp_user: smtpUser,
+                          smtp_password: smtpPassword,
+                          notification_email: notificationEmail,
+                        }),
+                      });
+
+                      const result = await response.json();
+                      setTestResults((prev) => ({
+                        ...prev,
+                        email: {
+                          success: result.success,
+                          error: result.success ? undefined : result.error,
+                        },
+                      }));
+                    } catch (error) {
+                      setTestResults((prev) => ({
+                        ...prev,
+                        email: {
+                          success: false,
+                          error: error instanceof Error ? error.message : "Connection failed",
+                        },
+                      }));
+                    }
+                  }}
+                  disabled={
+                    !smtpHost || !smtpPort || !smtpUser || !smtpPassword || !notificationEmail
+                  }
+                  className="flex-shrink-0"
+                >
+                  {testResults.email?.loading ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : null}
+                  Test Email
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Scheduler Settings Section */}
+      <div className="space-y-4">
+        <h3 className="text-base font-semibold text-foreground">Automation</h3>
+
+        {/* Scheduled Scans */}
+        <div className="space-y-4 p-4 rounded-lg border border-border bg-card">
+          <div className="flex items-start space-x-3">
+            <input
+              type="checkbox"
+              id="enable-scheduled-scans"
+              checked={scheduledScansEnabled}
+              onChange={(e) => setScheduledScansEnabled(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-600"
+            />
+            <div className="flex-1">
+              <label
+                htmlFor="enable-scheduled-scans"
+                className="font-medium text-foreground cursor-pointer"
+              >
+                Enable Scheduled Scans
+              </label>
+              <p className="text-sm text-muted-foreground mt-1">
+                Automatically scan for duplicates at regular intervals
+              </p>
+            </div>
+          </div>
+
+          {scheduledScansEnabled && (
+            <div className="ml-7 space-y-4">
+              <div>
+                <Label htmlFor="scan-time" className="block">
+                  {scanMode === "daily" ? "Daily Scan Time" : "Starting Time"}
+                </Label>
+                <Input
+                  id="scan-time"
+                  type="time"
+                  value={scanTime}
+                  onChange={(e) => setScanTime(e.target.value)}
+                  className="mt-2 max-w-xs"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="scan-mode" className="block">
+                  Schedule Type
+                </Label>
+                <select
+                  id="scan-mode"
+                  value={scanMode}
+                  onChange={(e) => setScanMode(e.target.value as "daily" | "interval")}
+                  className="mt-2 max-w-xs w-full h-10 px-3 rounded-md border border-border bg-card text-foreground focus-visible:outline-none focus-visible:border-muted-foreground"
+                >
+                  <option value="daily">Daily at specific time</option>
+                  <option value="interval">Every X hours</option>
+                </select>
+              </div>
+
+              {scanMode === "interval" && (
+                <div>
+                  <Label htmlFor="scan-interval" className="block">
+                    Interval (hours)
+                  </Label>
+                  <Input
+                    id="scan-interval"
+                    type="number"
+                    min="1"
+                    max="168"
+                    value={scanIntervalHours}
+                    onChange={(e) => setScanIntervalHours(parseInt(e.target.value) || 1)}
+                    className="mt-2 max-w-xs"
+                  />
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Run every {scanIntervalHours} hour{scanIntervalHours !== 1 ? "s" : ""} starting
+                    at {scanTime}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Scheduled Deletion */}
+        <div className="space-y-4 p-4 rounded-lg border border-border bg-card">
+          <div className="flex items-start space-x-3">
+            <input
+              type="checkbox"
+              id="enable-scheduled-deletion"
+              checked={scheduledDeletionEnabled}
+              onChange={(e) => setScheduledDeletionEnabled(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-600"
+            />
+            <div className="flex-1">
+              <label
+                htmlFor="enable-scheduled-deletion"
+                className="font-medium text-foreground cursor-pointer"
+              >
+                Enable Scheduled Deletion
+              </label>
+              <p className="text-sm text-muted-foreground mt-1">
+                Automatically delete all duplicates found by scheduled scans
+              </p>
+              <div className="flex items-start gap-2 mt-2">
+                <AlertCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-muted-foreground">
+                  All duplicates will be deleted automatically - be careful!
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {scheduledDeletionEnabled && (
+            <div className="ml-7 space-y-4">
+              <div>
+                <Label htmlFor="deletion-time" className="block">
+                  {deletionMode === "daily" ? "Daily Deletion Time" : "Starting Time"}
+                </Label>
+                <Input
+                  id="deletion-time"
+                  type="time"
+                  value={deletionTime}
+                  onChange={(e) => setDeletionTime(e.target.value)}
+                  className="mt-2 max-w-xs"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="deletion-mode" className="block">
+                  Schedule Type
+                </Label>
+                <select
+                  id="deletion-mode"
+                  value={deletionMode}
+                  onChange={(e) => setDeletionMode(e.target.value as "daily" | "interval")}
+                  className="mt-2 max-w-xs w-full h-10 px-3 rounded-md border border-border bg-card text-foreground focus-visible:outline-none focus-visible:border-muted-foreground"
+                >
+                  <option value="daily">Daily at specific time</option>
+                  <option value="interval">Every X hours</option>
+                </select>
+              </div>
+
+              {deletionMode === "interval" && (
+                <div>
+                  <Label htmlFor="deletion-interval" className="block">
+                    Interval (hours)
+                  </Label>
+                  <Input
+                    id="deletion-interval"
+                    type="number"
+                    min="1"
+                    max="168"
+                    value={deletionIntervalHours}
+                    onChange={(e) => setDeletionIntervalHours(parseInt(e.target.value) || 1)}
+                    className="mt-2 max-w-xs"
+                  />
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Run every {deletionIntervalHours} hour{deletionIntervalHours !== 1 ? "s" : ""}{" "}
+                    starting at {deletionTime}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -166,7 +561,11 @@ function PlexSettings({
     queryKey: ["plexServers", encryptedToken],
     queryFn: async () => {
       if (!encryptedToken) return { servers: [] };
-      const response = await fetch(`/api/setup/plex/servers/${encryptedToken}`);
+      const response = await fetch(`/api/setup/plex/servers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auth_token: encryptedToken }),
+      });
       return response.json();
     },
     enabled: !!encryptedToken,
@@ -416,13 +815,19 @@ function ServiceSettings({
 }
 
 export default function Settings() {
-  const { data: plexConfig, isLoading } = useQuery({
+  const { data: plexConfig, isLoading: plexLoading } = useQuery({
     queryKey: ["plexConfig"],
     queryFn: () => configAPI.getAll(),
     staleTime: 10 * 60 * 1000,
   });
 
-  if (isLoading) {
+  const { data: schedulerConfig, isLoading: schedulerLoading } = useQuery({
+    queryKey: ["schedulerConfig"],
+    queryFn: () => configAPI.getSchedulerConfig(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (plexLoading || schedulerLoading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -431,21 +836,41 @@ export default function Settings() {
   }
 
   // Use a key to force remount when config changes (React 19 pattern)
-  const configKey = JSON.stringify(plexConfig);
-  return <SettingsContent key={configKey} initialConfig={plexConfig || {}} />;
+  const configKey = JSON.stringify({ plexConfig, schedulerConfig });
+  return (
+    <SettingsContent
+      key={configKey}
+      initialConfig={plexConfig || {}}
+      schedulerConfig={schedulerConfig}
+    />
+  );
 }
 
 interface SettingsContentProps {
   initialConfig: Awaited<ReturnType<typeof configAPI.getAll>>;
+  schedulerConfig: Awaited<ReturnType<typeof configAPI.getSchedulerConfig>> | undefined;
 }
 
-function SettingsContent({ initialConfig }: SettingsContentProps) {
+function SettingsContent({
+  initialConfig,
+  schedulerConfig: initialSchedulerConfig,
+}: SettingsContentProps) {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("general");
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [isSaving, setIsSaving] = useState(false);
 
   const [deepScanEnabled, setDeepScanEnabled] = useState(initialConfig.enable_deep_scan === "true");
+  const [emailNotificationsEnabled, setEmailNotificationsEnabled] = useState(
+    initialConfig.email_notifications_enabled === "true"
+  );
+  const [notificationEmail, setNotificationEmail] = useState(
+    initialConfig.notification_email || ""
+  );
+  const [smtpHost, setSmtpHost] = useState(initialConfig.smtp_host || "");
+  const [smtpPort, setSmtpPort] = useState(initialConfig.smtp_port || "587");
+  const [smtpUser, setSmtpUser] = useState(initialConfig.smtp_user || "");
+  const [smtpPassword, setSmtpPassword] = useState(initialConfig.smtp_password || "");
   const [selectedServer, setSelectedServer] = useState(initialConfig.plex_server_name || "");
   const [radarrUrl, setRadarrUrl] = useState(initialConfig.radarr_url || "");
   const [radarrApiKey, setRadarrApiKey] = useState(initialConfig.radarr_api_key || "");
@@ -454,6 +879,30 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
   const [qbitUrl, setQbitUrl] = useState(initialConfig.qbittorrent_url || "");
   const [qbitUsername, setQbitUsername] = useState(initialConfig.qbittorrent_username || "");
   const [qbitPassword, setQbitPassword] = useState(initialConfig.qbittorrent_password || "");
+
+  // Scheduler settings - initialized from prop (component remounts when schedulerConfig changes)
+  const [scheduledScansEnabled, setScheduledScansEnabled] = useState(
+    initialSchedulerConfig?.enable_scheduled_scans ?? false
+  );
+  const [scanMode, setScanMode] = useState<"daily" | "interval">(
+    initialSchedulerConfig?.scan_schedule_mode ?? "daily"
+  );
+  const [scanTime, setScanTime] = useState(initialSchedulerConfig?.scheduled_scan_time ?? "02:00");
+  const [scanIntervalHours, setScanIntervalHours] = useState(
+    initialSchedulerConfig?.scan_interval_hours ?? 24
+  );
+  const [scheduledDeletionEnabled, setScheduledDeletionEnabled] = useState(
+    initialSchedulerConfig?.enable_scheduled_deletion ?? false
+  );
+  const [deletionMode, setDeletionMode] = useState<"daily" | "interval">(
+    initialSchedulerConfig?.deletion_schedule_mode ?? "daily"
+  );
+  const [deletionTime, setDeletionTime] = useState(
+    initialSchedulerConfig?.scheduled_deletion_time ?? "02:30"
+  );
+  const [deletionIntervalHours, setDeletionIntervalHours] = useState(
+    initialSchedulerConfig?.deletion_interval_hours ?? 24
+  );
 
   async function handleSaveConfiguration() {
     setIsSaving(true);
@@ -467,6 +916,18 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
         plex_server_name: selectedServer,
         plex_libraries: initialConfig.plex_libraries || "",
       };
+
+      // Add email notification settings
+      if (emailNotificationsEnabled) {
+        config.email_notifications_enabled = "true";
+        config.notification_email = notificationEmail;
+        config.smtp_host = smtpHost;
+        config.smtp_port = smtpPort;
+        config.smtp_user = smtpUser;
+        config.smtp_password = smtpPassword;
+      } else {
+        config.email_notifications_enabled = "false";
+      }
 
       // Add optional services only if configured
       if (radarrUrl && radarrApiKey) {
@@ -498,14 +959,32 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
       queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
       queryClient.invalidateQueries({ queryKey: ["config", "deep-scan"] });
 
+      // Save scheduler configuration
+      await configAPI.updateSchedulerConfig({
+        enable_scheduled_scans: scheduledScansEnabled,
+        scan_schedule_mode: scanMode,
+        scheduled_scan_time: scanTime,
+        scan_interval_hours: scanIntervalHours,
+        enable_scheduled_deletion: scheduledDeletionEnabled,
+        deletion_schedule_mode: deletionMode,
+        scheduled_deletion_time: deletionTime,
+        deletion_interval_hours: deletionIntervalHours,
+      });
+      queryClient.invalidateQueries({ queryKey: ["schedulerConfig"] });
+
+      // Clear test results after successful save
+      setTestResults({});
+
       toast({
         title: "Configuration saved",
-        description: "Your settings have been saved successfully.",
+        description: <div>Your settings have been saved successfully.</div>,
       });
     } catch (error) {
       toast({
         title: "Save failed",
-        description: error instanceof Error ? error.message : "Failed to save configuration",
+        description: (
+          <div>{error instanceof Error ? error.message : "Failed to save configuration"}</div>
+        ),
         variant: "destructive",
       });
     } finally {
@@ -516,6 +995,12 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
   function handleCancel() {
     // Reset all state to initial values
     setDeepScanEnabled(initialConfig.enable_deep_scan === "true");
+    setEmailNotificationsEnabled(initialConfig.email_notifications_enabled === "true");
+    setNotificationEmail(initialConfig.notification_email || "");
+    setSmtpHost(initialConfig.smtp_host || "");
+    setSmtpPort(initialConfig.smtp_port || "587");
+    setSmtpUser(initialConfig.smtp_user || "");
+    setSmtpPassword(initialConfig.smtp_password || "");
     setSelectedServer(initialConfig.plex_server_name || "");
     setRadarrUrl(initialConfig.radarr_url || "");
     setRadarrApiKey(initialConfig.radarr_api_key || "");
@@ -525,9 +1010,20 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
     setQbitUsername(initialConfig.qbittorrent_username || "");
     setQbitPassword(initialConfig.qbittorrent_password || "");
 
+    // Reset scheduler settings
+    if (initialSchedulerConfig) {
+      setScheduledScansEnabled(initialSchedulerConfig.enable_scheduled_scans);
+      setScanMode(initialSchedulerConfig.scan_schedule_mode);
+      setScanTime(initialSchedulerConfig.scheduled_scan_time);
+      setScanIntervalHours(initialSchedulerConfig.scan_interval_hours);
+      setScheduledDeletionEnabled(initialSchedulerConfig.enable_scheduled_deletion);
+      setDeletionMode(initialSchedulerConfig.deletion_schedule_mode);
+      setDeletionTime(initialSchedulerConfig.scheduled_deletion_time);
+      setDeletionIntervalHours(initialSchedulerConfig.deletion_interval_hours);
+    }
     toast({
       title: "Changes discarded",
-      description: "Your unsaved changes have been discarded.",
+      description: <div>Your unsaved changes have been discarded.</div>,
     });
   }
 
@@ -568,6 +1064,36 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
             <GeneralSettings
               deepScanEnabled={deepScanEnabled}
               setDeepScanEnabled={setDeepScanEnabled}
+              emailNotificationsEnabled={emailNotificationsEnabled}
+              setEmailNotificationsEnabled={setEmailNotificationsEnabled}
+              smtpHost={smtpHost}
+              setSmtpHost={setSmtpHost}
+              smtpPort={smtpPort}
+              setSmtpPort={setSmtpPort}
+              smtpUser={smtpUser}
+              setSmtpUser={setSmtpUser}
+              smtpPassword={smtpPassword}
+              setSmtpPassword={setSmtpPassword}
+              notificationEmail={notificationEmail}
+              setNotificationEmail={setNotificationEmail}
+              scheduledScansEnabled={scheduledScansEnabled}
+              setScheduledScansEnabled={setScheduledScansEnabled}
+              scanMode={scanMode}
+              setScanMode={setScanMode}
+              scanTime={scanTime}
+              setScanTime={setScanTime}
+              scanIntervalHours={scanIntervalHours}
+              setScanIntervalHours={setScanIntervalHours}
+              scheduledDeletionEnabled={scheduledDeletionEnabled}
+              setScheduledDeletionEnabled={setScheduledDeletionEnabled}
+              deletionMode={deletionMode}
+              setDeletionMode={setDeletionMode}
+              deletionTime={deletionTime}
+              setDeletionTime={setDeletionTime}
+              deletionIntervalHours={deletionIntervalHours}
+              setDeletionIntervalHours={setDeletionIntervalHours}
+              testResults={testResults}
+              setTestResults={setTestResults}
             />
           )}
           {activeTab === "plex" && (

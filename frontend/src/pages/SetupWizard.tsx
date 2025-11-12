@@ -140,7 +140,11 @@ export default function SetupWizard() {
 
           // Fetch available servers
           try {
-            const response = await fetch(`/api/setup/plex/servers/${result.encrypted_token}`);
+            const response = await fetch(`/api/setup/plex/servers`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ auth_token: result.encrypted_token }),
+            });
             const data = await response.json();
 
             if (data.servers && data.servers.length > 0) {

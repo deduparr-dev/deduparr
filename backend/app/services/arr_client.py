@@ -177,23 +177,31 @@ class ArrClient:
             raise ArrClientError("Expected dict but got list from system/status")
         return result
 
-    async def get_root_folder(self) -> List[Dict[str, Any]]:
+    async def get_root_folder(self) -> list[dict[str, object]]:
         """Get root folders"""
         result = await self._request("GET", "/rootfolder")
         if isinstance(result, dict):
             return [result]
         return result
 
-    async def post_command(self, name: str, **kwargs: Any) -> Dict[str, Any]:
+    async def post_command(self, name: str, **kwargs: object) -> dict[str, object]:
         """
-        Execute a command
+        Execute a command on the *arr server.
+
+        This method accepts arbitrary keyword arguments because different commands
+        require different parameters. The kwargs are passed directly to the API
+        as command parameters.
 
         Args:
             name: Command name (e.g., "DownloadedMoviesScan", "RefreshMovie")
-            **kwargs: Command parameters
+            **kwargs: Command-specific parameters (varies by command type)
 
         Returns:
-            Command result with ID
+            Command result dict containing the command ID and status
+
+        Example:
+            await client.post_command("RescanMovie", movieId=123)
+            await client.post_command("DownloadedMoviesScan", path="/movies")
         """
         data = {"name": name, **kwargs}
         result = await self._request("POST", "/command", json_data=data)

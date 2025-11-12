@@ -94,7 +94,9 @@ async def test_plex_get_servers():
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get("/api/setup/plex/servers/fake-token")
+            response = await client.post(
+                "/api/setup/plex/servers", json={"auth_token": "fake-token"}
+            )
             assert response.status_code == 200
             data = response.json()
             assert "servers" in data

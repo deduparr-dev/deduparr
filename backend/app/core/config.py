@@ -46,7 +46,20 @@ class Settings(BaseSettings):
 
     # Scheduler
     enable_scheduled_scans: bool = False
-    scan_interval_hours: int = 24  # How often to run automated scans
+    scan_schedule_mode: str = "daily"  # "daily" or "interval"
+    scheduled_scan_time: str = (
+        "02:00"  # Starting time for scans (HH:MM, 24-hour format)
+    )
+    scan_interval_hours: int = 24  # Interval in hours (1-168) when mode is "interval"
+
+    enable_scheduled_deletion: bool = False
+    deletion_schedule_mode: str = "daily"  # "daily" or "interval"
+    scheduled_deletion_time: str = (
+        "02:30"  # Starting time for deletions (HH:MM, 24-hour format)
+    )
+    deletion_interval_hours: int = (
+        24  # Interval in hours (1-168) when mode is "interval"
+    )
 
 
 settings = Settings()

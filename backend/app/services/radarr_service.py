@@ -5,10 +5,14 @@ Radarr service for movie file management
 import logging
 from typing import Dict, Optional
 
-from pyarr import RadarrAPI
-from pyarr.exceptions import PyarrAccessRestricted, PyarrConnectionError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.arr_client import (
+    ArrAuthError,
+    ArrClientError,
+    ArrConnectionError,
+    RadarrClient,
+)
 from app.services.arr_helpers import (
     find_media_by_file_path,
     manual_import_file,
@@ -25,7 +29,7 @@ class RadarrService(BaseExternalService):
 
     def __init__(self, db: AsyncSession):
         super().__init__(db)
-        self._client: Optional[RadarrAPI] = None
+        self._client: Optional[RadarrClient] = None
 
     async def find_movie_by_file_path(self, file_path: str) -> Optional[dict]:
         """
@@ -38,9 +42,9 @@ class RadarrService(BaseExternalService):
             Movie data if found, None otherwise
         """
         client = await self._get_client()
-        return find_media_by_file_path(client, file_path, "movie", logger)
+        return await find_media_by_file_path(client, file_path, "movie", logger)
 
-    async def _get_client(self) -> RadarrAPI:
+    async def _get_client(self) -> RadarrClient:
         """Get Radarr client instance"""
         if self._client is not None:
             return self._client
@@ -51,9 +55,11 @@ class RadarrService(BaseExternalService):
         )
 
         try:
-            self._client = RadarrAPI(config["url"], config["api_key"])
+            self._client = RadarrClient(
+                base_url=config["url"], api_key=config["api_key"]
+            )
             return self._client
-        except (PyarrConnectionError, PyarrAccessRestricted) as e:
+        except (ArrConnectionError, ArrAuthError) as e:
             raise ValueError(f"Radarr connection failed: {e}")
 
     async def delete_movie_file(self, movie_id: int, movie_file_id: int) -> bool:
@@ -70,12 +76,12 @@ class RadarrService(BaseExternalService):
         client = await self._get_client()
 
         try:
-            client.del_movie_file(movie_file_id)
+            await client.del_movie_file(movie_file_id)
             logger.info(
                 f"Deleted movie file {movie_file_id} for movie {movie_id} from Radarr"
             )
             return True
-        except Exception as e:
+        except ArrClientError as e:
             logger.error(
                 f"Error deleting movie file {movie_file_id} for movie {movie_id}: {e}"
             )
@@ -158,8 +164,8 @@ class RadarrService(BaseExternalService):
         """
         try:
             client = await self._get_client()
-            status = client.get_system_status()
+            status = await client.get_system_status()
             return {"success": True, "version": status.get("version", "unknown")}
-        except Exception as e:
+        except ArrClientError as e:
             logger.error(f"Radarr connection test failed: {e}")
             return {"success": False, "error": str(e)}

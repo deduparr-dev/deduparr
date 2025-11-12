@@ -3,7 +3,7 @@ Tests for orphaned database entry cleanup via *arr refresh commands
 """
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from app.services.arr_helpers import refresh_media_item
 
@@ -12,7 +12,7 @@ from app.services.arr_helpers import refresh_media_item
 async def test_refresh_media_item_movie():
     """Test refresh_media_item helper for movies"""
     mock_client = MagicMock()
-    mock_client.post_command.return_value = {"id": 123, "status": "queued"}
+    mock_client.post_command = AsyncMock(return_value={"id": 123, "status": "queued"})
     mock_logger = MagicMock()
 
     result = await refresh_media_item(
@@ -30,7 +30,7 @@ async def test_refresh_media_item_movie():
 async def test_refresh_media_item_series():
     """Test refresh_media_item helper for series"""
     mock_client = MagicMock()
-    mock_client.post_command.return_value = {"id": 789, "status": "queued"}
+    mock_client.post_command = AsyncMock(return_value={"id": 789, "status": "queued"})
     mock_logger = MagicMock()
 
     result = await refresh_media_item(

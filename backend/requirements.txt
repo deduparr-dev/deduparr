@@ -14,7 +14,7 @@ greenlet==3.2.4  # Required for SQLAlchemy async
 # API Clients
 plexapi==4.17.1
 qbittorrent-api==2025.11.0
-pyarr==5.2.0
+httpx==0.28.1
 
 # Scheduling
 apscheduler==3.11.1
@@ -22,7 +22,6 @@ apscheduler==3.11.1
 # Utilities
 python-dotenv==1.2.1
 pyyaml==6.0.3
-httpx==0.28.1
 python-multipart==0.0.20
 itsdangerous==2.2.0  # For token encryption
 psutil==6.1.1  # For system information

@@ -329,9 +329,33 @@ async def test_function(test_db):
 - Media objects: `Movie`, `Show`, `Episode` with nested `.media[0].parts[0]`
 - Refresh libraries: `library.update()`
 
-### *arr APIs (`pyarr`)
+### *arr APIs (httpx-based clients)
 
-Not yet implemented. When adding, use PyArr library for Radarr/Sonarr connections. Store API keys and URLs in `Settings` model.
+**Direct httpx implementation** (migrated from PyArr):
+- **RadarrClient** (`app.services.arr_client.RadarrClient`): Radarr API v3 client
+- **SonarrClient** (`app.services.arr_client.SonarrClient`): Sonarr API v3/v5 client
+- Both use `httpx.AsyncClient` for async HTTP requests
+- Error handling via `ArrConnectionError` exception
+- API keys stored in `Config` model (encrypted)
+- Key methods:
+  - `get_system_status()`: Get version/status info
+  - `get_movie()` / `get_series()`: Retrieve media items
+  - `get_root_folder()`: Get configured root folders
+  - `del_movie_file()` / `del_episode_file()`: Delete files
+  - `post_command()`: Execute commands (RescanMovie, RefreshSeries, etc.)
+  - `update_movie()` / `update_series()`: Update media item metadata
+
+**Usage Pattern:**
+```python
+from app.services.arr_client import RadarrClient, ArrConnectionError
+
+client = RadarrClient(base_url="http://localhost:7878", api_key="xxx")
+try:
+    movies = await client.get_movie()
+    await client.post_command("DownloadedMoviesScan", path="/movies")
+except ArrConnectionError as e:
+    logger.error(f"Radarr API error: {e}")
+```
 
 ### qBittorrent (`qbittorrent-api`)
 

@@ -4,7 +4,7 @@ Integration tests for Settings/Setup functionality
 
 import pytest
 from httpx import AsyncClient, ASGITransport
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.main import app
 
@@ -153,9 +153,11 @@ async def test_plex_connection_test_failure(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_radarr_connection_test_success(client: AsyncClient):
     """Test successful Radarr connection"""
-    with patch("app.services.radarr_service.RadarrAPI") as mock_radarr:
-        mock_instance = MagicMock()
-        mock_instance.get_system_status.return_value = {"version": "5.11.0.9244"}
+    with patch("app.services.radarr_service.RadarrClient") as mock_radarr:
+        mock_instance = AsyncMock()
+        mock_instance.get_system_status = AsyncMock(
+            return_value={"version": "5.11.0.9244"}
+        )
         mock_radarr.return_value = mock_instance
 
         response = await client.post(
@@ -171,9 +173,11 @@ async def test_radarr_connection_test_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_radarr_connection_test_failure(client: AsyncClient):
     """Test failed Radarr connection"""
-    with patch("app.services.radarr_service.RadarrAPI") as mock_radarr:
-        mock_instance = MagicMock()
-        mock_instance.get_system_status.side_effect = Exception("Connection error")
+    with patch("app.services.radarr_service.RadarrClient") as mock_radarr:
+        mock_instance = AsyncMock()
+        mock_instance.get_system_status = AsyncMock(
+            side_effect=Exception("Connection error")
+        )
         mock_radarr.return_value = mock_instance
 
         response = await client.post(
@@ -189,9 +193,11 @@ async def test_radarr_connection_test_failure(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_sonarr_connection_test_success(client: AsyncClient):
     """Test successful Sonarr connection"""
-    with patch("app.services.sonarr_service.SonarrAPI") as mock_sonarr:
-        mock_instance = MagicMock()
-        mock_instance.get_system_status.return_value = {"version": "4.0.10.2544"}
+    with patch("app.services.sonarr_service.SonarrClient") as mock_sonarr:
+        mock_instance = AsyncMock()
+        mock_instance.get_system_status = AsyncMock(
+            return_value={"version": "4.0.10.2544"}
+        )
         mock_sonarr.return_value = mock_instance
 
         response = await client.post(
@@ -207,9 +213,11 @@ async def test_sonarr_connection_test_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_sonarr_connection_test_failure(client: AsyncClient):
     """Test failed Sonarr connection"""
-    with patch("app.services.sonarr_service.SonarrAPI") as mock_sonarr:
-        mock_instance = MagicMock()
-        mock_instance.get_system_status.side_effect = Exception("Invalid API key")
+    with patch("app.services.sonarr_service.SonarrClient") as mock_sonarr:
+        mock_instance = AsyncMock()
+        mock_instance.get_system_status = AsyncMock(
+            side_effect=Exception("Invalid API key")
+        )
         mock_sonarr.return_value = mock_instance
 
         response = await client.post(

@@ -7,7 +7,7 @@ Extended tests for deletion pipeline - comprehensive coverage of new features:
 """
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.deletion_pipeline import DeletionPipeline
 from app.models import DuplicateSet, DuplicateFile
@@ -130,7 +130,7 @@ async def test_path_agnostic_radarr_matching(
     """Test that Radarr deletion works correctly with mocked Radarr API"""
     with (
         patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrAPI") as mock_radarr,
+        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
         patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
@@ -143,18 +143,21 @@ async def test_path_agnostic_radarr_matching(
         mock_qbit_instance.torrents_info.return_value = []
 
         # Setup Radarr - movie file should match the path from fixture
-        mock_radarr_instance = MagicMock()
+        mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
-        mock_radarr_instance.get_movie.return_value = [
-            {
-                "id": 1,
-                "title": "Avatar",
-                "movieFile": {
-                    "id": 10,
-                    "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",  # Exact path match required
-                },
-            }
-        ]
+        mock_radarr_instance.get_movie = AsyncMock(
+            return_value=[
+                {
+                    "id": 1,
+                    "title": "Avatar",
+                    "movieFile": {
+                        "id": 10,
+                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",  # Exact path match required
+                    },
+                }
+            ]
+        )
+        mock_radarr_instance.del_movie_file = AsyncMock()
 
         # Setup file system - file exists in /media
         mock_exists.return_value = True
@@ -308,7 +311,7 @@ async def test_comprehensive_disk_cleanup_with_associated_files(
 
     with (
         patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrAPI") as mock_radarr,
+        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
         patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
@@ -323,19 +326,22 @@ async def test_comprehensive_disk_cleanup_with_associated_files(
         mock_qbit.return_value = mock_qbit_instance
         mock_qbit_instance.torrents_info.return_value = []
 
-        mock_radarr_instance = MagicMock()
+        mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
-        mock_radarr_instance.get_movie.return_value = [
-            {
-                "id": 1,
-                "title": "Avatar",
-                "movieFile": {
-                    "id": 10,
-                    # Match the Plex path so Radarr finds the movie
-                    "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
-                },
-            }
-        ]
+        mock_radarr_instance.get_movie = AsyncMock(
+            return_value=[
+                {
+                    "id": 1,
+                    "title": "Avatar",
+                    "movieFile": {
+                        "id": 10,
+                        # Match the Plex path so Radarr finds the movie
+                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
+                    },
+                }
+            ]
+        )
+        mock_radarr_instance.del_movie_file = AsyncMock()
 
         mock_plex_instance = MagicMock()
         mock_plex_class.return_value = mock_plex_instance
@@ -506,7 +512,7 @@ async def test_targeted_plex_refresh_with_library_id(
 
     with (
         patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrAPI") as mock_radarr,
+        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
         patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
@@ -518,18 +524,21 @@ async def test_targeted_plex_refresh_with_library_id(
         mock_qbit.return_value = mock_qbit_instance
         mock_qbit_instance.torrents_info.return_value = []
 
-        mock_radarr_instance = MagicMock()
+        mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
-        mock_radarr_instance.get_movie.return_value = [
-            {
-                "id": 1,
-                "title": "Avatar",
-                "movieFile": {
-                    "id": 10,
-                    "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
-                },
-            }
-        ]
+        mock_radarr_instance.get_movie = AsyncMock(
+            return_value=[
+                {
+                    "id": 1,
+                    "title": "Avatar",
+                    "movieFile": {
+                        "id": 10,
+                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
+                    },
+                }
+            ]
+        )
+        mock_radarr_instance.del_movie_file = AsyncMock()
 
         # Setup Plex with refresh_item method
         mock_plex_instance = MagicMock()
@@ -566,7 +575,7 @@ async def test_plex_refresh_fallback_to_full_scan(
 
     with (
         patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrAPI") as mock_radarr,
+        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
         patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
@@ -578,18 +587,21 @@ async def test_plex_refresh_fallback_to_full_scan(
         mock_qbit.return_value = mock_qbit_instance
         mock_qbit_instance.torrents_info.return_value = []
 
-        mock_radarr_instance = MagicMock()
+        mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
-        mock_radarr_instance.get_movie.return_value = [
-            {
-                "id": 1,
-                "title": "Avatar",
-                "movieFile": {
-                    "id": 10,
-                    "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
-                },
-            }
-        ]
+        mock_radarr_instance.get_movie = AsyncMock(
+            return_value=[
+                {
+                    "id": 1,
+                    "title": "Avatar",
+                    "movieFile": {
+                        "id": 10,
+                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
+                    },
+                }
+            ]
+        )
+        mock_radarr_instance.del_movie_file = AsyncMock()
 
         # Setup Plex - refresh_item fails, refresh_library succeeds
         mock_plex_instance = MagicMock()
@@ -621,7 +633,7 @@ async def test_file_not_found_on_disk_after_cache_lookup(
 
     with (
         patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrAPI") as mock_radarr,
+        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
         patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.walk") as mock_walk,
@@ -631,15 +643,18 @@ async def test_file_not_found_on_disk_after_cache_lookup(
         mock_qbit.return_value = mock_qbit_instance
         mock_qbit_instance.torrents_info.return_value = []
 
-        mock_radarr_instance = MagicMock()
+        mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
-        mock_radarr_instance.get_movie.return_value = [
-            {
-                "id": 1,
-                "title": "Avatar",
-                "movieFile": {"id": 10, "path": "/different/path/Avatar.mkv"},
-            }
-        ]
+        mock_radarr_instance.get_movie = AsyncMock(
+            return_value=[
+                {
+                    "id": 1,
+                    "title": "Avatar",
+                    "movieFile": {"id": 10, "path": "/different/path/Avatar.mkv"},
+                }
+            ]
+        )
+        mock_radarr_instance.del_movie_file = AsyncMock()
 
         mock_plex_instance = MagicMock()
         mock_plex_class.return_value = mock_plex_instance
@@ -812,7 +827,7 @@ async def test_dry_run_mode_no_actual_changes(
 
     with (
         patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrAPI") as mock_radarr,
+        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
         patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
         patch("os.path.exists", return_value=True),
         patch("os.remove") as mock_remove,
@@ -822,7 +837,7 @@ async def test_dry_run_mode_no_actual_changes(
         mock_qbit_instance = MagicMock()
         mock_qbit.return_value = mock_qbit_instance
 
-        mock_radarr_instance = MagicMock()
+        mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
 
         mock_plex_instance = MagicMock()

@@ -111,9 +111,9 @@ class TestDiskScanService:
 
     def test_normalize_filename_audio_codecs(self, service):
         """Test removal of audio codec markers"""
+        # 7.1 is now correctly removed as a quality marker
         assert (
-            service._normalize_filename("Movie.2023.DTS-HD.MA.7.1.mkv")
-            == "movie 2023 7 1"
+            service._normalize_filename("Movie.2023.DTS-HD.MA.7.1.mkv") == "movie 2023"
         )
         assert (
             service._normalize_filename("Movie.2023.TrueHD.Atmos.mkv") == "movie 2023"
@@ -274,19 +274,48 @@ class TestDiskScanService:
         key = next(key for key in groups.keys() if "S01E01" in key)
         assert len(groups[key]) == 2
 
-    def test_filter_hardlinks_removes_hardlinked_groups(self, service, temp_dir):
-        """Test that groups containing only hardlinks are removed"""
-        file1 = os.path.join(temp_dir, "movie1.mkv")
-        file2 = os.path.join(temp_dir, "movie2.mkv")
-
-        Path(file1).touch()
+    def test_process_groups_removes_hardlinked_groups(self, service, temp_dir):
+        """Test that hardlinked files in same group are filtered out"""
+        # Create two hardlinks
+        file1 = Path(temp_dir) / "movie1.mkv"
+        file1.write_text("content")
+        file2 = Path(temp_dir) / "movie1_hardlink.mkv"
         os.link(file1, file2)
 
-        groups = {"movie|2023": [file1, file2]}
+        groups = {"movie": [str(file1), str(file2)]}
+        result = service._process_groups(groups, check_size=False, check_checksum=False)
 
-        result = service._filter_hardlinks(groups)
+        assert len(result) == 0  # Group should be removed (all hardlinks)
 
-        assert len(result) == 0
+    def test_process_groups_keeps_true_duplicates(self, service, temp_dir):
+        """Test that true duplicates (different inodes) are kept"""
+        file1 = Path(temp_dir) / "movie1.mkv"
+        file1.write_text("content")
+        file2 = Path(temp_dir) / "movie1_copy.mkv"
+        file2.write_text("content")
+
+        groups = {"movie": [str(file1), str(file2)]}
+        result = service._process_groups(groups, check_size=False, check_checksum=False)
+
+        assert len(result) == 1
+        assert "movie" in result
+        assert len(result["movie"]) == 2
+
+    def test_process_groups_mixed_hardlinks_and_duplicates(self, service, temp_dir):
+        """Test mixed scenario with hardlinks and true duplicates"""
+        file1 = Path(temp_dir) / "movie1.mkv"
+        file1.write_text("content")
+        file2 = Path(temp_dir) / "movie1_hardlink.mkv"
+        os.link(file1, file2)
+        file3 = Path(temp_dir) / "movie1_copy.mkv"
+        file3.write_text("content")
+
+        groups = {"movie": [str(file1), str(file2), str(file3)]}
+        result = service._process_groups(groups, check_size=False, check_checksum=False)
+
+        # Should keep the original and the true copy, filtering out one hardlink
+        assert len(result) == 1
+        assert len(result["movie"]) == 2
 
     def test_filter_hardlinks_keeps_true_duplicates(self, service, temp_dir):
         """Test that true duplicates (different inodes) are kept"""
@@ -298,7 +327,7 @@ class TestDiskScanService:
 
         groups = {"movie|2023": [file1, file2]}
 
-        result = service._filter_hardlinks(groups)
+        result = service._process_groups(groups, check_size=False, check_checksum=False)
 
         assert len(result) == 1
         assert "movie|2023" in result
@@ -316,7 +345,7 @@ class TestDiskScanService:
 
         groups = {"movie|2023": [file1, file2, file3]}
 
-        result = service._filter_hardlinks(groups)
+        result = service._process_groups(groups, check_size=False, check_checksum=False)
 
         assert len(result) == 1
         assert len(result["movie|2023"]) == 2
@@ -385,7 +414,7 @@ class TestDiskScanService:
         Path(file2).write_text("test content 2")
 
         groups = {"movie|2023": [file1, file2]}
-        result = service._filter_hardlinks(groups)
+        result = service._process_groups(groups, check_size=False, check_checksum=False)
 
         assert "movie|2023" in result
         file_info = result["movie|2023"][0]

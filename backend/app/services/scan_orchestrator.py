@@ -13,7 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Config
-from app.services.disk_scan_service import DiskScanService
+from app.services.disk_scan_service import (
+    DiskScanConfig,
+    DiskScanService,
+    DuplicateDetectionStrategy,
+    HardlinkHandling,
+)
 from app.services.plex_service import PlexService
 
 logger = logging.getLogger(__name__)
@@ -38,7 +43,16 @@ class ScanOrchestrator:
         """
         self.plex_service = plex_service
         self.db = db
-        self.disk_scan_service = DiskScanService()
+
+        # Initialize disk scan service with default config
+        # TODO: Load config from database settings in future
+        disk_config = DiskScanConfig(
+            strategy=DuplicateDetectionStrategy.NAME_AND_SIMILAR_SIZE,
+            size_threshold_percent=5.0,
+            hardlink_handling=HardlinkHandling.EXCLUDE,
+            enable_checksum=False,  # Too slow for default use
+        )
+        self.disk_scan_service = DiskScanService(config=disk_config)
 
     async def scan_movies(self, library_name: str) -> Dict[str, List[Movie]]:
         """

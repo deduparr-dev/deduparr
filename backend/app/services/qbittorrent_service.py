@@ -63,7 +63,7 @@ class QBittorrentService(BaseExternalService):
             torrents = client.torrents_info()
             found_hash = None
             count = 0
-            
+
             for torrent in torrents:
                 torrent_files = client.torrents_files(torrent_hash=torrent.hash)
                 for torrent_file in torrent_files:
@@ -73,11 +73,13 @@ class QBittorrentService(BaseExternalService):
                             found_hash = torrent.hash
                         count += 1
                         break  # Only count each torrent once
-            
+
             if found_hash:
-                logger.info(f"Found torrent {found_hash} for file {file_path} ({count} total)")
+                logger.info(
+                    f"Found torrent {found_hash} for file {file_path} ({count} total)"
+                )
                 return (found_hash, count)
-                        
+
             logger.debug(f"No torrent found for file {file_path}")
             return None
         except Exception as e:

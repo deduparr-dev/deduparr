@@ -7,7 +7,9 @@ import logging
 import os
 import re
 import shutil
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
+
+from app.services.arr_client import RadarrClient, SonarrClient
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,7 @@ MediaType = Literal["movie", "series"]
 
 
 async def rescan_media_item(
-    client,
+    client: Union[RadarrClient, SonarrClient],
     media_id: int,
     media_type: MediaType,
     kept_file_path: Optional[str],
@@ -47,19 +49,19 @@ async def rescan_media_item(
 
             # Get media item and handle path issues
             if media_type == "movie":
-                media_item = client.get_movie(media_id)
-                update_method = client.upd_movie
+                media_item = await client.get_movie(media_id)
+                update_method = client.update_movie
                 scan_command = "DownloadedMoviesScan"
             else:
-                media_item = client.get_series(media_id)
-                update_method = client.upd_series
+                media_item = await client.get_series(media_id)
+                update_method = client.update_series
                 scan_command = "DownloadedEpisodesScan"
 
             if media_item:
                 current_path = media_item.get("path", "")
 
                 # Check if file is in library root (not in proper subfolder)
-                root_folders = client.get_root_folder()
+                root_folders = await client.get_root_folder()
                 is_library_root = any(
                     root.get("path") == scan_path for root in root_folders
                 )
@@ -78,7 +80,7 @@ async def rescan_media_item(
 
                     # Update media path in *arr
                     media_item["path"] = new_folder
-                    update_method(data=media_item)
+                    await update_method(data=media_item)
                     logger_instance.info(
                         f"Updated {media_type} path in {media_type.capitalize()}arr to: {new_folder}"
                     )
@@ -91,17 +93,17 @@ async def rescan_media_item(
                         f"Current: {current_path}, Updating to: {scan_path}"
                     )
                     media_item["path"] = scan_path
-                    update_method(data=media_item)
+                    await update_method(data=media_item)
                     logger_instance.info(
                         f"Updated {media_type} path in {media_type.capitalize()}arr to: {scan_path}"
                     )
         else:
             # Fallback: Get the media item's configured path
             if media_type == "movie":
-                media_item = client.get_movie(media_id)
+                media_item = await client.get_movie(media_id)
                 scan_command = "DownloadedMoviesScan"
             else:
-                media_item = client.get_series(media_id)
+                media_item = await client.get_series(media_id)
                 scan_command = "DownloadedEpisodesScan"
 
             if not media_item:
@@ -123,7 +125,7 @@ async def rescan_media_item(
             )
 
         logger_instance.info(f"Triggering {scan_command} for folder: {scan_path}")
-        client.post_command(scan_command, path=scan_path)
+        await client.post_command(scan_command, path=scan_path)
         logger_instance.info(
             f"Scan command queued for {media_type} {media_id} in folder {scan_path}"
         )
@@ -188,7 +190,7 @@ def _create_media_subfolder(
 
 
 async def manual_import_file(
-    client,
+    client: Union[RadarrClient, SonarrClient],
     file_path: str,
     media_id: int,
     media_type: MediaType,
@@ -225,9 +227,9 @@ async def manual_import_file(
 
             # Get media details to find the root path
             if media_type == "movie":
-                media_item = client.get_movie(media_id)
+                media_item = await client.get_movie(media_id)
             else:
-                media_item = client.get_series(media_id)
+                media_item = await client.get_series(media_id)
 
             if media_item and "path" in media_item:
                 media_folder = media_item["path"]
@@ -256,14 +258,14 @@ async def manual_import_file(
 
         # Build parameters based on media type
         if media_type == "movie":
-            manual_import_items = client.get_manual_import(
+            manual_import_items = await client.get_manual_import(
                 folder=folder_path,
                 downloadId="",
                 movieId=media_id,
                 filterExistingFiles=True,
             )
         else:  # series
-            manual_import_items = client.get_manual_import(
+            manual_import_items = await client.get_manual_import(
                 folder=folder_path,
                 downloadId="",
                 seriesId=media_id,
@@ -332,7 +334,9 @@ async def manual_import_file(
 
 
 async def trigger_full_library_scan(
-    client, media_type: MediaType, logger_instance: logging.Logger
+    client: Union[RadarrClient, SonarrClient],
+    media_type: MediaType,
+    logger_instance: logging.Logger,
 ) -> bool:
     """
     Trigger a full library scan for all movies or series
@@ -352,11 +356,11 @@ async def trigger_full_library_scan(
             else "DownloadedEpisodesScan"
         )
 
-        root_folders = client.get_root_folder()
+        root_folders = await client.get_root_folder()
         for root in root_folders:
             path = root.get("path")
             if path:
-                client.post_command(scan_command, path=path)
+                await client.post_command(scan_command, path=path)
                 logger_instance.info(
                     f"Queued full scan for {media_type.capitalize()}arr library: {path}"
                 )
@@ -370,7 +374,10 @@ async def trigger_full_library_scan(
 
 
 async def refresh_media_item(
-    client, media_id: int, media_type: MediaType, logger_instance: logging.Logger
+    client: Union[RadarrClient, SonarrClient],
+    media_id: int,
+    media_type: MediaType,
+    logger_instance: logging.Logger,
 ) -> bool:
     """
     Refresh a movie or series metadata and clean up orphaned database entries
@@ -402,7 +409,7 @@ async def refresh_media_item(
         else:
             raise ValueError(f"Unknown media type: {media_type}")
 
-        result = client.post_command(command_name, **{id_param: media_id})
+        result = await client.post_command(command_name, **{id_param: media_id})
         logger_instance.info(
             f"Queued {media_type} refresh for ID {media_id}, "
             f"command ID: {result.get('id')} (will clean up orphaned DB entries)"
@@ -414,8 +421,8 @@ async def refresh_media_item(
         raise
 
 
-def find_media_by_file_path(
-    client,
+async def find_media_by_file_path(
+    client: Union[RadarrClient, SonarrClient],
     file_path: str,
     media_type: MediaType,
     logger_instance: logging.Logger,
@@ -439,7 +446,7 @@ def find_media_by_file_path(
     try:
         if media_type == "movie":
             # Radarr: Search through all movies
-            movies = client.get_movie()
+            movies = await client.get_movie()
 
             for movie in movies:
                 if "movieFile" in movie and movie["movieFile"]:
@@ -458,12 +465,12 @@ def find_media_by_file_path(
         elif media_type == "series":
             # Sonarr: Search through all episode files
             episode_files = []
-            all_series = client.get_series()
+            all_series = await client.get_series()
 
             for series in all_series:
                 series_id = series.get("id")
                 if series_id:
-                    files = client.get_episode_files_by_series_id(series_id)
+                    files = await client.get_episode_files_by_series_id(series_id)
                     if files:
                         episode_files.extend(files)
 
@@ -475,7 +482,7 @@ def find_media_by_file_path(
 
                     if episode_ids:
                         # Normal case: file is properly linked to episode(s)
-                        episodes = client.get_episode(episode_ids[0])
+                        episodes = await client.get_episode(episode_ids[0])
                         if isinstance(episodes, list) and episodes:
                             episode = episodes[0]
                         else:

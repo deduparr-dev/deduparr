@@ -3,7 +3,7 @@ Tests for Radarr service
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.radarr_service import RadarrService
 from app.models.config import Config
@@ -21,14 +21,14 @@ async def test_radarr_client_initialization(test_db):
 
     service = RadarrService(test_db)
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
 
         client = await service._get_client()
 
         mock_client_class.assert_called_once_with(
-            "http://localhost:7878", "test_api_key"
+            base_url="http://localhost:7878", api_key="test_api_key"
         )
         assert client == mock_client
 
@@ -59,10 +59,10 @@ async def test_find_movie_by_file_path_found(test_db):
         "movieFile": {"id": 10, "path": "/media/movies/Test Movie.mkv"},
     }
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
-        mock_client = MagicMock()
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
+        mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.get_movie.return_value = [mock_movie]
+        mock_client.get_movie = AsyncMock(return_value=[mock_movie])
 
         result = await service.find_movie_by_file_path("/media/movies/Test Movie.mkv")
 
@@ -88,10 +88,10 @@ async def test_find_movie_by_file_path_not_found(test_db):
         "movieFile": {"id": 10, "path": "/media/movies/Test Movie.mkv"},
     }
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
-        mock_client = MagicMock()
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
+        mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.get_movie.return_value = [mock_movie]
+        mock_client.get_movie = AsyncMock(return_value=[mock_movie])
 
         result = await service.find_movie_by_file_path("/media/movies/NonExistent.mkv")
 
@@ -111,10 +111,10 @@ async def test_find_movie_no_movie_file(test_db):
 
     mock_movie = {"id": 1, "title": "Test Movie"}
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
-        mock_client = MagicMock()
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
+        mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.get_movie.return_value = [mock_movie]
+        mock_client.get_movie = AsyncMock(return_value=[mock_movie])
 
         result = await service.find_movie_by_file_path("/media/movies/Test Movie.mkv")
 
@@ -132,9 +132,10 @@ async def test_delete_movie_file_success(test_db):
 
     service = RadarrService(test_db)
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
-        mock_client = MagicMock()
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
+        mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
+        mock_client.del_movie_file = AsyncMock()
 
         result = await service.delete_movie_file(movie_id=1, movie_file_id=10)
 
@@ -153,10 +154,10 @@ async def test_delete_movie_file_failure(test_db):
 
     service = RadarrService(test_db)
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
-        mock_client = MagicMock()
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
+        mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.del_movie_file.side_effect = Exception("Delete failed")
+        mock_client.del_movie_file = AsyncMock(side_effect=Exception("Delete failed"))
 
         with pytest.raises(Exception, match="Delete failed"):
             await service.delete_movie_file(movie_id=1, movie_file_id=10)
@@ -173,10 +174,10 @@ async def test_test_connection_success(test_db):
 
     service = RadarrService(test_db)
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
-        mock_client = MagicMock()
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
+        mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.get_system_status.return_value = {"version": "4.0.0"}
+        mock_client.get_system_status = AsyncMock(return_value={"version": "4.0.0"})
 
         result = await service.test_connection()
 
@@ -188,6 +189,8 @@ async def test_test_connection_success(test_db):
 @pytest.mark.asyncio
 async def test_test_connection_failure(test_db):
     """Test connection test failure"""
+    from app.services.arr_client import ArrConnectionError
+
     config_url = Config(key="radarr_url", value="http://localhost:7878")
     config_api_key = Config(key="radarr_api_key", value="test_api_key")
 
@@ -196,10 +199,12 @@ async def test_test_connection_failure(test_db):
 
     service = RadarrService(test_db)
 
-    with patch("app.services.radarr_service.RadarrAPI") as mock_client_class:
-        mock_client = MagicMock()
+    with patch("app.services.radarr_service.RadarrClient") as mock_client_class:
+        mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.get_system_status.side_effect = Exception("Connection failed")
+        mock_client.get_system_status = AsyncMock(
+            side_effect=ArrConnectionError("Connection failed")
+        )
 
         result = await service.test_connection()
 

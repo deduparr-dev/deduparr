@@ -26,7 +26,7 @@
 - **APScheduler** for scheduled tasks
 - **PlexAPI** for Plex integration
 - **qBittorrent-API** for library management
-- **PyArr** (or custom API clients) for Radarr/Sonarr
+- **httpx** for Radarr/Sonarr API clients (custom async implementation)
 
 **Frontend:**
 - **React** with TypeScript

@@ -11,7 +11,7 @@ import {
   X,
   Loader2,
   Settings as SettingsIcon,
-  HardDrive,
+  AlertCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { configAPI } from "@/services/api";
@@ -129,18 +129,13 @@ function GeneralSettings({
               Enable Deep Scan
             </label>
             <p className="text-sm text-muted-foreground mt-1">
-              Scan filesystem directly for duplicates in addition to Plex API detection. Deep scans
-              find duplicates Plex might miss, such as case-sensitivity differences or
-              cross-directory duplicates.
+              Scans filesystem directly alongside Plex API to find duplicates that might be missed - case-sensitivity, cross-directory files, and similar.
             </p>
-            <div className="mt-3 p-3 rounded-md bg-primary/10 border border-primary/30">
-              <div className="flex items-start gap-2">
-                <HardDrive className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
-                <p className="text-sm text-foreground">
-                  <strong>Performance Note:</strong> Deep scans analyze the entire filesystem and
-                  take significantly longer, especially for large libraries with thousands of files.
-                </p>
-              </div>
+            <div className="flex items-start gap-2 mt-3">
+              <AlertCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+              <p className="text-sm text-muted-foreground">
+                Please note that this might significantly slow down scans for large libraries.
+              </p>
             </div>
           </div>
         </div>

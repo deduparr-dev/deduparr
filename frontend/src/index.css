@@ -103,6 +103,12 @@ select option {
   color: hsl(var(--foreground));
 }
 
+/* Style checkboxes and radio buttons to use brand primary color instead of browser default blue */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: hsl(var(--primary));
+}
+
 /* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
 All colors MUST be HSL.
 */

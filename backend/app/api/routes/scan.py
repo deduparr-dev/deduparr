@@ -23,6 +23,7 @@ from app.services.scan_helpers import (
     create_duplicate_set,
     cleanup_stale_set,
 )
+from app.services.scan_orchestrator import ScanOrchestrator
 from app.services.scoring_engine import ScoringEngine
 
 logger = logging.getLogger(__name__)
@@ -133,7 +134,7 @@ async def start_scan(
 
     This will:
     1. Connect to Plex and scan libraries
-    2. Find duplicate media items
+    2. Find duplicate media items (using orchestrator for optional deep scan)
     3. Score each version using the scoring engine
     4. Store results in database with status=PENDING
     """
@@ -142,6 +143,7 @@ async def start_scan(
     # Let HTTPExceptions (like 400 from get_plex_service) bubble up naturally
     # FastAPI will handle them correctly
     plex_service = await get_plex_service(db)
+    orchestrator = ScanOrchestrator(plex_service, db)
     scoring_engine = ScoringEngine()
     custom_rules = await get_custom_scoring_rules(db)
 
@@ -157,9 +159,9 @@ async def start_scan(
             library = plex_service.get_library(library_name)
             logger.info(f"Detected library type: {library.type} for '{library_name}'")
 
-            # Scan based on library type
+            # Scan based on library type (orchestrator handles deep scan automatically)
             if library.type == "movie":
-                movie_dupes = plex_service.find_duplicate_movies(library_name)
+                movie_dupes = await orchestrator.scan_movies(library_name)
 
                 # Clean up stale duplicate sets that Plex no longer reports
                 await _cleanup_stale_duplicate_sets(db, movie_dupes, MediaType.MOVIE)
@@ -180,7 +182,7 @@ async def start_scan(
                 # Scan for duplicate episodes
                 try:
                     logger.info(f"Starting episode duplicate scan for '{library_name}'")
-                    episode_dupes = plex_service.find_duplicate_episodes(library_name)
+                    episode_dupes = await orchestrator.scan_episodes(library_name)
                     logger.info(
                         f"Found {len(episode_dupes)} duplicate episode groups in '{library_name}'"
                     )

@@ -42,7 +42,7 @@ All with a beautiful web UI and dry-run mode for safety!
 
 ## ✨ Features
 
-- 🔍 **Smart Duplicate Detection** - Scan media libraries for duplicates with configurable quality scoring
+- 🔍 **Smart Duplicate Detection** - Scan media libraries with Plex API or deep filesystem scans
 - ✅ **Safe Review System** - Dry-run mode by default, preview before deletion
 - 🗑️ **Multi-Stage Deletion** - Removes from qBittorrent, Radarr/Sonarr, disk, and refreshes media library
 - 📊 **Dashboard & Analytics** - Track duplicates found, space reclaimed, and activity history

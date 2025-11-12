@@ -3,7 +3,16 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Film, Tv, Download, Check, X, Loader2 } from "lucide-react";
+import {
+  Film,
+  Tv,
+  Download,
+  Check,
+  X,
+  Loader2,
+  Settings as SettingsIcon,
+  HardDrive,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { configAPI } from "@/services/api";
 import { toast } from "@/components/ui/use-toast";
@@ -18,6 +27,7 @@ interface PlexServer {
 }
 
 const tabs = [
+  { id: "general", name: "General", icon: SettingsIcon },
   { id: "plex", name: "Plex", icon: Film },
   { id: "radarr", name: "Radarr", icon: Film },
   { id: "sonarr", name: "Sonarr", icon: Tv },
@@ -81,6 +91,60 @@ function TestResultBadge({
       {result.version && (
         <p className="text-sm text-muted-foreground mt-1">Version: {result.version}</p>
       )}
+    </div>
+  );
+}
+
+function GeneralSettings({
+  deepScanEnabled,
+  setDeepScanEnabled,
+}: {
+  deepScanEnabled: boolean;
+  setDeepScanEnabled: (value: boolean) => void;
+}) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">General Settings</h2>
+        <p className="text-sm text-muted-foreground mt-1">Configure application-wide preferences</p>
+      </div>
+
+      {/* Scan Settings Section */}
+      <div className="space-y-4">
+        <h3 className="text-base font-semibold text-foreground">Scan Settings</h3>
+
+        <div className="flex items-start space-x-3 p-4 rounded-lg border border-border bg-card">
+          <input
+            type="checkbox"
+            id="enable-deep-scan"
+            checked={deepScanEnabled}
+            onChange={(e) => setDeepScanEnabled(e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+          />
+          <div className="flex-1">
+            <label
+              htmlFor="enable-deep-scan"
+              className="font-medium text-foreground cursor-pointer"
+            >
+              Enable Deep Scan
+            </label>
+            <p className="text-sm text-muted-foreground mt-1">
+              Scan filesystem directly for duplicates in addition to Plex API detection. Deep scans
+              find duplicates Plex might miss, such as case-sensitivity differences or
+              cross-directory duplicates.
+            </p>
+            <div className="mt-3 p-3 rounded-md bg-primary/10 border border-primary/30">
+              <div className="flex items-start gap-2">
+                <HardDrive className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
+                <p className="text-sm text-foreground">
+                  <strong>Performance Note:</strong> Deep scans analyze the entire filesystem and
+                  take significantly longer, especially for large libraries with thousands of files.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -382,10 +446,11 @@ interface SettingsContentProps {
 
 function SettingsContent({ initialConfig }: SettingsContentProps) {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState("plex");
+  const [activeTab, setActiveTab] = useState("general");
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [isSaving, setIsSaving] = useState(false);
 
+  const [deepScanEnabled, setDeepScanEnabled] = useState(initialConfig.enable_deep_scan === "true");
   const [selectedServer, setSelectedServer] = useState(initialConfig.plex_server_name || "");
   const [radarrUrl, setRadarrUrl] = useState(initialConfig.radarr_url || "");
   const [radarrApiKey, setRadarrApiKey] = useState(initialConfig.radarr_api_key || "");
@@ -398,6 +463,9 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
   async function handleSaveConfiguration() {
     setIsSaving(true);
     try {
+      // Save deep scan setting first
+      await configAPI.updateDeepScanSetting(deepScanEnabled);
+
       // Build config object, only including non-empty values
       const config: Record<string, string> = {
         plex_auth_token: initialConfig.plex_auth_token || "",
@@ -431,8 +499,9 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
         throw new Error(error.detail || "Failed to save configuration");
       }
 
-      // Invalidate the plexConfig cache to refetch fresh data from backend
+      // Invalidate caches to refetch fresh data from backend
       queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
+      queryClient.invalidateQueries({ queryKey: ["config", "deep-scan"] });
 
       toast({
         title: "Configuration saved",
@@ -450,6 +519,17 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
   }
 
   function handleCancel() {
+    // Reset all state to initial values
+    setDeepScanEnabled(initialConfig.enable_deep_scan === "true");
+    setSelectedServer(initialConfig.plex_server_name || "");
+    setRadarrUrl(initialConfig.radarr_url || "");
+    setRadarrApiKey(initialConfig.radarr_api_key || "");
+    setSonarrUrl(initialConfig.sonarr_url || "");
+    setSonarrApiKey(initialConfig.sonarr_api_key || "");
+    setQbitUrl(initialConfig.qbittorrent_url || "");
+    setQbitUsername(initialConfig.qbittorrent_username || "");
+    setQbitPassword(initialConfig.qbittorrent_password || "");
+
     toast({
       title: "Changes discarded",
       description: "Your unsaved changes have been discarded.",
@@ -489,6 +569,12 @@ function SettingsContent({ initialConfig }: SettingsContentProps) {
 
         {/* Tab Content */}
         <div className="p-4 md:p-6">
+          {activeTab === "general" && (
+            <GeneralSettings
+              deepScanEnabled={deepScanEnabled}
+              setDeepScanEnabled={setDeepScanEnabled}
+            />
+          )}
           {activeTab === "plex" && (
             <PlexSettings
               initialConfig={initialConfig}

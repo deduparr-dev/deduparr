@@ -290,9 +290,24 @@ async def scan_episodes(
 
 ---
 
-### Phase 4: Frontend Integration
+### Phase 4: Frontend Integration ✅ COMPLETE
 
-#### Task 4.1: Add Deep Scan Setting to Settings Page
+**Implemented:**
+- ✅ General tab in Settings with deep scan toggle
+- ✅ Deferred-save pattern matching other settings
+- ✅ Deep scan badge on Scan page (Badge component with variant switching)
+- ✅ API integration (`configAPI.getDeepScanSetting()`, `configAPI.updateDeepScanSetting()`)
+- ✅ PlexConfig interface updated with `enable_deep_scan` field
+- ✅ Cancel button resets deep scan state
+- ✅ Integration tests for deep scan configuration (4 tests)
+
+**Files Modified:**
+- `frontend/src/services/api.ts` - Added deep scan API methods and PlexConfig field
+- `frontend/src/pages/Settings.tsx` - Added General tab and deep scan state management
+- `frontend/src/pages/Scan.tsx` - Added deep scan status badge
+- `backend/tests/test_deep_scan_integration.py` - Integration tests (4 passed)
+
+#### Task 4.1: Add Deep Scan Setting to Settings Page ✅
 **File:** `frontend/src/pages/SettingsPage.tsx`
 
 **Add to Scan Settings Section:**

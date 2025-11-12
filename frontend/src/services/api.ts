@@ -172,6 +172,7 @@ export interface PlexConfig {
   qbittorrent_url?: string;
   qbittorrent_username?: string;
   qbittorrent_password?: string;
+  enable_deep_scan?: string; // "true" or "false" string from backend
 }
 
 export interface SetupStatus {
@@ -280,10 +281,19 @@ export const scanAPI = {
     }),
 };
 
+export interface DeepScanSetting {
+  enabled: boolean;
+}
+
 export const configAPI = {
   getAll: () => fetchAPI<PlexConfig>("/api/config/"),
   // Use GET endpoint that reads credentials from DB
   getPlexLibraries: () => fetchAPI<PlexLibrary[]>("/api/setup/plex/libraries"),
+
+  // Deep scan configuration
+  getDeepScanSetting: () => fetchAPI<DeepScanSetting>("/api/config/deep-scan"),
+  updateDeepScanSetting: (enabled: boolean) =>
+    putAPI<DeepScanSetting, { enabled: boolean }>("/api/config/deep-scan", { enabled }),
 };
 
 export const setupAPI = {

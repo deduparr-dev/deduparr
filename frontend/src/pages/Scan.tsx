@@ -4,7 +4,15 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, ChevronUp, Trash2, AlertTriangle, Search, Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Trash2,
+  AlertTriangle,
+  Search,
+  Loader2,
+  HardDrive,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { scanAPI, configAPI, type DuplicateSet as ApiDuplicateSet } from "@/services/api";
@@ -215,6 +223,15 @@ export default function Scan() {
 
   const plexConfigured = !!config?.plex_auth_token;
 
+  // Fetch deep scan setting
+  const { data: deepScanData } = useQuery({
+    queryKey: ["config", "deep-scan"],
+    queryFn: () => configAPI.getDeepScanSetting(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const deepScanEnabled = deepScanData?.enabled ?? false;
+
   // Fetch Plex libraries only if Plex authentication token exists in database
   const { data: libraries = [], isLoading: loadingLibraries } = useQuery({
     queryKey: ["plexLibraries"],
@@ -348,7 +365,13 @@ export default function Scan() {
 
       {/* Scan Configuration */}
       <Card className="p-4 md:p-6">
-        <h3 className="text-base md:text-lg font-semibold mb-4">Scan Configuration</h3>
+        <div className="flex items-center gap-2 mb-4">
+          <h3 className="text-base md:text-lg font-semibold">Scan Configuration</h3>
+          <Badge variant={deepScanEnabled ? "default" : "outline"}>
+            <HardDrive className="h-3 w-3 mr-1.5" />
+            Deep Scan: {deepScanEnabled ? "Enabled" : "Disabled"}
+          </Badge>
+        </div>
 
         <div className="space-y-4 mb-6">
           <div>

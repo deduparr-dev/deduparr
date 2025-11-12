@@ -1,5 +1,18 @@
 """
 Configuration model for storing application settings in database
+
+Available configuration keys:
+- plex_auth_token: Encrypted Plex authentication token (OAuth)
+- radarr_url: Radarr server URL
+- radarr_api_key: Encrypted Radarr API key
+- sonarr_url: Sonarr server URL
+- sonarr_api_key: Encrypted Sonarr API key
+- qbittorrent_url: qBittorrent server URL
+- qbittorrent_username: qBittorrent username
+- qbittorrent_password: Encrypted qBittorrent password
+- selected_movie_library: Name of selected Plex movie library
+- selected_tv_library: Name of selected Plex TV show library
+- enable_deep_scan: Enable filesystem-based duplicate detection (default: False)
 """
 
 from sqlalchemy import Column, DateTime, Integer, String, Text

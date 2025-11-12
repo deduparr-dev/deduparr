@@ -52,6 +52,18 @@ class ConfigImport(BaseModel):
     overwrite_existing: bool = False
 
 
+class DeepScanResponse(BaseModel):
+    """Response model for deep scan setting"""
+
+    enabled: bool
+
+
+class DeepScanUpdate(BaseModel):
+    """Request model for updating deep scan setting"""
+
+    enabled: bool
+
+
 @router.get("/", response_model=Dict[str, Optional[str]])
 async def get_all_config(db: AsyncSession = Depends(get_db)):
     """
@@ -60,6 +72,56 @@ async def get_all_config(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Config))
     configs = result.scalars().all()
     return {config.key: config.value for config in configs}
+
+
+@router.get("/deep-scan", response_model=DeepScanResponse)
+async def get_deep_scan_setting(db: AsyncSession = Depends(get_db)):
+    """
+    Get the deep scan setting (filesystem-based duplicate detection)
+
+    Returns:
+        enabled: True if deep scan is enabled, False otherwise (default)
+    """
+    result = await db.execute(select(Config).where(Config.key == "enable_deep_scan"))
+    config = result.scalar_one_or_none()
+
+    enabled = config.value == "true" if config else False
+
+    return DeepScanResponse(enabled=enabled)
+
+
+@router.put("/deep-scan", response_model=DeepScanResponse)
+async def update_deep_scan_setting(
+    update: DeepScanUpdate, db: AsyncSession = Depends(get_db)
+):
+    """
+    Update the deep scan setting
+
+    Deep scan enables filesystem-based duplicate detection in addition to
+    Plex API detection. This is slower but finds duplicates Plex might miss
+    (e.g., case-sensitivity differences, cross-directory duplicates).
+
+    Args:
+        update: Deep scan setting update
+
+    Returns:
+        enabled: Updated deep scan status
+    """
+    result = await db.execute(select(Config).where(Config.key == "enable_deep_scan"))
+    config = result.scalar_one_or_none()
+
+    value = "true" if update.enabled else "false"
+
+    if config:
+        config.value = value
+    else:
+        config = Config(key="enable_deep_scan", value=value)
+        db.add(config)
+
+    await db.commit()
+    await db.refresh(config)
+
+    return DeepScanResponse(enabled=update.enabled)
 
 
 @router.get("/{key}", response_model=ConfigResponse)

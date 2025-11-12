@@ -420,3 +420,108 @@ async def test_import_configuration_without_scoring_rules(test_db):
         data = response.json()
         assert data["imported"]["configs"] == 1
         assert data["imported"]["scoring_rules"] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_deep_scan_default(test_db):
+    """Test getting deep scan setting when not set (should default to False)"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/config/deep-scan")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_deep_scan_enabled(test_db):
+    """Test getting deep scan setting when enabled"""
+    config = Config(key="enable_deep_scan", value="true")
+    test_db.add(config)
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/config/deep-scan")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_deep_scan_disabled(test_db):
+    """Test getting deep scan setting when explicitly disabled"""
+    config = Config(key="enable_deep_scan", value="false")
+    test_db.add(config)
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/config/deep-scan")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_update_deep_scan_enable(test_db):
+    """Test enabling deep scan"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.put("/api/config/deep-scan", json={"enabled": True})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["enabled"] is True
+
+        result = await test_db.execute(
+            select(Config).where(Config.key == "enable_deep_scan")
+        )
+        config = result.scalar_one_or_none()
+        assert config is not None
+        assert config.value == "true"
+
+
+@pytest.mark.asyncio
+async def test_update_deep_scan_disable(test_db):
+    """Test disabling deep scan"""
+    config = Config(key="enable_deep_scan", value="true")
+    test_db.add(config)
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.put("/api/config/deep-scan", json={"enabled": False})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["enabled"] is False
+
+        result = await test_db.execute(
+            select(Config).where(Config.key == "enable_deep_scan")
+        )
+        config = result.scalar_one_or_none()
+        assert config is not None
+        assert config.value == "false"
+
+
+@pytest.mark.asyncio
+async def test_update_deep_scan_toggle(test_db):
+    """Test toggling deep scan on and off multiple times"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.put("/api/config/deep-scan", json={"enabled": True})
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True
+
+        response = await client.put("/api/config/deep-scan", json={"enabled": False})
+        assert response.status_code == 200
+        assert response.json()["enabled"] is False
+
+        response = await client.put("/api/config/deep-scan", json={"enabled": True})
+        assert response.status_code == 200
+        assert response.json()["enabled"] is True

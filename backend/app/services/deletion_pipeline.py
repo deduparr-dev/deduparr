@@ -706,20 +706,24 @@ class DeletionPipeline:
                     f"Main file already deleted: {filename} "
                     f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
                 )
-                
+
                 # First, check if the original parent directory still exists with orphaned files
                 parent_dir = os.path.dirname(file_path)
                 base_name = os.path.splitext(filename)[0]
-                
+
                 if os.path.exists(parent_dir) and os.path.isdir(parent_dir):
                     # Clean up any orphaned files in the original directory
-                    deleted = self._cleanup_associated_files(parent_dir, base_name, exclude_filename=filename)
-                    
+                    self._cleanup_associated_files(
+                        parent_dir, base_name, exclude_filename=filename
+                    )
+
                     # Try to remove the directory if it's now empty
                     try:
                         if not os.listdir(parent_dir):
                             if self.dry_run:
-                                logger.info(f"[DRY-RUN] Would remove empty directory: {parent_dir}")
+                                logger.info(
+                                    f"[DRY-RUN] Would remove empty directory: {parent_dir}"
+                                )
                             else:
                                 os.rmdir(parent_dir)
                                 logger.info(f"Removed empty directory: {parent_dir}")

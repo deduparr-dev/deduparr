@@ -35,7 +35,7 @@ No known vulnerabilities. All dependencies are up to date and security audits pa
 
 ## Reporting Security Issues
 
-If you discover a security vulnerability, please email security@deduparr.dev or open a private security advisory on GitHub.
+If you discover a security vulnerability, please email hello@deduparr.com or open a private security advisory on GitHub.
 
 ## Code Security Standards
 

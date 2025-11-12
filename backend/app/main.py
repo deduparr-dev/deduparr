@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.api.routes import config, setup, scoring, stats, scan, system
 from app.services.scheduler import get_scheduler
+from app.services.security import SensitiveDataFilter
 from app.services.system_service import SystemService
 
 
@@ -26,6 +27,13 @@ logging.basicConfig(
 
 # Suppress plexapi library noise - only log critical failures
 logging.getLogger("plexapi").setLevel(logging.CRITICAL)
+
+# Add sensitive data filter to all handlers for defense-in-depth
+# This allows us to keep DEBUG logging for troubleshooting while automatically
+# redacting API keys, tokens, passwords, and encrypted values
+
+for handler in logging.root.handlers:
+    handler.addFilter(SensitiveDataFilter())
 
 # Setup log capture for system page
 SystemService.setup_log_capture()
@@ -45,11 +53,39 @@ async def lifespan(app: FastAPI):
     # Start background scheduler if enabled
     scheduler = get_scheduler()
     if settings.enable_scheduled_scans:
-        scan_interval = getattr(settings, "scan_interval_hours", 24)
-        await scheduler.start(interval_hours=scan_interval)
-        logger.info(f"📅 Scheduled scans enabled (every {scan_interval} hours)")
+        scan_mode = getattr(settings, "scan_schedule_mode", "daily")
+        scan_time = getattr(settings, "scheduled_scan_time", "02:00")
+        scan_interval_hours = getattr(settings, "scan_interval_hours", 24)
+
+        deletion_mode = getattr(settings, "deletion_schedule_mode", "daily")
+        deletion_time = getattr(settings, "scheduled_deletion_time", "02:30")
+        deletion_interval_hours = getattr(settings, "deletion_interval_hours", 24)
+
+        await scheduler.start(
+            scan_mode=scan_mode,
+            scan_time=scan_time,
+            scan_interval_hours=scan_interval_hours,
+            deletion_mode=deletion_mode,
+            deletion_time=deletion_time,
+            deletion_interval_hours=deletion_interval_hours,
+        )
+
+        if scan_mode == "daily":
+            logger.info(f"Scheduled scans enabled (daily at {scan_time})")
+        else:
+            logger.info(
+                f"Scheduled scans enabled (every {scan_interval_hours}h starting at {scan_time})"
+            )
+
+        if settings.enable_scheduled_deletion:
+            if deletion_mode == "daily":
+                logger.info(f"Scheduled deletion enabled (daily at {deletion_time})")
+            else:
+                logger.info(
+                    f"Scheduled deletion enabled (every {deletion_interval_hours}h starting at {deletion_time})"
+                )
     else:
-        logger.info("⏸️ Scheduled scans disabled")
+        logger.info("⏸Scheduled scans disabled")
 
     yield
 

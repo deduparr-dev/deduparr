@@ -264,9 +264,22 @@ export default function Scan() {
       const newSets = data.sets_created || 0;
       const existingSets = data.sets_already_exist || 0;
 
+      // Build description with helpful context
+      const mainMessage = `Found ${data.duplicates_found} duplicate files. ${newSets} new sets, ${existingSets} existing sets (${totalSets} total).`;
+
+      // Add helpful explanation if files found but no sets created
+      const showWarning = data.duplicates_found > 0 && totalSets === 0;
+
       toast({
         title: "Scan Complete",
-        description: `Found ${data.duplicates_found} duplicate files.\n${newSets} new sets, ${existingSets} existing sets (${totalSets} total).`,
+        description: showWarning ? (
+          <div>
+            <div>{mainMessage}</div>
+            <div className="mt-2">No sets created because files are missing on disk.</div>
+          </div>
+        ) : (
+          <div>{mainMessage}</div>
+        ),
       });
 
       // Invalidate all caches to update dashboard immediately
@@ -278,7 +291,7 @@ export default function Scan() {
     onError: (error: Error) => {
       toast({
         title: "Scan Failed",
-        description: error.message,
+        description: <div>{error.message}</div>,
         variant: "destructive",
       });
     },
@@ -291,7 +304,7 @@ export default function Scan() {
     onSuccess: (data) => {
       toast({
         title: data.dry_run ? "Dry Run Complete" : "Deletion Complete",
-        description: data.message,
+        description: <div>{data.message}</div>,
       });
       if (!data.dry_run) {
         // Invalidate all relevant caches to show updated stats immediately
@@ -305,7 +318,7 @@ export default function Scan() {
     onError: (error: Error) => {
       toast({
         title: "Deletion Failed",
-        description: error.message,
+        description: <div>{error.message}</div>,
         variant: "destructive",
       });
     },

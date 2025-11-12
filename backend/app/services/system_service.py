@@ -124,6 +124,8 @@ class SystemService:
         """Get application-specific information"""
         from app.core.config import settings
         from app.core.database import AsyncSessionLocal
+        from app.models import Config
+        from sqlalchemy import select
 
         # Test database connection
         db_status = "unknown"
@@ -142,6 +144,37 @@ class SystemService:
             if Path(db_path).exists():
                 db_size = Path(db_path).stat().st_size
 
+        # Get scheduler configuration from database
+        scheduler_enabled = False
+        scheduler_description = "Disabled"
+        try:
+            async with AsyncSessionLocal() as session:
+                result = await session.execute(
+                    select(Config).where(
+                        Config.key.in_(
+                            [
+                                "enable_scheduled_scans",
+                                "scan_schedule_mode",
+                                "scheduled_scan_time",
+                                "scan_interval_hours",
+                            ]
+                        )
+                    )
+                )
+                config_items = {item.key: item.value for item in result.scalars().all()}
+
+                scheduler_enabled = config_items.get("enable_scheduled_scans") == "true"
+                if scheduler_enabled:
+                    mode = config_items.get("scan_schedule_mode", "daily")
+                    if mode == "daily":
+                        scan_time = config_items.get("scheduled_scan_time", "02:00")
+                        scheduler_description = f"Daily at {scan_time}"
+                    else:  # interval mode
+                        interval_hours = config_items.get("scan_interval_hours", "24")
+                        scheduler_description = f"Every {interval_hours}h"
+        except Exception as e:
+            logger.error(f"Failed to get scheduler config: {e}")
+
         return {
             "name": DEDUPARR_NAME,
             "description": DEDUPARR_DESCRIPTION,
@@ -153,8 +186,8 @@ class SystemService:
             },
             "config": {
                 "log_level": settings.log_level,
-                "enable_scheduled_scans": settings.enable_scheduled_scans,
-                "scan_interval_hours": getattr(settings, "scan_interval_hours", 24),
+                "enable_scheduled_scans": scheduler_enabled,
+                "scheduler_description": scheduler_description,
                 "data_dir": str(settings.config_dir),
             },
         }

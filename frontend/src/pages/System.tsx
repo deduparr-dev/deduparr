@@ -132,9 +132,7 @@ export default function System() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Scheduled Scans:</span>
                 <Badge variant={appInfo.config.enable_scheduled_scans ? "default" : "secondary"}>
-                  {appInfo.config.enable_scheduled_scans
-                    ? `Every ${appInfo.config.scan_interval_hours}h`
-                    : "Disabled"}
+                  {appInfo.config.scheduler_description || "Disabled"}
                 </Badge>
               </div>
             </div>

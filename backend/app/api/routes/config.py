@@ -124,6 +124,180 @@ async def update_deep_scan_setting(
     return DeepScanResponse(enabled=update.enabled)
 
 
+# Scheduler configuration endpoints (must come before /{key} catch-all route)
+@router.get("/scheduler")
+async def get_scheduler_config(db: AsyncSession = Depends(get_db)):
+    """Get scheduler configuration settings"""
+    result = await db.execute(
+        select(Config).where(
+            Config.key.in_(
+                [
+                    "enable_scheduled_scans",
+                    "scan_schedule_mode",
+                    "scheduled_scan_time",
+                    "scan_interval_hours",
+                    "enable_scheduled_deletion",
+                    "deletion_schedule_mode",
+                    "scheduled_deletion_time",
+                    "deletion_interval_hours",
+                ]
+            )
+        )
+    )
+    configs = {item.key: item.value for item in result.scalars().all()}
+
+    return {
+        "enable_scheduled_scans": configs.get("enable_scheduled_scans", "false")
+        == "true",
+        "scan_schedule_mode": configs.get("scan_schedule_mode", "daily"),
+        "scheduled_scan_time": configs.get("scheduled_scan_time", "02:00"),
+        "scan_interval_hours": int(configs.get("scan_interval_hours", "24")),
+        "enable_scheduled_deletion": configs.get("enable_scheduled_deletion", "false")
+        == "true",
+        "deletion_schedule_mode": configs.get("deletion_schedule_mode", "daily"),
+        "scheduled_deletion_time": configs.get("scheduled_deletion_time", "02:30"),
+        "deletion_interval_hours": int(configs.get("deletion_interval_hours", "24")),
+    }
+
+
+class SchedulerConfigUpdate(BaseModel):
+    """Request model for updating scheduler configuration"""
+
+    enable_scheduled_scans: Optional[bool] = None
+    scan_schedule_mode: Optional[str] = None
+    scheduled_scan_time: Optional[str] = None
+    scan_interval_hours: Optional[int] = None
+    enable_scheduled_deletion: Optional[bool] = None
+    deletion_schedule_mode: Optional[str] = None
+    scheduled_deletion_time: Optional[str] = None
+    deletion_interval_hours: Optional[int] = None
+
+
+@router.post("/scheduler")
+async def update_scheduler_config(
+    config: SchedulerConfigUpdate, db: AsyncSession = Depends(get_db)
+):
+    """Update scheduler configuration and restart scheduler if needed"""
+    import re
+
+    updates = {}
+
+    if config.enable_scheduled_scans is not None:
+        updates["enable_scheduled_scans"] = (
+            "true" if config.enable_scheduled_scans else "false"
+        )
+
+    if config.scan_schedule_mode is not None:
+        if config.scan_schedule_mode not in ["daily", "interval"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Scan schedule mode must be 'daily' or 'interval'",
+            )
+        updates["scan_schedule_mode"] = config.scan_schedule_mode
+
+    if config.scheduled_scan_time is not None:
+        # Validate time format (HH:MM)
+        if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", config.scheduled_scan_time):
+            raise HTTPException(
+                status_code=400,
+                detail="Scan time must be in HH:MM format (00:00 - 23:59)",
+            )
+        updates["scheduled_scan_time"] = config.scheduled_scan_time
+
+    if config.scan_interval_hours is not None:
+        if not (1 <= config.scan_interval_hours <= 168):
+            raise HTTPException(
+                status_code=400, detail="Scan interval must be between 1 and 168 hours"
+            )
+        updates["scan_interval_hours"] = str(config.scan_interval_hours)
+
+    if config.enable_scheduled_deletion is not None:
+        updates["enable_scheduled_deletion"] = (
+            "true" if config.enable_scheduled_deletion else "false"
+        )
+
+    if config.deletion_schedule_mode is not None:
+        if config.deletion_schedule_mode not in ["daily", "interval"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Deletion schedule mode must be 'daily' or 'interval'",
+            )
+        updates["deletion_schedule_mode"] = config.deletion_schedule_mode
+
+    if config.scheduled_deletion_time is not None:
+        # Validate time format (HH:MM)
+        if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", config.scheduled_deletion_time):
+            raise HTTPException(
+                status_code=400,
+                detail="Deletion time must be in HH:MM format (00:00 - 23:59)",
+            )
+        updates["scheduled_deletion_time"] = config.scheduled_deletion_time
+
+    if config.deletion_interval_hours is not None:
+        if not (1 <= config.deletion_interval_hours <= 168):
+            raise HTTPException(
+                status_code=400,
+                detail="Deletion interval must be between 1 and 168 hours",
+            )
+        updates["deletion_interval_hours"] = str(config.deletion_interval_hours)
+
+    # Update database
+    for key, value in updates.items():
+        result = await db.execute(select(Config).where(Config.key == key))
+        config_item = result.scalar_one_or_none()
+
+        if config_item:
+            config_item.value = value
+        else:
+            db.add(Config(key=key, value=value))
+
+    await db.commit()
+
+    # Restart scheduler with new settings
+    from app.services.scheduler import get_scheduler
+
+    scheduler = get_scheduler()
+    await scheduler.stop()
+
+    # Get updated config values
+    result = await db.execute(
+        select(Config).where(
+            Config.key.in_(
+                [
+                    "enable_scheduled_scans",
+                    "scan_schedule_mode",
+                    "scheduled_scan_time",
+                    "scan_interval_hours",
+                    "deletion_schedule_mode",
+                    "scheduled_deletion_time",
+                    "deletion_interval_hours",
+                ]
+            )
+        )
+    )
+    configs = {item.key: item.value for item in result.scalars().all()}
+
+    enable_scans = configs.get("enable_scheduled_scans", "false") == "true"
+    scan_mode = configs.get("scan_schedule_mode", "daily")
+    scan_time = configs.get("scheduled_scan_time", "02:00")
+    scan_interval_hours = int(configs.get("scan_interval_hours", "24"))
+    deletion_mode = configs.get("deletion_schedule_mode", "daily")
+    deletion_time = configs.get("scheduled_deletion_time", "02:30")
+    deletion_interval_hours = int(configs.get("deletion_interval_hours", "24"))
+
+    if enable_scans:
+        await scheduler.start(
+            scan_mode=scan_mode,
+            scan_time=scan_time,
+            scan_interval_hours=scan_interval_hours,
+            deletion_mode=deletion_mode,
+            deletion_time=deletion_time,
+            deletion_interval_hours=deletion_interval_hours,
+        )
+
+    return {"status": "success", "message": "Scheduler configuration updated"}
+
+
 @router.get("/{key}", response_model=ConfigResponse)
 async def get_config(key: str, db: AsyncSession = Depends(get_db)):
     """

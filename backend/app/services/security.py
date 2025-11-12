@@ -32,8 +32,18 @@ Usage Examples:
         pin_cache.set("pin-123", {"code": "ABCD", "state": "xyz"}, ttl=600)
         data = pin_cache.get("pin-123")
         pin_cache.delete("pin-123")
+
+    Setting up Secure Logging Filter:
+        from app.services.security import SensitiveDataFilter
+
+        # In your main.py or logging config:
+        logging.basicConfig(...)
+        for handler in logging.root.handlers:
+            handler.addFilter(SensitiveDataFilter())
 """
 
+import logging
+import re
 import secrets
 import time
 from pathlib import Path
@@ -293,3 +303,115 @@ def sanitize_log_data(data: str) -> str:
         return "***"
 
     return f"{data[:visible_chars]}...{data[-visible_chars:]}"
+
+
+class SensitiveDataFilter(logging.Filter):
+    """
+    Logging filter that automatically sanitizes sensitive data patterns.
+
+    Detects and redacts:
+    - API keys (patterns like api_key=, apikey=, X-Api-Key:)
+    - Tokens (patterns like token=, auth_token=, X-Plex-Token:)
+    - Passwords (patterns like password=, passwd=)
+    - Encrypted values (long base64-like strings with dots)
+    - Bearer tokens in Authorization headers
+
+    Usage:
+        for handler in logging.root.handlers:
+            handler.addFilter(SensitiveDataFilter())
+    """
+
+    # Patterns to detect sensitive data
+    SENSITIVE_PATTERNS = [
+        # API Keys
+        (
+            re.compile(
+                r'(["\']?(?:api[-_]?key|apikey)["\']?\s*[:=]\s*["\']?)([a-zA-Z0-9_\-\.]{8,})(["\']?)',
+                re.IGNORECASE,
+            ),
+            r"\1***REDACTED***\3",
+        ),
+        # Tokens
+        (
+            re.compile(
+                r'(["\']?(?:auth[-_]?token|token|access[-_]?token)["\']?\s*[:=]\s*["\']?)([a-zA-Z0-9_\-\.]{8,})(["\']?)',
+                re.IGNORECASE,
+            ),
+            r"\1***REDACTED***\3",
+        ),
+        # Passwords
+        (
+            re.compile(
+                r'(["\']?(?:password|passwd|pwd)["\']?\s*[:=]\s*["\']?)([^"\'\s,)]{3,})(["\']?)',
+                re.IGNORECASE,
+            ),
+            r"\1***REDACTED***\3",
+        ),
+        # Encrypted values (itsdangerous format: base64.signature)
+        (
+            re.compile(
+                r'(\()(["\'])(eyJ[a-zA-Z0-9_\-\.]{20,})\.[a-zA-Z0-9_\-]{10,}(["\'])([,)])',
+                re.IGNORECASE,
+            ),
+            r"\1\2***ENCRYPTED***\4\5",
+        ),
+        # HTTP Headers with tokens
+        (
+            re.compile(
+                r"(X-(?:Api-Key|Plex-Token|Auth-Token):\s*)([a-zA-Z0-9_\-\.]{8,})",
+                re.IGNORECASE,
+            ),
+            r"\1***REDACTED***",
+        ),
+        # Bearer tokens
+        (
+            re.compile(r"(Bearer\s+)([a-zA-Z0-9_\-\.]{8,})", re.IGNORECASE),
+            r"\1***REDACTED***",
+        ),
+        # Email passwords in SMTP context
+        (
+            re.compile(
+                r'(smtp_password["\']?\s*[:=]\s*["\']?)([^"\'\s,)]{3,})(["\']?)',
+                re.IGNORECASE,
+            ),
+            r"\1***REDACTED***\3",
+        ),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """
+        Filter log record by sanitizing sensitive data.
+
+        Args:
+            record: Log record to filter
+
+        Returns:
+            Always True (record is not blocked, just modified)
+        """
+        # Sanitize the message
+        if record.msg:
+            msg = str(record.msg)
+            for pattern, replacement in self.SENSITIVE_PATTERNS:
+                msg = pattern.sub(replacement, msg)
+            record.msg = msg
+
+        # Sanitize args if present
+        if record.args:
+            sanitized_args = []
+            for arg in (
+                record.args if isinstance(record.args, (list, tuple)) else [record.args]
+            ):
+                if isinstance(arg, str):
+                    sanitized_arg = arg
+                    for pattern, replacement in self.SENSITIVE_PATTERNS:
+                        sanitized_arg = pattern.sub(replacement, sanitized_arg)
+                    sanitized_args.append(sanitized_arg)
+                else:
+                    sanitized_args.append(arg)
+
+            if isinstance(record.args, tuple):
+                record.args = tuple(sanitized_args)
+            elif isinstance(record.args, list):
+                record.args = sanitized_args
+
+        return True

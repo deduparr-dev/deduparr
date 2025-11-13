@@ -387,7 +387,13 @@ class DeletionPipeline:
             Item hash if found and removed
         """
         try:
-            result = await self.qbit_service.find_item_by_file_path(file_path)
+            # Try to find the actual file path first (may differ from Plex path)
+            # This improves qBittorrent matching since it knows the real filesystem paths
+            actual_path = self._find_file_in_media_root(file_path)
+            search_path = actual_path if actual_path else file_path
+
+            logger.debug(f"Searching qBittorrent for file: {search_path}")
+            result = await self.qbit_service.find_item_by_file_path(search_path)
 
             if result:
                 item_hash, torrent_count = result

@@ -47,16 +47,22 @@ class QBittorrentService(BaseExternalService):
     async def find_item_by_file_path(self, file_path: str) -> Optional[tuple[str, int]]:
         """
         Find torrent hash by file path and count total torrents for this file.
-        Matches if the file path ends with the torrent's file path.
+
+        Matching strategy (in order):
+        1. Exact match: full_path == file_path
+        2. Filename match: Extract filename from file_path and match against torrent file basenames
+        3. Normalized match: Handle path differences (spaces, casing, etc.)
 
         Args:
-            file_path: Full path to the file
+            file_path: Full path to the file (may be Plex path or actual filesystem path)
 
         Returns:
             Tuple of (torrent_hash, count) if found, None otherwise
             - torrent_hash: Hash of the first matching torrent
             - count: Total number of torrents containing this file
         """
+        import os
+
         client = await self._get_client()
 
         try:
@@ -64,23 +70,60 @@ class QBittorrentService(BaseExternalService):
             found_hash = None
             count = 0
 
+            # Extract just the filename from the path for flexible matching
+            search_filename = os.path.basename(file_path)
+
+            # Normalize for comparison (lowercase, no extra spaces)
+            normalized_search = search_filename.lower().replace(" ", ".")
+
             for torrent in torrents:
                 torrent_files = client.torrents_files(torrent_hash=torrent.hash)
                 for torrent_file in torrent_files:
+                    # Construct full qBittorrent path
                     full_path = f"{torrent.save_path}/{torrent_file.name}"
-                    if file_path.endswith(torrent_file.name) or full_path == file_path:
+                    torrent_filename = os.path.basename(torrent_file.name)
+                    normalized_torrent = torrent_filename.lower().replace(" ", ".")
+
+                    # Match strategies:
+                    # 1. Exact full path match
+                    if full_path == file_path:
                         if not found_hash:
                             found_hash = torrent.hash
+                            logger.debug(
+                                f"Matched torrent {torrent.hash} via exact path: {full_path}"
+                            )
                         count += 1
-                        break  # Only count each torrent once
+                        break
+
+                    # 2. Exact filename match
+                    if torrent_filename == search_filename:
+                        if not found_hash:
+                            found_hash = torrent.hash
+                            logger.debug(
+                                f"Matched torrent {torrent.hash} via filename: {torrent_filename}"
+                            )
+                        count += 1
+                        break
+
+                    # 3. Normalized filename match (handles spaces vs dots, casing)
+                    if normalized_torrent == normalized_search:
+                        if not found_hash:
+                            found_hash = torrent.hash
+                            logger.debug(
+                                f"Matched torrent {torrent.hash} via normalized filename: {torrent_filename}"
+                            )
+                        count += 1
+                        break
 
             if found_hash:
                 logger.info(
-                    f"Found torrent {found_hash} for file {file_path} ({count} total)"
+                    f"Found torrent {found_hash} for file {file_path} ({count} total torrents)"
                 )
                 return (found_hash, count)
 
-            logger.debug(f"No torrent found for file {file_path}")
+            logger.info(
+                f"No torrent found for file: {file_path} (searched for '{search_filename}')"
+            )
             return None
         except Exception as e:
             logger.error(f"Error finding torrent for {file_path}: {e}")

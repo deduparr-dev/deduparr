@@ -302,9 +302,19 @@ class DeletionPipeline:
             )
             await self.db.commit()
 
+            # Find the kept file path in this duplicate set
+            kept_file_path = None
+            if duplicate_file.duplicate_set:
+                for file in duplicate_file.duplicate_set.files:
+                    if file.keep and file.id != duplicate_file.id:
+                        kept_file_path = file.file_path
+                        break
+
             # Stage 2: Remove item from qBittorrent (deletes any remaining files)
             if not skip_qbit:
-                item_hash = await self._stage_qbittorrent_removal(file_path, history)
+                item_hash = await self._stage_qbittorrent_removal(
+                    file_path, history, kept_file_path=kept_file_path
+                )
                 await self.db.commit()
 
             # Stage 3: Rescan *arr AFTER deletion (SKIPPED - will be done once for entire set)
@@ -351,7 +361,7 @@ class DeletionPipeline:
             raise
 
     async def _stage_qbittorrent_removal(
-        self, file_path: str, history: DeletionHistory
+        self, file_path: str, history: DeletionHistory, kept_file_path: Optional[str] = None
     ) -> Optional[str]:
         """
         Stage 2: Remove item from qBittorrent AND delete files
@@ -363,8 +373,11 @@ class DeletionPipeline:
         CRITICAL: This must complete BEFORE *arr rescan to ensure the deleted file
         is fully removed and won't be re-imported.
 
-        SAFETY CHECK: Will NOT delete if this is the only torrent for this file
-        (prevents deleting all copies).
+        SMART SAFETY CHECK: 
+        - If the KEPT file has a torrent, skip qBittorrent deletion (keep it seeding)
+          but still mark the lower quality item for disk cleanup
+        - If the KEPT file has NO torrent, proceed with qBittorrent deletion (safe)
+        - If no kept file exists and only 1 torrent, refuse deletion (data loss prevention)
 
         Returns:
             Item hash if found and removed
@@ -375,22 +388,39 @@ class DeletionPipeline:
             if result:
                 item_hash, torrent_count = result
 
-                # SAFETY CHECK: Don't delete if this is the only torrent for this file
-                if torrent_count <= 1:
+                # SMART CHECK: Does the kept file have a torrent?
+                if kept_file_path:
+                    kept_file_result = await self.qbit_service.find_item_by_file_path(kept_file_path)
+                    if kept_file_result:
+                        # Kept file HAS a torrent - we want to keep that one seeding
+                        logger.info(
+                            f"Kept file has a torrent in qBittorrent. Skipping qBittorrent deletion "
+                            f"to preserve seeding. Will delete unwanted file via disk cleanup only."
+                        )
+                        # Mark qBittorrent as "done" (skipped intentionally)
+                        history.deleted_from_qbit = True
+                        # Don't mark disk as deleted - let disk cleanup handle it
+                        history.deleted_from_disk = False
+                        return None
+                    else:
+                        # Kept file has NO torrent - safe to delete this torrent
+                        logger.info(
+                            f"Kept file not in qBittorrent. Safe to delete torrent for unwanted file."
+                        )
+                elif torrent_count <= 1:
+                    # No kept file AND only 1 torrent - DANGER!
                     logger.warning(
-                        f"Skipping qBittorrent deletion - only 1 torrent found. "
+                        f"Skipping qBittorrent deletion - only 1 torrent found and no other file to keep. "
                         f"Cannot delete the last copy! File: {file_path}"
                     )
                     history.error = (
-                        f"{history.error}; Only 1 torrent exists - cannot delete last copy"
+                        f"{history.error}; Only 1 torrent exists and no kept file - cannot delete last copy"
                         if history.error
-                        else "Only 1 torrent exists - cannot delete last copy"
+                        else "Only 1 torrent exists and no kept file - cannot delete last copy"
                     )
+                    history.deleted_from_qbit = False
+                    history.deleted_from_disk = False
                     return None
-
-                logger.info(
-                    f"Found {torrent_count} torrents for file - safe to delete one copy"
-                )
 
                 if self.dry_run:
                     logger.info(

@@ -63,19 +63,19 @@ export default function System() {
   const [logLimit, setLogLimit] = useState(100);
 
   // Query with auto-refresh every 5 seconds if enabled
-  const { data: versionInfo, isLoading: versionLoading } = useQuery({
+  const { data: versionInfo, isPending: versionPending } = useQuery({
     queryKey: ["systemVersion"],
     queryFn: () => systemAPI.getVersionInfo(),
     refetchInterval: autoRefresh ? 30000 : false, // 30 seconds for version
   });
 
-  const { data: systemInfo, isLoading: systemLoading } = useQuery({
+  const { data: systemInfo, isPending: systemPending } = useQuery({
     queryKey: ["systemInfo"],
     queryFn: () => systemAPI.getSystemInfo(),
     refetchInterval: autoRefresh ? 5000 : false, // 5 seconds
   });
 
-  const { data: appInfo, isLoading: appLoading } = useQuery({
+  const { data: appInfo, isPending: appPending } = useQuery({
     queryKey: ["appInfo"],
     queryFn: () => systemAPI.getAppInfo(),
     refetchInterval: autoRefresh ? 5000 : false, // 5 seconds
@@ -83,7 +83,7 @@ export default function System() {
 
   const {
     data: logsData,
-    isLoading: logsLoading,
+    isPending: logsPending,
     refetch: refetchLogs,
   } = useQuery({
     queryKey: ["systemLogs", logLimit],
@@ -91,9 +91,9 @@ export default function System() {
     refetchInterval: autoRefresh ? 2000 : false, // 2 seconds for logs
   });
 
-  const isLoading = versionLoading || systemLoading || appLoading || logsLoading;
+  const isPending = versionPending || systemPending || appPending || logsPending;
 
-  if (isLoading && !versionInfo && !systemInfo) {
+  if (isPending && !versionInfo && !systemInfo) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-muted-foreground">Loading system information...</div>

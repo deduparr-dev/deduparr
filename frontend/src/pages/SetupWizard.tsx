@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useTransition } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,11 @@ interface PlexLibrary {
   agent: string;
 }
 
+interface SelectedLibrary {
+  key: string;
+  title: string;
+}
+
 type WizardStep =
   | "welcome"
   | "plex-auth"
@@ -46,12 +51,14 @@ export default function SetupWizard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [currentStep, setCurrentStep] = useState<WizardStep>("welcome");
+  const [isPending, startTransition] = useTransition();
+  const [isLoadingLibraries, startLibrariesTransition] = useTransition();
 
   // Plex OAuth state
   const [plexAuthToken, setPlexAuthToken] = useState<string>("");
   const [plexServerName, setPlexServerName] = useState<string>("");
   const [plexLibraries, setPlexLibraries] = useState<PlexLibrary[]>([]);
-  const [selectedLibraries, setSelectedLibraries] = useState<string[]>([]);
+  const [selectedLibraries, setSelectedLibraries] = useState<SelectedLibrary[]>([]);
   const [pinCode, setPinCode] = useState<string>("");
   const plexAuthWindowRef = useRef<Window | null>(null);
 
@@ -66,8 +73,6 @@ export default function SetupWizard() {
 
   // UI state
   const [isPolling, setIsPolling] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadingLibraries, setLoadingLibraries] = useState(false);
   const [error, setError] = useState<string>("");
   const [testResults, setTestResults] = useState<Record<string, ConnectionTestResult>>({});
 
@@ -86,35 +91,34 @@ export default function SetupWizard() {
     setCurrentStep("welcome");
   }
 
-  async function handleGetStarted() {
+  function handleGetStarted() {
     setError("");
-    setIsLoading(true);
 
-    try {
-      // Initiate Plex OAuth
-      const authResponse = await setupAPI.initiatePlexAuth();
-      setPinCode(authResponse.pin_id);
-      setCurrentStep("plex-auth");
+    startTransition(async () => {
+      try {
+        // Initiate Plex OAuth
+        const authResponse = await setupAPI.initiatePlexAuth();
+        setPinCode(authResponse.pin_id);
+        setCurrentStep("plex-auth");
 
-      // Open Plex auth popup
-      if (authResponse.auth_url) {
-        const popup = window.open(
-          authResponse.auth_url,
-          "plex-auth",
-          "width=600,height=700,toolbar=no,menubar=no,location=no,status=no"
-        );
-        plexAuthWindowRef.current = popup;
+        // Open Plex auth popup
+        if (authResponse.auth_url) {
+          const popup = window.open(
+            authResponse.auth_url,
+            "plex-auth",
+            "width=600,height=700,toolbar=no,menubar=no,location=no,status=no"
+          );
+          plexAuthWindowRef.current = popup;
+        }
+
+        // Start polling for authentication
+        setIsPolling(true);
+        pollForAuth(authResponse.pin_id);
+      } catch {
+        setError("Failed to start authentication");
+        setIsPolling(false);
       }
-
-      // Start polling for authentication
-      setIsPolling(true);
-      pollForAuth(authResponse.pin_id);
-    } catch {
-      setError("Failed to start authentication");
-      setIsPolling(false);
-    } finally {
-      setIsLoading(false);
-    }
+    });
   }
 
   async function pollForAuth(pinId: string) {
@@ -176,20 +180,20 @@ export default function SetupWizard() {
   }
 
   async function loadPlexLibraries(authToken: string, serverName: string) {
-    setLoadingLibraries(true);
     setError(""); // Clear any previous errors
-    try {
-      console.log("Loading Plex libraries for server:", serverName);
-      const libs = await setupAPI.getPlexLibrariesWithAuth(authToken, serverName);
-      console.log("Received libraries:", libs);
-      setPlexLibraries(libs);
-    } catch (err) {
-      console.error("Failed to load libraries:", err);
-      const errorMessage = err instanceof Error ? err.message : "Failed to load Plex libraries";
-      setError(`Failed to load libraries from ${serverName}: ${errorMessage}`);
-    } finally {
-      setLoadingLibraries(false);
-    }
+
+    startLibrariesTransition(async () => {
+      try {
+        console.log("Loading Plex libraries for server:", serverName);
+        const libs = await setupAPI.getPlexLibrariesWithAuth(authToken, serverName);
+        console.log("Received libraries:", libs);
+        setPlexLibraries(libs);
+      } catch (err) {
+        console.error("Failed to load libraries:", err);
+        const errorMessage = err instanceof Error ? err.message : "Failed to load Plex libraries";
+        setError(`Failed to load libraries from ${serverName}: ${errorMessage}`);
+      }
+    });
   }
 
   async function testPlexConnection() {
@@ -226,72 +230,70 @@ export default function SetupWizard() {
     }
   }
 
-  async function testService(service: "radarr" | "sonarr" | "qbittorrent") {
-    setIsLoading(true);
-    setTimeout(() => {
+  function testService(service: "radarr" | "sonarr" | "qbittorrent") {
+    startTransition(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       setTestResults((prev) => ({
         ...prev,
         [service]: { success: true, version: "4.5.2.1234" },
       }));
-      setIsLoading(false);
-    }, 1000);
+    });
   }
 
-  async function completeSetup() {
-    setIsLoading(true);
-    try {
-      // Build config object, only including non-empty values
-      const config: Record<string, string> = {
-        plex_auth_token: plexAuthToken,
-        plex_server_name: plexServerName,
-        plex_libraries: selectedLibraries.join(","),
-      };
+  function completeSetup() {
+    startTransition(async () => {
+      try {
+        // Build config object, only including non-empty values
+        const config: Record<string, string> = {
+          plex_auth_token: plexAuthToken,
+          plex_server_name: plexServerName,
+          plex_libraries: selectedLibraries.map((lib) => lib.title).join(","),
+        };
 
-      // Add optional services only if configured
-      if (radarrUrl && radarrApiKey) {
-        config.radarr_url = radarrUrl;
-        config.radarr_api_key = radarrApiKey;
+        // Add optional services only if configured
+        if (radarrUrl && radarrApiKey) {
+          config.radarr_url = radarrUrl;
+          config.radarr_api_key = radarrApiKey;
+        }
+        if (sonarrUrl && sonarrApiKey) {
+          config.sonarr_url = sonarrUrl;
+          config.sonarr_api_key = sonarrApiKey;
+        }
+        if (qbitUrl && qbitUsername && qbitPassword) {
+          config.qbittorrent_url = qbitUrl;
+          config.qbittorrent_username = qbitUsername;
+          config.qbittorrent_password = qbitPassword;
+        }
+
+        // Save configuration to database
+        const response = await fetch("/api/setup/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ config }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || "Failed to save configuration");
+        }
+
+        // Mark setup as complete
+        await fetch("/api/setup/complete", {
+          method: "POST",
+        });
+
+        // Invalidate all queries to refresh data after setup
+        queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
+        queryClient.invalidateQueries({ queryKey: ["plexLibraries"] });
+        queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
+
+        // Redirect to dashboard immediately
+        navigate("/");
+      } catch (error) {
+        console.error("Setup failed:", error);
+        setError(error instanceof Error ? error.message : "Failed to save configuration");
       }
-      if (sonarrUrl && sonarrApiKey) {
-        config.sonarr_url = sonarrUrl;
-        config.sonarr_api_key = sonarrApiKey;
-      }
-      if (qbitUrl && qbitUsername && qbitPassword) {
-        config.qbittorrent_url = qbitUrl;
-        config.qbittorrent_username = qbitUsername;
-        config.qbittorrent_password = qbitPassword;
-      }
-
-      // Save configuration to database
-      const response = await fetch("/api/setup/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || "Failed to save configuration");
-      }
-
-      // Mark setup as complete
-      await fetch("/api/setup/complete", {
-        method: "POST",
-      });
-
-      // Invalidate all queries to refresh data after setup
-      queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
-      queryClient.invalidateQueries({ queryKey: ["plexLibraries"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-
-      // Redirect to dashboard immediately
-      navigate("/");
-    } catch (error) {
-      console.error("Setup failed:", error);
-      setError(error instanceof Error ? error.message : "Failed to save configuration");
-    } finally {
-      setIsLoading(false);
-    }
+    });
   }
 
   function ProgressIndicator() {
@@ -408,10 +410,10 @@ export default function SetupWizard() {
               <Button
                 size="lg"
                 onClick={handleGetStarted}
-                disabled={isLoading}
+                disabled={isPending}
                 className="w-full sm:w-auto"
               >
-                {isLoading ? (
+                {isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     Starting...
@@ -478,10 +480,10 @@ export default function SetupWizard() {
                   <Button
                     size="lg"
                     onClick={handleGetStarted}
-                    disabled={isLoading}
+                    disabled={isPending}
                     className="w-full sm:w-auto"
                   >
-                    {isLoading ? (
+                    {isPending ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                         Starting...
@@ -503,8 +505,8 @@ export default function SetupWizard() {
                     >
                       Back
                     </Button>
-                    <Button onClick={testPlexConnection} disabled={isLoading} className="flex-1">
-                      {isLoading ? (
+                    <Button onClick={testPlexConnection} disabled={isPending} className="flex-1">
+                      {isPending ? (
                         <>
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                           Testing...
@@ -537,7 +539,7 @@ export default function SetupWizard() {
                 </p>
               </div>
 
-              {loadingLibraries ? (
+              {isLoadingLibraries ? (
                 <div className="flex flex-col items-center justify-center py-12 space-y-4">
                   <Loader2 className="w-10 h-10 md:w-12 md:h-12 animate-spin text-primary" />
                   <p className="text-base md:text-lg font-medium text-foreground">
@@ -568,13 +570,16 @@ export default function SetupWizard() {
                       >
                         <Checkbox
                           id={library.key}
-                          checked={selectedLibraries.includes(library.title)}
+                          checked={selectedLibraries.some((lib) => lib.key === library.key)}
                           onCheckedChange={(checked) => {
                             if (checked) {
-                              setSelectedLibraries([...selectedLibraries, library.title]);
+                              setSelectedLibraries([
+                                ...selectedLibraries,
+                                { key: library.key, title: library.title },
+                              ]);
                             } else {
                               setSelectedLibraries(
-                                selectedLibraries.filter((k) => k !== library.title)
+                                selectedLibraries.filter((lib) => lib.key !== library.key)
                               );
                             }
                           }}
@@ -592,7 +597,7 @@ export default function SetupWizard() {
                 </div>
               )}
 
-              {!loadingLibraries && plexLibraries.length > 0 && (
+              {!isLoadingLibraries && plexLibraries.length > 0 && (
                 <Card className="p-3 md:p-4 bg-card border-border">
                   <p className="text-xs md:text-sm text-muted-foreground">
                     Tip: You can change library selection later in Settings
@@ -605,14 +610,14 @@ export default function SetupWizard() {
                   variant="outline"
                   onClick={() => setCurrentStep("plex-server")}
                   className="flex-1"
-                  disabled={loadingLibraries}
+                  disabled={isLoadingLibraries}
                 >
                   Back
                 </Button>
                 <Button
                   onClick={() => setCurrentStep("required-services")}
                   className="flex-1"
-                  disabled={loadingLibraries || selectedLibraries.length === 0}
+                  disabled={isLoadingLibraries || selectedLibraries.length === 0}
                 >
                   Next: Services
                 </Button>
@@ -694,7 +699,7 @@ export default function SetupWizard() {
                   </div>
                   <Button
                     onClick={() => testService("radarr")}
-                    disabled={!radarrUrl || !radarrApiKey || isLoading}
+                    disabled={!radarrUrl || !radarrApiKey || isPending}
                     className="w-full sm:w-auto text-xs md:text-sm"
                   >
                     Test Connection
@@ -738,7 +743,7 @@ export default function SetupWizard() {
                   </div>
                   <Button
                     onClick={() => testService("sonarr")}
-                    disabled={!sonarrUrl || !sonarrApiKey || isLoading}
+                    disabled={!sonarrUrl || !sonarrApiKey || isPending}
                     className="w-full sm:w-auto text-xs md:text-sm"
                   >
                     Test Connection
@@ -794,7 +799,7 @@ export default function SetupWizard() {
                   </div>
                   <Button
                     onClick={() => testService("qbittorrent")}
-                    disabled={!qbitUrl || !qbitUsername || !qbitPassword || isLoading}
+                    disabled={!qbitUrl || !qbitUsername || !qbitPassword || isPending}
                     className="w-full sm:w-auto text-xs md:text-sm"
                   >
                     Test Connection
@@ -811,8 +816,8 @@ export default function SetupWizard() {
                 >
                   Back
                 </Button>
-                <Button onClick={completeSetup} disabled={isLoading} className="flex-1">
-                  {isLoading ? (
+                <Button onClick={completeSetup} disabled={isPending} className="flex-1">
+                  {isPending ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       Saving...

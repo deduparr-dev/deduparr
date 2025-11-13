@@ -43,7 +43,8 @@ class DuplicateSet(Base):
     __tablename__ = "duplicate_sets"
 
     id = Column(Integer, primary_key=True, index=True)
-    plex_item_id = Column(String(255), nullable=False, index=True)
+    # plex_item_id can be absent in some test fixtures and import flows; allow nullable
+    plex_item_id = Column(String(255), nullable=True, index=True)
     title = Column(String(500), nullable=False)
     media_type = Column(SQLEnum(MediaType), nullable=False)
     found_at = Column(

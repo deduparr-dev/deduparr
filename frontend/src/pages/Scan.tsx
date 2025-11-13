@@ -233,7 +233,7 @@ export default function Scan() {
   const deepScanEnabled = deepScanData?.enabled ?? false;
 
   // Fetch Plex libraries only if Plex authentication token exists in database
-  const { data: libraries = [], isLoading: loadingLibraries } = useQuery({
+  const { data: libraries = [], isPending: librariesPending } = useQuery({
     queryKey: ["plexLibraries"],
     queryFn: () => configAPI.getPlexLibraries(),
     enabled: plexConfigured, // Only run query if plex_auth_token exists in config
@@ -389,7 +389,7 @@ export default function Scan() {
         <div className="space-y-4 mb-6">
           <div>
             <label className="block text-sm font-medium mb-3">Libraries to Scan</label>
-            {loadingLibraries ? (
+            {librariesPending ? (
               <div className="flex items-center gap-3 py-4">
                 <Loader2 className="w-5 h-5 animate-spin text-primary" />
                 <span className="text-sm text-muted-foreground">Loading libraries...</span>

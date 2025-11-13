@@ -57,6 +57,7 @@ class ScheduledDeletionService:
                 "files_deleted": 0,
                 "errors": [],
                 "dry_run": dry_run,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         logger.info(f"Found {len(pending_sets)} pending sets to delete")
@@ -68,19 +69,19 @@ class ScheduledDeletionService:
         for duplicate_set in pending_sets:
             try:
                 set_errors: list[str] = []
-                # Get files marked for deletion
-                files_to_delete = [f for f in duplicate_set.files if f.should_delete]
+                # Get files marked for deletion (keep=False means delete)
+                files_to_delete = [f for f in duplicate_set.files if not f.keep]
 
                 if not files_to_delete:
                     logger.warning(
-                        f"Set {duplicate_set.id} ({duplicate_set.full_title}) "
+                        f"Set {duplicate_set.id} ({duplicate_set.title}) "
                         "has no files marked for deletion - skipping"
                     )
                     continue
 
                 logger.info(
                     f"Deleting {len(files_to_delete)} files from set {duplicate_set.id} "
-                    f"({duplicate_set.full_title})"
+                    f"({duplicate_set.title})"
                 )
 
                 if dry_run:

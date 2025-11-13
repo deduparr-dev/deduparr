@@ -63,55 +63,67 @@ Deduparr is a duplicate media management system for the *arr ecosystem (Radarr/S
    - Only add memoization when profiling shows it's necessary
    - Modern React is fast enough without manual memoization in most cases
 
-3. **Ref Handling**:
-   - `ref` is now a regular prop - no need for `forwardRef` in new components
-   - Access refs directly: `function MyInput({ ref }) { return <input ref={ref} /> }`
+3. **Ref Handling - Modern Pattern**:
+   - `ref` is now a regular prop - **no need for `forwardRef`** in new components
+   - Define `ref` in props interface: `interface Props { ref?: React.Ref<HTMLElement> }`
+   - Access refs directly: `function MyInput({ ref, ...props }: Props) { return <input ref={ref} {...props} /> }`
    - Ref cleanup: Return cleanup function from ref callbacks
    - Example: `ref={(node) => { /* setup */; return () => { /* cleanup */ }; }}`
+   - **All UI components updated**: Input, Button, Label, Checkbox, Card, Toast, Tooltip now use this pattern
 
-4. **FORBIDDEN: Do NOT use `useEffect` or `useCallback`!**:
+4. **Loading States with `useTransition`**:
+   - **Use `useTransition`** instead of manual loading state management
+   - Automatic pending state: `const [isPending, startTransition] = useTransition()`
+   - Wrap async operations: `startTransition(async () => { await doSomething(); })`
+   - No need for try/finally blocks to manage loading flags
+   - Better integration with React's concurrent features
+   - **Applied in**: SetupWizard, Settings pages
+
+5. **React Query: Always use `isPending` not `isLoading`**:
+   - **Use `isPending`** from `useQuery`/`useMutation` for guaranteed type safety
+   - `isPending` is derived from `status` field and guarantees TypeScript type narrowing
+   - `isLoading` combines `status` + `fetchStatus` and can be false when data is undefined
+   - Edge cases where `isLoading` fails: disabled queries, offline mode, lazy queries
+   - **All queries updated**: Dashboard, Settings, System, Scan pages use `isPending`
+
+6. **FORBIDDEN: Do NOT use `useEffect`, `useCallback`, or `useEffectEvent`!**:
    - **NEVER** use `useEffect` - it's forbidden in this project
    - **NEVER** use `useCallback` - it's forbidden in this project
+   - **NEVER** use `useEffectEvent` - experimental and potentially buggy
    - Use alternative patterns: React Query, form actions, `useActionState`, `useTransition`, `useOptimistic`
    - For data fetching: Use React Query hooks (`useQuery`, `useMutation`)
    - For side effects: Use form actions or event handlers
    - For memoization: Don't optimize prematurely - React 19 is fast enough
 
-5. **Form Actions**:
+7. **Form Actions**:
    - Use `useActionState` (formerly `useFormState`) for form state management
    - Forms support `action` prop with async functions
    - Use `useFormStatus` in child components to access form pending state
    - Example: `<form action={async (formData) => { await save(formData); }}>`
 
-6. **Context as Provider**:
+8. **Context as Provider**:
    - Use `<Context>` directly instead of `<Context.Provider>`
    - Example: `<ThemeContext value="dark">{children}</ThemeContext>`
    - `Context.Provider` will be deprecated in future versions
 
-7. **Transitions and Optimistic Updates**:
+9. **Transitions and Optimistic Updates**:
    - Use `useTransition` for async operations with pending state
    - Use `useOptimistic` for optimistic UI updates during mutations
    - Actions (async functions in transitions) automatically handle pending/error states
 
-8. **Document Metadata**:
+10. **Document Metadata**:
    - Render `<title>`, `<meta>`, `<link>` tags directly in components
    - React automatically hoists them to `<head>`
    - No need for react-helmet in simple cases
 
-9. **Type Safety in React**:
+11. **Type Safety in React**:
    - **NEVER** use `any` type in TypeScript
    - Define proper prop interfaces: `interface Props { name: string; onClick: () => void }`
    - Use specific event types: `React.MouseEvent<HTMLButtonElement>` not `any`
    - For flexible props, use union types or generics, never `any`
    - Example: ❌ `const handleClick = (e: any)` → ✅ `const handleClick = (e: React.MouseEvent<HTMLButtonElement>)`
 
-10. **New in React 19.2 - `useEffectEvent`**:
-   - Use `useEffectEvent` to extract "event" logic from Effects without adding to dependencies
-   - Perfect for callbacks that need latest props/state but shouldn't trigger Effect re-runs
-   - Example: `const onConnected = useEffectEvent(() => { showNotification(theme) })`
-   - Effect Events are NOT dependencies - linter will not require them
-
-11. **New in React 19.2 - `<Activity />`**:
+10. **New in React 19.2 - `<Activity />`**:
     - Use `<Activity>` for pre-rendering and controlling UI visibility/priority
     - Two modes: `visible` (normal) and `hidden` (pre-render without blocking)
     - Perfect for pre-loading next pages or preserving navigation state

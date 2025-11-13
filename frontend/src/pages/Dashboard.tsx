@@ -28,27 +28,27 @@ function getStatusVariant(status: string): "default" | "secondary" | "destructiv
 
 export default function Dashboard() {
   // Fetch dashboard stats with 10-minute cache
-  const { data: stats, isLoading: statsLoading } = useQuery({
+  const { data: stats, isPending: statsPending } = useQuery({
     queryKey: ["dashboardStats"],
     queryFn: () => statsAPI.getDashboardStats(),
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes
   });
 
   // Fetch recent activity (get all for accurate counts) with 10-minute cache
-  const { data: activities = [], isLoading: activitiesLoading } = useQuery({
+  const { data: activities = [], isPending: activitiesPending } = useQuery({
     queryKey: ["recentActivity"],
     queryFn: () => statsAPI.getRecentActivity(1000), // Fetch all activities for stats
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes
   });
 
   // Fetch recent deletions with 10-minute cache
-  const { data: deletions = [], isLoading: deletionsLoading } = useQuery({
+  const { data: deletions = [], isPending: deletionsPending } = useQuery({
     queryKey: ["recentDeletions"],
     queryFn: () => statsAPI.getRecentDeletions(10),
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes
   });
 
-  if (statsLoading || activitiesLoading || deletionsLoading) {
+  if (statsPending || activitiesPending || deletionsPending) {
     return (
       <div className="flex items-center justify-center h-96">
         <div className="text-muted-foreground">Loading dashboard...</div>

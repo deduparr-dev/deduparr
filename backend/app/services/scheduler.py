@@ -2,7 +2,9 @@
 Background scheduler for automated duplicate scanning
 """
 
+import asyncio
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -235,9 +237,19 @@ class ScanScheduler:
             logger.info(f"Starting scan scheduler to run daily at {scan_time}")
         else:  # interval mode
             scan_hour, scan_minute = map(int, scan_time.split(":"))
+            # Calculate next occurrence from now
+            now = datetime.now(timezone.utc)
+            next_run = now.replace(
+                hour=scan_hour, minute=scan_minute, second=0, microsecond=0
+            )
+
+            # If the time has already passed today, start from tomorrow
+            if next_run <= now:
+                next_run = next_run + timedelta(days=1)
+
             scan_trigger = IntervalTrigger(
                 hours=scan_interval_hours,
-                start_date=f"2025-01-01 {scan_time}:00",  # Use start date to align to specific time
+                start_date=next_run,
             )
             logger.info(
                 f"Starting scan scheduler to run every {scan_interval_hours} hours starting at {scan_time}"
@@ -258,9 +270,19 @@ class ScanScheduler:
             logger.info(f"Starting deletion scheduler to run daily at {deletion_time}")
         else:  # interval mode
             deletion_hour, deletion_minute = map(int, deletion_time.split(":"))
+            # Calculate next occurrence from now
+            now = datetime.now(timezone.utc)
+            next_run = now.replace(
+                hour=deletion_hour, minute=deletion_minute, second=0, microsecond=0
+            )
+
+            # If the time has already passed today, start from tomorrow
+            if next_run <= now:
+                next_run = next_run + timedelta(days=1)
+
             deletion_trigger = IntervalTrigger(
                 hours=deletion_interval_hours,
-                start_date=f"2025-01-01 {deletion_time}:00",
+                start_date=next_run,
             )
             logger.info(
                 f"Starting deletion scheduler to run every {deletion_interval_hours} hours starting at {deletion_time}"
@@ -284,7 +306,14 @@ class ScanScheduler:
             return
 
         logger.info("Stopping scan scheduler")
-        self.scheduler.shutdown(wait=True)
+        self.scheduler.shutdown(wait=False)
+
+        # Give the scheduler a moment to fully shut down
+        for _ in range(10):
+            if not self.scheduler.running:
+                break
+            await asyncio.sleep(0.01)
+
         self.is_running = False
         logger.info("Scan scheduler stopped")
 

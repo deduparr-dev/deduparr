@@ -285,3 +285,127 @@ async def test_mark_setup_complete_missing_config(test_db):
         assert response.status_code == 400
         data = response.json()
         assert "Missing required configuration" in data["detail"]
+
+
+@pytest.mark.asyncio
+@patch("app.services.email_service.EmailService")
+async def test_test_email_connection_success(mock_email_service, test_db):
+    """Test successful email connection test"""
+    # Mock email service
+    mock_service_instance = MagicMock()
+    mock_service_instance.send_test_email.return_value = (True, None)
+    mock_email_service.return_value = mock_service_instance
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/setup/test/email",
+            json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@gmail.com",
+                "smtp_password": "password123",
+                "notification_email": "test@example.com",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "sent successfully" in data["message"]
+
+
+@pytest.mark.asyncio
+@patch("app.services.email_service.EmailService")
+async def test_test_email_connection_failure(mock_email_service, test_db):
+    """Test failed email connection test"""
+    # Mock email service to fail
+    mock_service_instance = MagicMock()
+    mock_service_instance.send_test_email.return_value = (
+        False,
+        "Authentication failed",
+    )
+    mock_email_service.return_value = mock_service_instance
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/setup/test/email",
+            json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@gmail.com",
+                "smtp_password": "wrong_password",
+                "notification_email": "test@example.com",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "Authentication failed" in data["error"]
+
+
+@pytest.mark.asyncio
+@patch("app.services.email_service.EmailService")
+async def test_test_email_connection_exception(mock_email_service, test_db):
+    """Test email connection test with exception"""
+    # Mock email service to raise exception
+    mock_email_service.side_effect = Exception("Network error")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/setup/test/email",
+            json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@gmail.com",
+                "smtp_password": "password123",
+                "notification_email": "test@example.com",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is False
+        assert "Network error" in data["error"]
+
+
+@pytest.mark.asyncio
+@patch("app.services.email_service.EmailService")
+@patch("app.api.routes.setup.get_token_manager")
+async def test_test_email_connection_with_encrypted_password(
+    mock_get_token_manager, mock_email_service, test_db
+):
+    """Test email connection with encrypted password"""
+    # Mock token manager to decrypt password
+    mock_token_manager = MagicMock()
+    mock_token_manager.decrypt.return_value = "decrypted_password"
+    mock_get_token_manager.return_value = mock_token_manager
+
+    # Mock email service
+    mock_service_instance = MagicMock()
+    mock_service_instance.send_test_email.return_value = (True, None)
+    mock_email_service.return_value = mock_service_instance
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/setup/test/email",
+            json={
+                "smtp_host": "smtp.gmail.com",
+                "smtp_port": 587,
+                "smtp_user": "user@gmail.com",
+                # Simulated encrypted password (has . and is long)
+                "smtp_password": "InRlc3RfcGFzc3dvcmQi.encrypted_token_here_very_long_string",
+                "notification_email": "test@example.com",
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+
+        # Verify decryption was attempted
+        mock_token_manager.decrypt.assert_called_once()

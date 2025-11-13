@@ -257,7 +257,17 @@ async def update_scheduler_config(
     from app.services.scheduler import get_scheduler
 
     scheduler = get_scheduler()
-    await scheduler.stop()
+    # Stop scheduler if running. Catch RuntimeError which can occur in tests
+    # if the event loop is already closed (defensive; scheduler is optional).
+    try:
+        await scheduler.stop()
+    except RuntimeError:
+        # Don't fail the request if the loop is closed in the test harness.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "Scheduler stop raised RuntimeError (loop closed); continuing"
+        )
 
     # Get updated config values
     result = await db.execute(

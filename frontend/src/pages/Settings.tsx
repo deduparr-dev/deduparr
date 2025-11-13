@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -815,19 +815,19 @@ function ServiceSettings({
 }
 
 export default function Settings() {
-  const { data: plexConfig, isLoading: plexLoading } = useQuery({
+  const { data: plexConfig, isPending: plexPending } = useQuery({
     queryKey: ["plexConfig"],
     queryFn: () => configAPI.getAll(),
     staleTime: 10 * 60 * 1000,
   });
 
-  const { data: schedulerConfig, isLoading: schedulerLoading } = useQuery({
+  const { data: schedulerConfig, isPending: schedulerPending } = useQuery({
     queryKey: ["schedulerConfig"],
     queryFn: () => configAPI.getSchedulerConfig(),
     staleTime: 5 * 60 * 1000,
   });
 
-  if (plexLoading || schedulerLoading) {
+  if (plexPending || schedulerPending) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -856,9 +856,9 @@ function SettingsContent({
   schedulerConfig: initialSchedulerConfig,
 }: SettingsContentProps) {
   const queryClient = useQueryClient();
+  const [isPending, startTransition] = useTransition();
   const [activeTab, setActiveTab] = useState("general");
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
-  const [isSaving, setIsSaving] = useState(false);
 
   const [deepScanEnabled, setDeepScanEnabled] = useState(initialConfig.enable_deep_scan === "true");
   const [emailNotificationsEnabled, setEmailNotificationsEnabled] = useState(
@@ -904,92 +904,91 @@ function SettingsContent({
     initialSchedulerConfig?.deletion_interval_hours ?? 24
   );
 
-  async function handleSaveConfiguration() {
-    setIsSaving(true);
-    try {
-      // Save deep scan setting first
-      await configAPI.updateDeepScanSetting(deepScanEnabled);
+  function handleSaveConfiguration() {
+    startTransition(async () => {
+      try {
+        // Save deep scan setting first
+        await configAPI.updateDeepScanSetting(deepScanEnabled);
 
-      // Build config object, only including non-empty values
-      const config: Record<string, string> = {
-        plex_auth_token: initialConfig.plex_auth_token || "",
-        plex_server_name: selectedServer,
-        plex_libraries: initialConfig.plex_libraries || "",
-      };
+        // Build config object, only including non-empty values
+        const config: Record<string, string> = {
+          plex_auth_token: initialConfig.plex_auth_token || "",
+          plex_server_name: selectedServer,
+          plex_libraries: initialConfig.plex_libraries || "",
+        };
 
-      // Add email notification settings
-      if (emailNotificationsEnabled) {
-        config.email_notifications_enabled = "true";
-        config.notification_email = notificationEmail;
-        config.smtp_host = smtpHost;
-        config.smtp_port = smtpPort;
-        config.smtp_user = smtpUser;
-        config.smtp_password = smtpPassword;
-      } else {
-        config.email_notifications_enabled = "false";
+        // Add email notification settings
+        if (emailNotificationsEnabled) {
+          config.email_notifications_enabled = "true";
+          config.notification_email = notificationEmail;
+          config.smtp_host = smtpHost;
+          config.smtp_port = smtpPort;
+          config.smtp_user = smtpUser;
+          config.smtp_password = smtpPassword;
+        } else {
+          config.email_notifications_enabled = "false";
+        }
+
+        // Add optional services only if configured
+        if (radarrUrl && radarrApiKey) {
+          config.radarr_url = radarrUrl;
+          config.radarr_api_key = radarrApiKey;
+        }
+        if (sonarrUrl && sonarrApiKey) {
+          config.sonarr_url = sonarrUrl;
+          config.sonarr_api_key = sonarrApiKey;
+        }
+        if (qbitUrl && qbitUsername && qbitPassword) {
+          config.qbittorrent_url = qbitUrl;
+          config.qbittorrent_username = qbitUsername;
+          config.qbittorrent_password = qbitPassword;
+        }
+
+        const response = await fetch("/api/setup/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ config }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || "Failed to save configuration");
+        }
+
+        // Invalidate caches to refetch fresh data from backend
+        queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
+        queryClient.invalidateQueries({ queryKey: ["config", "deep-scan"] });
+
+        // Save scheduler configuration
+        await configAPI.updateSchedulerConfig({
+          enable_scheduled_scans: scheduledScansEnabled,
+          scan_schedule_mode: scanMode,
+          scheduled_scan_time: scanTime,
+          scan_interval_hours: scanIntervalHours,
+          enable_scheduled_deletion: scheduledDeletionEnabled,
+          deletion_schedule_mode: deletionMode,
+          scheduled_deletion_time: deletionTime,
+          deletion_interval_hours: deletionIntervalHours,
+        });
+        queryClient.invalidateQueries({ queryKey: ["schedulerConfig"] });
+
+        // Clear test results after successful save
+        setTestResults({});
+
+        toast({
+          title: "Configuration saved",
+          description: <div>Your settings have been saved successfully.</div>,
+        });
+      } catch (error) {
+        toast({
+          title: "Save failed",
+          description: (
+            <div>{error instanceof Error ? error.message : "Failed to save configuration"}</div>
+          ),
+          variant: "destructive",
+        });
       }
-
-      // Add optional services only if configured
-      if (radarrUrl && radarrApiKey) {
-        config.radarr_url = radarrUrl;
-        config.radarr_api_key = radarrApiKey;
-      }
-      if (sonarrUrl && sonarrApiKey) {
-        config.sonarr_url = sonarrUrl;
-        config.sonarr_api_key = sonarrApiKey;
-      }
-      if (qbitUrl && qbitUsername && qbitPassword) {
-        config.qbittorrent_url = qbitUrl;
-        config.qbittorrent_username = qbitUsername;
-        config.qbittorrent_password = qbitPassword;
-      }
-
-      const response = await fetch("/api/setup/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config }),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || "Failed to save configuration");
-      }
-
-      // Invalidate caches to refetch fresh data from backend
-      queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
-      queryClient.invalidateQueries({ queryKey: ["config", "deep-scan"] });
-
-      // Save scheduler configuration
-      await configAPI.updateSchedulerConfig({
-        enable_scheduled_scans: scheduledScansEnabled,
-        scan_schedule_mode: scanMode,
-        scheduled_scan_time: scanTime,
-        scan_interval_hours: scanIntervalHours,
-        enable_scheduled_deletion: scheduledDeletionEnabled,
-        deletion_schedule_mode: deletionMode,
-        scheduled_deletion_time: deletionTime,
-        deletion_interval_hours: deletionIntervalHours,
-      });
-      queryClient.invalidateQueries({ queryKey: ["schedulerConfig"] });
-
-      // Clear test results after successful save
-      setTestResults({});
-
-      toast({
-        title: "Configuration saved",
-        description: <div>Your settings have been saved successfully.</div>,
-      });
-    } catch (error) {
-      toast({
-        title: "Save failed",
-        description: (
-          <div>{error instanceof Error ? error.message : "Failed to save configuration"}</div>
-        ),
-        variant: "destructive",
-      });
-    } finally {
-      setIsSaving(false);
-    }
+    });
   }
 
   function handleCancel() {
@@ -1148,13 +1147,13 @@ function SettingsContent({
         <Button
           variant="outline"
           onClick={handleCancel}
-          disabled={isSaving}
+          disabled={isPending}
           className="w-full sm:w-auto"
         >
           Cancel
         </Button>
-        <Button onClick={handleSaveConfiguration} disabled={isSaving} className="w-full sm:w-auto">
-          {isSaving ? (
+        <Button onClick={handleSaveConfiguration} disabled={isPending} className="w-full sm:w-auto">
+          {isPending ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               Saving...

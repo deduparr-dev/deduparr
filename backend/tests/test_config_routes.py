@@ -525,3 +525,248 @@ async def test_update_deep_scan_toggle(test_db):
         response = await client.put("/api/config/deep-scan", json={"enabled": True})
         assert response.status_code == 200
         assert response.json()["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_scheduler_config_defaults(test_db):
+    """Test getting scheduler config with default values"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/config/scheduler")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify defaults
+        assert data["enable_scheduled_scans"] is False
+        assert data["scan_schedule_mode"] == "daily"
+        assert data["scheduled_scan_time"] == "02:00"
+        assert data["scan_interval_hours"] == 24
+        assert data["enable_scheduled_deletion"] is False
+        assert data["deletion_schedule_mode"] == "daily"
+        assert data["scheduled_deletion_time"] == "02:30"
+        assert data["deletion_interval_hours"] == 24
+
+
+@pytest.mark.asyncio
+async def test_get_scheduler_config_with_values(test_db):
+    """Test getting scheduler config with custom values"""
+    # Setup custom config
+    configs = [
+        Config(key="enable_scheduled_scans", value="true"),
+        Config(key="scan_schedule_mode", value="interval"),
+        Config(key="scheduled_scan_time", value="03:30"),
+        Config(key="scan_interval_hours", value="6"),
+        Config(key="enable_scheduled_deletion", value="true"),
+        Config(key="deletion_schedule_mode", value="interval"),
+        Config(key="scheduled_deletion_time", value="04:00"),
+        Config(key="deletion_interval_hours", value="12"),
+    ]
+    test_db.add_all(configs)
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/config/scheduler")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["enable_scheduled_scans"] is True
+        assert data["scan_schedule_mode"] == "interval"
+        assert data["scheduled_scan_time"] == "03:30"
+        assert data["scan_interval_hours"] == 6
+        assert data["enable_scheduled_deletion"] is True
+        assert data["deletion_schedule_mode"] == "interval"
+        assert data["scheduled_deletion_time"] == "04:00"
+        assert data["deletion_interval_hours"] == 12
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_enable_scans(test_db):
+    """Test enabling scheduled scans"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/scheduler", json={"enable_scheduled_scans": True}
+        )
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
+
+        # Verify in database
+        result = await test_db.execute(
+            select(Config).where(Config.key == "enable_scheduled_scans")
+        )
+        config = result.scalar_one_or_none()
+        assert config is not None
+        assert config.value == "true"
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_daily_mode(test_db):
+    """Test updating scheduler to daily mode"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/scheduler",
+            json={
+                "scan_schedule_mode": "daily",
+                "scheduled_scan_time": "01:30",
+            },
+        )
+        assert response.status_code == 200
+
+        # Verify in database
+        result = await test_db.execute(
+            select(Config).where(Config.key == "scan_schedule_mode")
+        )
+        config = result.scalar_one_or_none()
+        assert config.value == "daily"
+
+        result = await test_db.execute(
+            select(Config).where(Config.key == "scheduled_scan_time")
+        )
+        config = result.scalar_one_or_none()
+        assert config.value == "01:30"
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_interval_mode(test_db):
+    """Test updating scheduler to interval mode"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/scheduler",
+            json={"scan_schedule_mode": "interval", "scan_interval_hours": 8},
+        )
+        assert response.status_code == 200
+
+        # Verify in database
+        result = await test_db.execute(
+            select(Config).where(Config.key == "scan_schedule_mode")
+        )
+        config = result.scalar_one_or_none()
+        assert config.value == "interval"
+
+        result = await test_db.execute(
+            select(Config).where(Config.key == "scan_interval_hours")
+        )
+        config = result.scalar_one_or_none()
+        assert config.value == "8"
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_invalid_mode(test_db):
+    """Test validation of invalid schedule mode"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/scheduler", json={"scan_schedule_mode": "weekly"}
+        )
+        assert response.status_code == 400
+        assert "must be 'daily' or 'interval'" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_invalid_time_format(test_db):
+    """Test validation of invalid time format"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/scheduler", json={"scheduled_scan_time": "25:00"}
+        )
+        assert response.status_code == 400
+        assert "HH:MM format" in response.json()["detail"]
+
+        response = await client.post(
+            "/api/config/scheduler", json={"scheduled_scan_time": "12:60"}
+        )
+        assert response.status_code == 400
+
+        response = await client.post(
+            "/api/config/scheduler", json={"scheduled_scan_time": "1:30"}
+        )
+        assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_invalid_interval(test_db):
+    """Test validation of invalid interval hours"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Too small
+        response = await client.post(
+            "/api/config/scheduler", json={"scan_interval_hours": 0}
+        )
+        assert response.status_code == 400
+        assert "between 1 and 168" in response.json()["detail"]
+
+        # Too large
+        response = await client.post(
+            "/api/config/scheduler", json={"scan_interval_hours": 200}
+        )
+        assert response.status_code == 400
+        assert "between 1 and 168" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_deletion_settings(test_db):
+    """Test updating scheduled deletion settings"""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/scheduler",
+            json={
+                "enable_scheduled_deletion": True,
+                "deletion_schedule_mode": "interval",
+                "deletion_time": "05:00",
+                "deletion_interval_hours": 4,
+            },
+        )
+        assert response.status_code == 200
+
+        # Verify deletion enabled
+        result = await test_db.execute(
+            select(Config).where(Config.key == "enable_scheduled_deletion")
+        )
+        config = result.scalar_one_or_none()
+        assert config.value == "true"
+
+
+@pytest.mark.asyncio
+async def test_update_scheduler_config_partial_update(test_db):
+    """Test partial update of scheduler config"""
+    # Setup initial config
+    test_db.add(Config(key="scan_schedule_mode", value="daily"))
+    test_db.add(Config(key="scheduled_scan_time", value="02:00"))
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        # Update only the time, leave mode unchanged
+        response = await client.post(
+            "/api/config/scheduler", json={"scheduled_scan_time": "03:00"}
+        )
+        assert response.status_code == 200
+
+        # Verify mode unchanged
+        result = await test_db.execute(
+            select(Config).where(Config.key == "scan_schedule_mode")
+        )
+        config = result.scalar_one_or_none()
+        assert config.value == "daily"  # Unchanged
+
+        # Verify time updated
+        result = await test_db.execute(
+            select(Config).where(Config.key == "scheduled_scan_time")
+        )
+        config = result.scalar_one_or_none()
+        assert config.value == "03:00"  # Updated

@@ -13,6 +13,11 @@ from app.api.deps import get_db
 from app.services.setup_service import SetupService
 from app.services.plex_service import PlexAuthService
 
+# Import token manager at module level so tests can patch it via
+# "app.api.routes.setup.get_token_manager". The actual decryption is used
+# only inside the endpoint.
+from app.services.security import get_token_manager
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -87,6 +92,8 @@ class ConnectionTestResponse(BaseModel):
     server_name: Optional[str] = None
     platform: Optional[str] = None
     available_servers: Optional[List[str]] = None
+    # Optional free-form message returned by some test endpoints
+    message: Optional[str] = None
 
 
 class PlexLibraryResponse(BaseModel):
@@ -258,7 +265,6 @@ async def test_email_connection(
         Connection test result
     """
     from app.services.email_service import EmailService
-    from app.services.security import get_token_manager
 
     try:
         # Decrypt password if it looks encrypted (has the itsdangerous format)

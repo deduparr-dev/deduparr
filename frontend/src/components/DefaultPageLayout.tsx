@@ -79,7 +79,11 @@ export function StatCard({ title, value, subtitle, icon: Icon, trend, highlight 
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <p className="text-xs md:text-sm font-medium text-muted-foreground">{title}</p>
-          <h3 className={`text-2xl md:text-3xl font-bold mt-1 md:mt-2 ${highlight ? 'text-primary' : 'text-foreground'}`}>{value}</h3>
+          <h3
+            className={`text-2xl md:text-3xl font-bold mt-1 md:mt-2 ${highlight ? "text-primary" : "text-foreground"}`}
+          >
+            {value}
+          </h3>
           {subtitle && <p className="text-xs md:text-sm text-muted-foreground mt-1">{subtitle}</p>}
           {trend && <p className="text-xs text-primary mt-2">{trend}</p>}
         </div>

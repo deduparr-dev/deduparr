@@ -474,14 +474,9 @@ async def find_media_by_file_path(
                     if files:
                         episode_files.extend(files)
 
-            # Extract filename for fallback matching
-            filename = os.path.basename(file_path)
-            
             for episode_file in episode_files:
                 sonarr_path = episode_file.get("path")
-                if sonarr_path:
-                    # Try exact path match first (fastest)
-                    if sonarr_path == file_path:
+                if sonarr_path and sonarr_path == file_path:
                     # Found matching file - check if it has episode linkage
                     episode_ids = episode_file.get("episodeIds", [])
 

@@ -361,7 +361,10 @@ class DeletionPipeline:
             raise
 
     async def _stage_qbittorrent_removal(
-        self, file_path: str, history: DeletionHistory, kept_file_path: Optional[str] = None
+        self,
+        file_path: str,
+        history: DeletionHistory,
+        kept_file_path: Optional[str] = None,
     ) -> Optional[str]:
         """
         Stage 2: Remove item from qBittorrent AND delete files
@@ -373,7 +376,7 @@ class DeletionPipeline:
         CRITICAL: This must complete BEFORE *arr rescan to ensure the deleted file
         is fully removed and won't be re-imported.
 
-        SMART SAFETY CHECK: 
+        SMART SAFETY CHECK:
         - If the KEPT file has a torrent, skip qBittorrent deletion (keep it seeding)
           but still mark the lower quality item for disk cleanup
         - If the KEPT file has NO torrent, proceed with qBittorrent deletion (safe)
@@ -390,12 +393,14 @@ class DeletionPipeline:
 
                 # SMART CHECK: Does the kept file have a torrent?
                 if kept_file_path:
-                    kept_file_result = await self.qbit_service.find_item_by_file_path(kept_file_path)
+                    kept_file_result = await self.qbit_service.find_item_by_file_path(
+                        kept_file_path
+                    )
                     if kept_file_result:
                         # Kept file HAS a torrent - we want to keep that one seeding
                         logger.info(
-                            f"Kept file has a torrent in qBittorrent. Skipping qBittorrent deletion "
-                            f"to preserve seeding. Will delete unwanted file via disk cleanup only."
+                            "Kept file has a torrent in qBittorrent. Skipping qBittorrent deletion "
+                            "to preserve seeding. Will delete unwanted file via disk cleanup only."
                         )
                         # Mark qBittorrent as "done" (skipped intentionally)
                         history.deleted_from_qbit = True
@@ -405,7 +410,7 @@ class DeletionPipeline:
                     else:
                         # Kept file has NO torrent - safe to delete this torrent
                         logger.info(
-                            f"Kept file not in qBittorrent. Safe to delete torrent for unwanted file."
+                            "Kept file not in qBittorrent. Safe to delete torrent for unwanted file."
                         )
                 elif torrent_count <= 1:
                     # No kept file AND only 1 torrent - DANGER!

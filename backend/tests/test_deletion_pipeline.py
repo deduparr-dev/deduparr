@@ -167,9 +167,14 @@ async def test_delete_movie_full_pipeline_success(
         mock_file2.name = "Test Movie.mkv"
 
         mock_qbit_instance.torrents_info.return_value = [mock_item, mock_item2]
+        # Need 4 calls: 2 for checking deleted file (one per torrent) + 2 for checking kept file (one per torrent)
         mock_qbit_instance.torrents_files.side_effect = [
-            [mock_file],  # First call for first torrent
-            [mock_file2],  # Second call for second torrent (during count)
+            [mock_file],  # First torrent, checking deleted file
+            [mock_file2],  # Second torrent, checking deleted file
+            [],  # First torrent, checking kept file (no match)
+            [
+                mock_file2
+            ],  # Second torrent, checking kept file (match - this is the one we're keeping)
         ]
 
         mock_radarr_instance = AsyncMock()

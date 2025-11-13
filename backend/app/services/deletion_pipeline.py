@@ -111,49 +111,48 @@ class DeletionPipeline:
 
     def _find_file_in_media_root(self, plex_path: str) -> Optional[str]:
         """
-        Find actual file location by searching media root for the file
+        Find actual file location by checking the exact path first, then searching media root
         Uses caching for performance on large media libraries.
-        Matches on last 2 path segments (parent_dir/filename) for accuracy.
 
         Args:
-            plex_path: Path as reported by Plex (e.g., /long-path/movies/Movie (2025)/Movie.mkv)
+            plex_path: Path as reported by Plex (e.g., /plexdownloads/Serier/File.mkv)
 
         Returns:
             Actual path in container if found, None otherwise
         """
-        # Extract last 2 path segments for better matching specificity
-        # e.g., /long-path/movies/Movie (2025)/Movie.mkv -> Movie (2025)/Movie.mkv
-        path_parts = plex_path.split("/")
-        match_key = (
-            "/".join(path_parts[-2:]) if len(path_parts) >= 2 else path_parts[-1]
-        )
-
         # Check cache first
-        if match_key in self._file_location_cache:
-            cached_path = self._file_location_cache[match_key]
+        if plex_path in self._file_location_cache:
+            cached_path = self._file_location_cache[plex_path]
             if os.path.exists(cached_path):
-                logger.debug(f"Cache hit: {match_key} -> {cached_path}")
+                logger.debug(f"Cache hit: {plex_path} -> {cached_path}")
                 return cached_path
             else:
                 # File was moved or deleted, remove from cache
-                logger.debug(f"Cache invalidated (file not found): {match_key}")
-                del self._file_location_cache[match_key]
+                logger.debug(f"Cache invalidated (file not found): {plex_path}")
+                del self._file_location_cache[plex_path]
 
-        # Cache miss - search filesystem
-        logger.debug(f"Cache miss, searching for: {match_key}")
-        # Auto-detect media root from the plex_path
-        media_root = self._get_media_root_from_path(plex_path)
+        # First, try the exact path from Plex (most common case)
+        if os.path.exists(plex_path):
+            self._file_location_cache[plex_path] = plex_path
+            logger.debug(f"Found at exact Plex path: {plex_path}")
+            return plex_path
+
+        # If exact path doesn't exist, search configured media directory
+        # This handles cases where Plex mount point differs from container mount
+        filename = os.path.basename(plex_path).lower()
+        logger.debug(f"Exact path not found, searching media_dir for: {filename}")
+        media_root = settings.media_dir
 
         for root, dirs, files in os.walk(media_root):
             for file in files:
-                full_path = os.path.join(root, file)
-                # Match on last 2 path segments for accuracy
-                if full_path.endswith(match_key):
-                    self._file_location_cache[match_key] = full_path
-                    logger.debug(f"Found and cached: {match_key} -> {full_path}")
+                # Case-insensitive filename match
+                if file.lower() == filename:
+                    full_path = os.path.join(root, file)
+                    self._file_location_cache[plex_path] = full_path
+                    logger.debug(f"Found and cached: {plex_path} -> {full_path}")
                     return full_path
 
-        logger.debug(f"File not found under {media_root}: {match_key}")
+        logger.warning(f"File not found (checked exact path and {media_root}): {plex_path}")
         return None
 
     async def _get_plex_service(self) -> PlexService:
@@ -776,16 +775,30 @@ class DeletionPipeline:
                             )
                         history.deleted_from_disk = True
             else:
-                # File not found - was already deleted by *arr services or qBittorrent
-                # But we still need to clean up orphaned files (subtitles, NFO, etc.)
-                if not history.deleted_from_disk:
-                    history.deleted_from_disk = True
-
+                # File not found by exact path or media_dir search
+                # Only mark as deleted if a service (arr/qBit) confirmed deletion
                 filename = os.path.basename(file_path)
-                logger.info(
-                    f"Main file already deleted: {filename} "
-                    f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
-                )
+                
+                if history.deleted_from_arr or history.deleted_from_qbit:
+                    # A service deleted it - mark as success
+                    if not history.deleted_from_disk:
+                        history.deleted_from_disk = True
+                    
+                    logger.info(
+                        f"Main file already deleted: {filename} "
+                        f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
+                    )
+                else:
+                    # File not found AND no service deleted it - ERROR!
+                    error_msg = f"File not found for deletion (checked exact path and {settings.media_dir}): {file_path}"
+                    logger.error(error_msg)
+                    history.error = (
+                        f"{history.error}; {error_msg}" if history.error else error_msg
+                    )
+                    # Don't mark as deleted since we didn't actually delete anything
+                    history.deleted_from_disk = False
+                    # Skip cleanup - nothing to clean up if we can't find the file
+                    return
 
                 # First, check if the original parent directory still exists with orphaned files
                 parent_dir = os.path.dirname(file_path)
@@ -910,6 +923,22 @@ class DeletionPipeline:
                         logger.info(
                             f"Cleaned up {folders_cleaned} location(s) for file: {filename}"
                         )
+                else:
+                    # File truly not found anywhere - only mark as deleted if *arr or qBit confirmed deletion
+                    if history.deleted_from_arr or history.deleted_from_qbit:
+                        logger.info(
+                            f"File not found in filesystem and already deleted by "
+                            f"{'*arr' if history.deleted_from_arr else 'qBittorrent'}"
+                        )
+                        history.deleted_from_disk = True
+                    else:
+                        # File not found AND no service deleted it - this is an ERROR
+                        error_msg = f"File not found for deletion: {file_path}"
+                        logger.error(error_msg)
+                        history.error = (
+                            f"{history.error}; {error_msg}" if history.error else error_msg
+                        )
+                        history.deleted_from_disk = False
 
         except PermissionError:
             # Readonly filesystem at search level - mark as success since *arr handles deletion

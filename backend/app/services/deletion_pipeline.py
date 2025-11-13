@@ -152,7 +152,9 @@ class DeletionPipeline:
                     logger.debug(f"Found and cached: {plex_path} -> {full_path}")
                     return full_path
 
-        logger.warning(f"File not found (checked exact path and {media_root}): {plex_path}")
+        logger.warning(
+            f"File not found (checked exact path and {media_root}): {plex_path}"
+        )
         return None
 
     async def _get_plex_service(self) -> PlexService:
@@ -720,7 +722,7 @@ class DeletionPipeline:
                             )
 
                         current_dir = parent_dir
-                        media_root = self._get_media_root_from_path(file_path)
+                        media_root = self._get_media_root_from_path(actual_path)
                         removed_dirs = []
 
                         while current_dir != media_root and current_dir.startswith(
@@ -778,12 +780,12 @@ class DeletionPipeline:
                 # File not found by exact path or media_dir search
                 # Only mark as deleted if a service (arr/qBit) confirmed deletion
                 filename = os.path.basename(file_path)
-                
+
                 if history.deleted_from_arr or history.deleted_from_qbit:
                     # A service deleted it - mark as success
                     if not history.deleted_from_disk:
                         history.deleted_from_disk = True
-                    
+
                     logger.info(
                         f"Main file already deleted: {filename} "
                         f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
@@ -936,7 +938,9 @@ class DeletionPipeline:
                         error_msg = f"File not found for deletion: {file_path}"
                         logger.error(error_msg)
                         history.error = (
-                            f"{history.error}; {error_msg}" if history.error else error_msg
+                            f"{history.error}; {error_msg}"
+                            if history.error
+                            else error_msg
                         )
                         history.deleted_from_disk = False
 

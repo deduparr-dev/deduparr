@@ -49,7 +49,7 @@ async def setup_configs(test_db):
 async def movie_with_mismatched_path(test_db):
     """
     Create a movie file where Plex path differs from Deduparr path
-    Plex: /plexdownloads/Movies/Avatar (2009)/Avatar.mkv
+    Plex: /plex/Movies/Avatar (2009)/Avatar.mkv
     Deduparr: /media/Movies/Avatar (2009)/Avatar.mkv
     """
     dup_set = DuplicateSet(
@@ -64,7 +64,7 @@ async def movie_with_mismatched_path(test_db):
     # Create a kept file (better quality)
     kept_file = DuplicateFile(
         set_id=dup_set.id,
-        file_path="/plexdownloads/Movies/Avatar (2009)/Avatar 1080p.mkv",
+        file_path="/plex/Movies/Avatar (2009)/Avatar 1080p.mkv",
         file_size=15000000000,
         score=100,
         keep=True,
@@ -74,7 +74,7 @@ async def movie_with_mismatched_path(test_db):
     # Create the file to delete (lower quality)
     dup_file = DuplicateFile(
         set_id=dup_set.id,
-        file_path="/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",  # Plex path
+        file_path="/plex/Movies/Avatar (2009)/Avatar.mkv",  # Plex path
         file_size=10000000000,
         score=50,
         keep=False,
@@ -88,7 +88,7 @@ async def movie_with_mismatched_path(test_db):
 async def episode_with_mismatched_path(test_db):
     """
     Create an episode file where paths differ
-    Plex: /plexdownloads/TV/Breaking Bad/Season 01/S01E01.mkv
+    Plex: /plex/TV/Breaking Bad/Season 01/S01E01.mkv
     Deduparr: /media/TV/Breaking Bad/Season 01/S01E01.mkv
     """
     dup_set = DuplicateSet(
@@ -103,7 +103,7 @@ async def episode_with_mismatched_path(test_db):
     # Create a kept file (better quality)
     kept_file = DuplicateFile(
         set_id=dup_set.id,
-        file_path="/plexdownloads/TV/Breaking Bad/Season 01/S01E01 1080p.mkv",
+        file_path="/plex/TV/Breaking Bad/Season 01/S01E01 1080p.mkv",
         file_size=3000000000,
         score=100,
         keep=True,
@@ -113,7 +113,7 @@ async def episode_with_mismatched_path(test_db):
     # Create the file to delete (lower quality)
     dup_file = DuplicateFile(
         set_id=dup_set.id,
-        file_path="/plexdownloads/TV/Breaking Bad/Season 01/S01E01.mkv",
+        file_path="/plex/TV/Breaking Bad/Season 01/S01E01.mkv",
         file_size=2000000000,
         score=30,
         keep=False,
@@ -152,7 +152,7 @@ async def test_path_agnostic_radarr_matching(
                     "title": "Avatar",
                     "movieFile": {
                         "id": 10,
-                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",  # Exact path match required
+                        "path": "/plex/Movies/Avatar (2009)/Avatar.mkv",  # Exact path match required
                     },
                 }
             ]
@@ -220,7 +220,7 @@ async def test_path_agnostic_sonarr_matching(
             "episodeNumber": 1,
             "episodeFile": {
                 "id": 100,
-                "path": "/mnt/plexdownloads/TV/Breaking Bad/Season 01/S01E01.mkv",  # Different base!
+                "path": "/mnt/plex/TV/Breaking Bad/Season 01/S01E01.mkv",  # Different base!
             },
         }
         mock_delete_episode_file.return_value = None
@@ -262,20 +262,23 @@ async def test_file_location_caching(
         mock_walk.return_value = [
             ("/media/Movies/Avatar (2009)", [], ["Avatar.mkv"]),
         ]
-        mock_exists.return_value = True
+        # First call checks exact path (fails), then searches media_dir
+        mock_exists.side_effect = [False, True]
 
-        # First lookup - should trigger os.walk
-        result1 = deletion_pipeline._find_file_in_media_root("Avatar.mkv")
+        plex_path = "/plex/Movies/Avatar (2009)/Avatar.mkv"
+
+        # First lookup - should check exact path, then trigger os.walk
+        result1 = deletion_pipeline._find_file_in_media_root(plex_path)
         assert result1 == "/media/Movies/Avatar (2009)/Avatar.mkv"
         assert mock_walk.call_count == 1
 
         # Second lookup - should use cache
-        result2 = deletion_pipeline._find_file_in_media_root("Avatar.mkv")
+        result2 = deletion_pipeline._find_file_in_media_root(plex_path)
         assert result2 == "/media/Movies/Avatar (2009)/Avatar.mkv"
         assert mock_walk.call_count == 1  # Still only 1, cache was used
 
         # Verify cache contains the entry
-        assert "Avatar.mkv" in deletion_pipeline._file_location_cache
+        assert plex_path in deletion_pipeline._file_location_cache
 
 
 @pytest.mark.asyncio
@@ -296,7 +299,7 @@ async def test_file_location_last_two_segments_matching(
 
         # Search with 2-segment path should find correct file
         result = deletion_pipeline._find_file_in_media_root(
-            "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv"  # Last 2 segments: Avatar (2009)/Avatar.mkv
+            "/plex/Movies/Avatar (2009)/Avatar.mkv"  # Last 2 segments: Avatar (2009)/Avatar.mkv
         )
 
         # Should match based on "Avatar (2009)/Avatar.mkv"
@@ -336,7 +339,7 @@ async def test_comprehensive_disk_cleanup_with_associated_files(
                     "movieFile": {
                         "id": 10,
                         # Match the Plex path so Radarr finds the movie
-                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
+                        "path": "/plex/Movies/Avatar (2009)/Avatar.mkv",
                     },
                 }
             ]
@@ -459,44 +462,68 @@ async def test_recursive_empty_directory_cleanup(
         mock_stat.return_value = mock_stat_result
 
         # File system setup - Season 01 becomes empty after deletion
-        # Main file already deleted by *arr
+        # Track whether file has been removed to simulate state change
+        file_removed = {"removed": False}
 
         def exists_side_effect(path):
-            # Main file already deleted by *arr
-            if path == "/media/TV/Breaking Bad/Season 01/S01E01.mkv":
+            # Phase 1: Plex path check - file doesn't exist at Plex path
+            # This forces Phase 2 (os.walk) to find it
+            if path == "/plex/TV/Breaking Bad/Season 01/S01E01.mkv":
                 return False
+            # Actual file location (found via os.walk)
+            if path == "/media/TV/Breaking Bad/Season 01/S01E01.mkv":
+                return not file_removed["removed"]
             # Parent directory exists for cleanup checks
             if path == "/media/TV/Breaking Bad/Season 01":
                 return True
-            return True
+            if path == "/media/TV/Breaking Bad":
+                return True
+            if path == "/media/TV":
+                return True
+            return False
+
+        def remove_side_effect(path):
+            # Mark file as removed when os.remove is called
+            if path == "/media/TV/Breaking Bad/Season 01/S01E01.mkv":
+                file_removed["removed"] = True
 
         def listdir_side_effect(path):
             if path == "/media/TV/Breaking Bad/Season 01":
-                # Directory is already empty (no associated files in this test case)
-                return []
-            return ["Season 01"]  # Breaking Bad dir still has content
+                # Directory is empty after file removal
+                if file_removed["removed"]:
+                    return []
+                # Before removal, file still exists
+                return ["S01E01.mkv"]
+            if path == "/media/TV/Breaking Bad":
+                # Parent still has Season 01 directory (initially)
+                # After Season 01 is removed, it might be empty too
+                return ["Season 01"]  # Simplified for this test
+            return []
 
         def isdir_side_effect(path):
             if path == "/media/TV/Breaking Bad/Season 01":
+                # Directory exists until after it's removed
+                return not any(d == path for d in [])  # Always true for this test
+            if path == "/media/TV/Breaking Bad":
                 return True
             return False
 
         mock_exists.side_effect = exists_side_effect
         mock_listdir.side_effect = listdir_side_effect
-        mock_remove.side_effect = None  # No files to remove
+        mock_remove.side_effect = remove_side_effect
         mock_isfile.return_value = False
         mock_isdir.side_effect = isdir_side_effect
 
         # Execute deletion
         history = await deletion_pipeline.delete_file(episode_with_mismatched_path.id)
 
-        # Main file already deleted by *arr, but orphaned files cleanup will find and delete it via os.walk
-        # Verify os.remove was called once for the orphaned file
+        # File deleted via Phase 2 (recursive search)
+        # Verify os.remove was called once for the file
         mock_remove.assert_called_once_with(
             "/media/TV/Breaking Bad/Season 01/S01E01.mkv"
         )
 
-        # Directory cleanup DOES happen now via orphaned cleanup using os.walk
+        # Directory cleanup happens after file removal
         # Verify rmdir was called for the now-empty Season 01 directory
         mock_rmdir.assert_called_once_with("/media/TV/Breaking Bad/Season 01")
 
@@ -533,7 +560,7 @@ async def test_targeted_plex_refresh_with_library_id(
                     "title": "Avatar",
                     "movieFile": {
                         "id": 10,
-                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
+                        "path": "/plex/Movies/Avatar (2009)/Avatar.mkv",
                     },
                 }
             ]
@@ -596,7 +623,7 @@ async def test_plex_refresh_fallback_to_full_scan(
                     "title": "Avatar",
                     "movieFile": {
                         "id": 10,
-                        "path": "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
+                        "path": "/plex/Movies/Avatar (2009)/Avatar.mkv",
                     },
                 }
             ]
@@ -682,45 +709,60 @@ async def test_cache_persistence_across_multiple_deletions(
         patch("os.walk") as mock_walk,
         patch("os.path.exists") as mock_exists,
     ):
-        # Setup file system with all movies - os.walk returns all at once
-        mock_walk.return_value = [
-            ("/media/Movies/Movie0", [], ["Movie0.mkv"]),
-            ("/media/Movies/Movie1", [], ["Movie1.mkv"]),
-            ("/media/Movies/Movie2", [], ["Movie2.mkv"]),
-        ]
-        mock_exists.return_value = True
+        # Setup file system - files exist at exact Plex paths
+        # Phase 1 will succeed for these paths
+        def exists_side_effect(path):
+            if path == "/media/Movies/Movie0/Movie0.mkv":
+                return True
+            if path == "/media/Movies/Movie1/Movie1.mkv":
+                return True
+            if path == "/media/Movies/Movie2/Movie2.mkv":
+                return True
+            return False
+
+        mock_exists.side_effect = exists_side_effect
 
         # Clear cache to start fresh
         deletion_pipeline._file_location_cache.clear()
 
-        # First file lookup should trigger walk and cache ALL files found during walk
+        # First file lookup should use Phase 1 (exact path check) and cache the result
         result1 = deletion_pipeline._find_file_in_media_root(
-            "/plexdownloads/Movies/Movie0/Movie0.mkv"
+            "/media/Movies/Movie0/Movie0.mkv"
         )
-        assert mock_walk.call_count == 1
+        # Phase 1 succeeded, no walk needed
+        assert mock_walk.call_count == 0
         assert result1 == "/media/Movies/Movie0/Movie0.mkv"
 
         # Cache should now contain the found file
-        assert "Movie0/Movie0.mkv" in deletion_pipeline._file_location_cache
-
-        # Second file lookup - if the file is already in cache from previous walk, no new walk
-        # But our implementation only caches files it finds, so we need to check behavior
-        # Clear walk count and try a different file
-        mock_walk.reset_mock()
-
-        # Try to find a file that wasn't explicitly searched but was found during walk
-        # The current implementation only caches when match_key matches, so second search
-        # for different match_key will trigger another walk
-        result2 = deletion_pipeline._find_file_in_media_root(
-            "/plexdownloads/Movies/Movie1/Movie1.mkv"
+        assert (
+            "/media/Movies/Movie0/Movie0.mkv" in deletion_pipeline._file_location_cache
         )
 
-        # This will trigger another walk because the match_key is different
-        # This is expected behavior - cache is keyed by match_key (last 2 segments)
-        assert result2 == "/media/Movies/Movie1/Movie1.mkv"
+        # Second file lookup for SAME file - should use cache
+        # Cache validates file still exists before returning it
+        mock_exists.reset_mock()
+        result2 = deletion_pipeline._find_file_in_media_root(
+            "/media/Movies/Movie0/Movie0.mkv"
+        )
+        # Should call exists once to validate cached path still exists
+        assert mock_exists.call_count == 1
+        assert mock_exists.call_args[0][0] == "/media/Movies/Movie0/Movie0.mkv"
+        assert result2 == "/media/Movies/Movie0/Movie0.mkv"
 
-        # Verify cache has entries for found files
-        assert "Movie1/Movie1.mkv" in deletion_pipeline._file_location_cache
+        # Third file lookup for DIFFERENT file - should check exact path (Phase 1)
+        result3 = deletion_pipeline._find_file_in_media_root(
+            "/media/Movies/Movie1/Movie1.mkv"
+        )
+        # Cache validation from previous call (1) + Phase 1 check for new file (1) = 2 total
+        assert mock_exists.call_count == 2
+        assert result3 == "/media/Movies/Movie1/Movie1.mkv"
+        # Should be cached now
+        assert (
+            "/media/Movies/Movie1/Movie1.mkv" in deletion_pipeline._file_location_cache
+        )
+
+        # os.walk should never have been called (all files at exact paths)
+        assert mock_walk.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -741,7 +783,7 @@ async def test_special_characters_in_filenames(
     # Filename with spaces, parentheses, and unicode
     dup_file = DuplicateFile(
         set_id=dup_set.id,
-        file_path="/plexdownloads/Movies/The Matrix (1999) [4K]/The Matrix (1999) [4K].mkv",
+        file_path="/plex/Movies/The Matrix (1999) [4K]/The Matrix (1999) [4K].mkv",
         file_size=50000000000,
         score=90,
         keep=False,

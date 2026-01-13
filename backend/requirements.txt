@@ -17,7 +17,7 @@ qbittorrent-api==2025.11.1
 httpx==0.28.1
 
 # Scheduling
-apscheduler==3.11.1
+apscheduler==3.11.2
 
 # Utilities
 python-dotenv==1.2.1

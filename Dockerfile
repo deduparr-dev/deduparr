@@ -17,7 +17,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build backend
-FROM python:3.13-slim AS backend-builder
+FROM python:3.14-slim AS backend-builder
 
 WORKDIR /app
 
@@ -32,7 +32,7 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Stage 3: Final runtime image
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 # Create app user
 RUN groupadd -g 1000 deduparr && \
@@ -49,7 +49,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from builder
-COPY --from=backend-builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=backend-builder /usr/local/lib/python3.14/site-packages /usr/local/lib/python3.14/site-packages
 COPY --from=backend-builder /usr/local/bin /usr/local/bin
 
 # Copy backend application

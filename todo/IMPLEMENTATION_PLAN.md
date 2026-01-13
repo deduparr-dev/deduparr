@@ -18,7 +18,7 @@
 ### **Technology Stack**
 
 **Backend:**
-- **Python 3.13** with FastAPI (async/await for performance)
+- **Python 3.14** with FastAPI (async/await for performance)
 - **SQLite** (default) or **PostgreSQL** (optional) for database
   - SQLite with WAL mode for better concurrency
   - PostgreSQL option for power users (>50k items, multi-user)

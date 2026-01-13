@@ -47,6 +47,7 @@ All with a beautiful web UI and dry-run mode for safety!
 - 📊 **Dashboard & Analytics** - Track duplicates found, space reclaimed, and activity history
 - ⚙️ **Easy Setup** - Setup wizard with OAuth authentication and connection testing
 - 🔒 **Secure** - Enterprise-grade token encryption and type-safe code
+- 🤖 **Automated Dependency Updates** - Dependabot auto-approves and merges patch/minor updates
 
 ---
 

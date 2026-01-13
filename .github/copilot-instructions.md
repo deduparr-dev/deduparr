@@ -6,7 +6,7 @@
 
 1. **No Duplicate Code**: We're building a deduplication app - our code must exemplify this. Always reuse existing functionality and logic. Extract common patterns into shared utilities. DRY (Don't Repeat Yourself) is mandatory.
 2. **Professional Code Only**: No verbose comments, no attributions in code. Keep comments technical and necessary.
-3. **Modern Dependencies**: Use cutting-edge, well-maintained packages. Current stack uses Python 3.13, React 19, FastAPI latest.
+3. **Modern Dependencies**: Use cutting-edge, well-maintained packages. Current stack uses Python 3.14, React 19, FastAPI latest.
 4. **Type Safety - NO `Any` TYPE**: 
    - **NEVER** use `Any` type in TypeScript or Python
    - Always use specific types: `string`, `number`, `boolean`, `object`, etc.
@@ -35,7 +35,7 @@
 Deduparr is a duplicate media management system for the *arr ecosystem (Radarr/Sonarr/qBittorrent/Plex). It detects duplicate movies/episodes, scores them by quality, and safely removes lower-quality versions across all services.
 
 **Tech Stack:**
-- Backend: Python 3.13 + FastAPI + SQLAlchemy (async)
+- Backend: Python 3.14 + FastAPI + SQLAlchemy (async)
 - Frontend: React 19.2 + TypeScript + Vite + TailwindCSS
 - Database: SQLite (default) or PostgreSQL
 - Deployment: Docker multi-stage builds

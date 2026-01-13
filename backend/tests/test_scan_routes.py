@@ -152,12 +152,13 @@ async def test_process_duplicate_movies(test_db):
             Mock(st_ino=67890, st_nlink=1),
         ]
 
-        sets_created, sets_existing = await _process_duplicate_movies(
+        sets_created, sets_updated, sets_removed = await _process_duplicate_movies(
             test_db, duplicates, scoring_engine, custom_rules
         )
 
     assert sets_created == 1
-    assert sets_existing == 0
+    assert sets_updated == 0
+    assert sets_removed == 0
 
     # Check database
     result = await test_db.execute(select(DuplicateSet))
@@ -263,13 +264,13 @@ async def test_process_duplicate_movies_skip_existing(test_db):
         duplicates = {"Test Movie|None": [mock_movie1, mock_movie2]}
 
         scoring_engine = ScoringEngine()
-        sets_created, sets_existing = await _process_duplicate_movies(
+        sets_created, sets_updated, sets_removed = await _process_duplicate_movies(
             test_db, duplicates, scoring_engine, []
         )
 
-        # Should not create a new set since existing set has valid files
+        # Should verify existing set and update if needed (no files removed = sets_updated stays 0)
         assert sets_created == 0
-        assert sets_existing == 1
+        assert sets_removed == 0
     finally:
         # Clean up temp files
         import os
@@ -524,12 +525,13 @@ async def test_duplicate_detection_accuracy(test_db):
             Mock(st_ino=33333, st_nlink=1),
         ]
 
-        sets_created, sets_existing = await _process_duplicate_movies(
+        sets_created, sets_updated, sets_removed = await _process_duplicate_movies(
             test_db, duplicates, scoring_engine, custom_rules
         )
 
     assert sets_created == 1
-    assert sets_existing == 0
+    assert sets_updated == 0
+    assert sets_removed == 0
 
     # Fetch the created duplicate set
     result = await test_db.execute(
@@ -768,3 +770,197 @@ async def test_delete_no_files_marked_for_deletion(
 
     assert response.status_code == 400
     assert "No files marked for deletion" in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_file_keep_flag_success(client, test_db, create_duplicate_set):
+    """Test successfully toggling a file's keep flag"""
+    dup_set = await create_duplicate_set(
+        plex_item_id="toggle_test",
+        title="Toggle Test",
+        status=DuplicateStatus.PENDING,
+    )
+
+    # Add files - one keep, one delete
+    file1 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file1.mkv",
+        file_size=5 * 1024**3,
+        score=25000,
+        keep=True,
+    )
+    file2 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file2.mkv",
+        file_size=3 * 1024**3,
+        score=15000,
+        keep=False,
+    )
+    test_db.add(file1)
+    test_db.add(file2)
+    await test_db.commit()
+
+    # Toggle file2 to keep
+    response = await client.patch(
+        f"/api/scan/duplicates/{dup_set.id}/files/{file2.id}",
+        json={"keep": True},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["file_id"] == file2.id
+    assert data["keep"] is True
+    assert data["space_to_reclaim"] == 0  # Both files now kept
+
+    # Verify in database
+    await test_db.refresh(file2)
+    assert file2.keep is True
+
+
+@pytest.mark.asyncio
+async def test_update_file_keep_flag_prevents_all_delete(
+    client, test_db, create_duplicate_set
+):
+    """Test that we can't mark all files for deletion"""
+    dup_set = await create_duplicate_set(
+        plex_item_id="prevent_all_delete",
+        title="Prevent All Delete",
+        status=DuplicateStatus.PENDING,
+    )
+
+    # Add files - one keep, one delete
+    file1 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file1.mkv",
+        file_size=5 * 1024**3,
+        score=25000,
+        keep=True,
+    )
+    file2 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file2.mkv",
+        file_size=3 * 1024**3,
+        score=15000,
+        keep=False,
+    )
+    test_db.add(file1)
+    test_db.add(file2)
+    await test_db.commit()
+
+    # Try to mark the only kept file for deletion
+    response = await client.patch(
+        f"/api/scan/duplicates/{dup_set.id}/files/{file1.id}",
+        json={"keep": False},
+    )
+
+    assert response.status_code == 400
+    assert "At least one file must be marked to keep" in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_file_keep_flag_not_found(client, test_db, create_duplicate_set):
+    """Test updating a non-existent file"""
+    dup_set = await create_duplicate_set(
+        plex_item_id="not_found_test",
+        title="Not Found Test",
+        status=DuplicateStatus.PENDING,
+    )
+
+    response = await client.patch(
+        f"/api/scan/duplicates/{dup_set.id}/files/99999",
+        json={"keep": True},
+    )
+
+    assert response.status_code == 404
+    assert "File 99999 not found" in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_file_keep_flag_set_not_found(client, test_db):
+    """Test updating a file in a non-existent set"""
+    response = await client.patch(
+        "/api/scan/duplicates/99999/files/1",
+        json={"keep": True},
+    )
+
+    assert response.status_code == 404
+    assert "Duplicate set 99999 not found" in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_file_keep_flag_processed_set(
+    client, test_db, create_duplicate_set
+):
+    """Test that we can't modify files in processed sets"""
+    dup_set = await create_duplicate_set(
+        plex_item_id="processed_set",
+        title="Processed Set",
+        status=DuplicateStatus.PROCESSED,
+    )
+
+    file1 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file1.mkv",
+        file_size=5 * 1024**3,
+        score=25000,
+        keep=True,
+    )
+    test_db.add(file1)
+    await test_db.commit()
+
+    response = await client.patch(
+        f"/api/scan/duplicates/{dup_set.id}/files/{file1.id}",
+        json={"keep": False},
+    )
+
+    assert response.status_code == 400
+    assert "Cannot modify files in a processed duplicate set" in response.text
+
+
+@pytest.mark.asyncio
+async def test_update_file_keep_recalculates_space(
+    client, test_db, create_duplicate_set
+):
+    """Test that space_to_reclaim is recalculated correctly"""
+    dup_set = await create_duplicate_set(
+        plex_item_id="space_test",
+        title="Space Calculation Test",
+        status=DuplicateStatus.PENDING,
+    )
+
+    # Add 3 files
+    file1 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file1.mkv",
+        file_size=5 * 1024**3,  # 5 GB
+        score=25000,
+        keep=True,
+    )
+    file2 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file2.mkv",
+        file_size=3 * 1024**3,  # 3 GB
+        score=15000,
+        keep=False,
+    )
+    file3 = DuplicateFile(
+        set_id=dup_set.id,
+        file_path="/movies/file3.mkv",
+        file_size=2 * 1024**3,  # 2 GB
+        score=10000,
+        keep=False,
+    )
+    test_db.add_all([file1, file2, file3])
+    await test_db.commit()
+
+    # Toggle file2 to keep
+    response = await client.patch(
+        f"/api/scan/duplicates/{dup_set.id}/files/{file2.id}",
+        json={"keep": True},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    # Now only file3 (2 GB) should be reclaimable
+    assert data["space_to_reclaim"] == file3.file_size

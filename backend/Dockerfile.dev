@@ -10,6 +10,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY . .
 
+# Create mock media directories and files for testing
+RUN mkdir -p "/media/movies/The Matrix (1999)" \
+             "/media/movies/Inception (2010)" \
+             "/media/tv/Breaking Bad/Season 01" && \
+    # Movie duplicates - different quality versions (smaller sizes for dev)
+    dd if=/dev/zero of="/media/movies/The Matrix (1999)/The.Matrix.1999.2160p.UHD.BluRay.REMUX.mkv" bs=1M count=5 2>/dev/null && \
+    dd if=/dev/zero of="/media/movies/The Matrix (1999)/The.Matrix.1999.1080p.BluRay.x264.mkv" bs=1M count=3 2>/dev/null && \
+    dd if=/dev/zero of="/media/movies/The Matrix (1999)/The.Matrix.1999.720p.WEB-DL.mkv" bs=1M count=2 2>/dev/null && \
+    # Another movie with duplicates
+    dd if=/dev/zero of="/media/movies/Inception (2010)/Inception.2010.2160p.HDR.DV.mkv" bs=1M count=6 2>/dev/null && \
+    dd if=/dev/zero of="/media/movies/Inception (2010)/Inception.2010.1080p.BluRay.mkv" bs=1M count=3 2>/dev/null && \
+    # TV show duplicates
+    dd if=/dev/zero of="/media/tv/Breaking Bad/Season 01/Breaking.Bad.S01E01.2160p.UHD.mkv" bs=1M count=2 2>/dev/null && \
+    dd if=/dev/zero of="/media/tv/Breaking Bad/Season 01/Breaking.Bad.S01E01.1080p.BluRay.mkv" bs=1M count=1 2>/dev/null && \
+    dd if=/dev/zero of="/media/tv/Breaking Bad/Season 01/Breaking.Bad.S01E01.720p.HDTV.mkv" bs=512K count=1 2>/dev/null && \
+    echo "Mock media files created for testing"
+
 # Expose port
 EXPOSE 3001
 

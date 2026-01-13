@@ -6,8 +6,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install
+# Install dependencies (use mirror as fallback if main registry fails)
+RUN npm install --registry https://registry.npmmirror.com || npm install
 
 # Copy application
 COPY . .

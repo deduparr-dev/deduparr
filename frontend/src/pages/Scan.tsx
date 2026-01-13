@@ -12,10 +12,17 @@ import {
   Search,
   Loader2,
   HardDrive,
+  RotateCcw,
+  FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { scanAPI, configAPI, type DuplicateSet as ApiDuplicateSet } from "@/services/api";
+import {
+  scanAPI,
+  configAPI,
+  type DuplicateSet as ApiDuplicateSet,
+  type DuplicateFile,
+} from "@/services/api";
 import { toast } from "@/components/ui/use-toast";
 
 function formatBytes(bytes: number): string {
@@ -29,11 +36,15 @@ function formatBytes(bytes: number): string {
 function DuplicateSetCard({
   dupSet,
   onDelete,
+  onToggleKeep,
   isDeleting,
+  isTogglingFile,
 }: {
   dupSet: ApiDuplicateSet;
   onDelete: (setId: number, dryRun: boolean) => void;
+  onToggleKeep: (setId: number, fileId: number, keep: boolean) => void;
   isDeleting: boolean;
+  isTogglingFile: number | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -45,6 +56,19 @@ function DuplicateSetCard({
   function handleDelete() {
     onDelete(dupSet.id, dryRun);
     setShowDeleteConfirm(false);
+  }
+
+  function handleToggleKeep(file: DuplicateFile) {
+    // Prevent toggling if this would result in all files being deleted
+    if (file.keep && filesToKeep.length <= 1) {
+      toast({
+        variant: "destructive",
+        title: "Cannot remove last keeper",
+        description: "At least one file must be marked to keep.",
+      });
+      return;
+    }
+    onToggleKeep(dupSet.id, file.id, !file.keep);
   }
 
   return (
@@ -169,41 +193,81 @@ function DuplicateSetCard({
       {/* Expanded Details */}
       {expanded && (
         <div className="p-3 md:p-4 space-y-2 md:space-y-3">
-          <div className="text-xs text-muted-foreground">
-            Found: {new Date(dupSet.found_at).toLocaleString()}
-          </div>
-          {dupSet.files.map((file) => (
-            <div
-              key={file.id}
-              className={cn(
-                "p-3 md:p-4 rounded-lg border transition-colors",
-                file.keep ? "border-primary bg-primary/10" : "border-border bg-card"
-              )}
-            >
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 md:gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs md:text-sm font-mono break-all">{file.file_path}</div>
-                  <div className="flex flex-wrap items-center gap-2 md:gap-3 mt-2 text-xs text-muted-foreground">
-                    <span>Size: {formatBytes(file.file_size)}</span>
-                    <span>Score: {file.score}</span>
-                    {file.file_metadata?.resolution && <span>{file.file_metadata.resolution}</span>}
-                    {file.file_metadata?.video_codec && (
-                      <span>{file.file_metadata.video_codec}</span>
-                    )}
-                    {file.file_metadata?.audio_codec && (
-                      <span>{file.file_metadata.audio_codec}</span>
-                    )}
-                  </div>
-                </div>
-                <Badge
-                  variant={file.keep ? "default" : "destructive"}
-                  className="text-xs self-start"
-                >
-                  {file.keep ? "Keep" : "Delete"}
-                </Badge>
-              </div>
+          <div className="flex items-center justify-between">
+            <div className="text-xs text-muted-foreground">
+              Found: {new Date(dupSet.found_at).toLocaleString()}
             </div>
-          ))}
+            {dupSet.status === "pending" && (
+              <div className="text-xs text-muted-foreground">
+                Click badges to toggle keep/delete
+              </div>
+            )}
+          </div>
+          {dupSet.files.map((file) => {
+            const isToggling = isTogglingFile === file.id;
+            const canToggle = dupSet.status === "pending" && !isDeleting && !isToggling;
+            const isLastKeeper = file.keep && filesToKeep.length <= 1;
+
+            return (
+              <div
+                key={file.id}
+                className={cn(
+                  "p-3 md:p-4 rounded-lg border transition-colors",
+                  file.keep ? "border-primary bg-primary/10" : "border-border bg-card"
+                )}
+              >
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 md:gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs md:text-sm font-mono break-all">{file.file_path}</div>
+                    <div className="flex flex-wrap items-center gap-2 md:gap-3 mt-2 text-xs text-muted-foreground">
+                      <span>Size: {formatBytes(file.file_size)}</span>
+                      <span>Score: {file.score}</span>
+                      {file.file_metadata?.resolution && (
+                        <span>{file.file_metadata.resolution}</span>
+                      )}
+                      {file.file_metadata?.video_codec && (
+                        <span>{file.file_metadata.video_codec}</span>
+                      )}
+                      {file.file_metadata?.audio_codec && (
+                        <span>{file.file_metadata.audio_codec}</span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => canToggle && handleToggleKeep(file)}
+                    disabled={!canToggle}
+                    className={cn(
+                      "self-start transition-all",
+                      canToggle && !isLastKeeper && "hover:scale-105 cursor-pointer",
+                      (!canToggle || isLastKeeper) && "cursor-not-allowed opacity-70"
+                    )}
+                    title={
+                      isToggling
+                        ? "Updating..."
+                        : isLastKeeper
+                          ? "Cannot remove last keeper"
+                          : `Click to ${file.keep ? "mark for deletion" : "keep this file"}`
+                    }
+                  >
+                    {isToggling ? (
+                      <Badge variant="outline" className="text-xs">
+                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                        Updating...
+                      </Badge>
+                    ) : (
+                      <Badge
+                        variant={file.keep ? "default" : "destructive"}
+                        className={cn("text-xs", canToggle && !isLastKeeper && "hover:opacity-80")}
+                      >
+                        {file.keep ? "Keep" : "Delete"}
+                        {canToggle && !isLastKeeper && <RotateCcw className="w-3 h-3 ml-1" />}
+                      </Badge>
+                    )}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </Card>
@@ -324,6 +388,34 @@ export default function Scan() {
     },
   });
 
+  // Toggle file keep flag mutation
+  const [togglingFileId, setTogglingFileId] = useState<number | null>(null);
+  const toggleKeepMutation = useMutation({
+    mutationFn: ({ setId, fileId, keep }: { setId: number; fileId: number; keep: boolean }) => {
+      setTogglingFileId(fileId);
+      return scanAPI.updateFileKeep(setId, fileId, keep);
+    },
+    onSuccess: (data) => {
+      toast({
+        title: "File Updated",
+        description: data.message,
+      });
+      // Invalidate duplicates to refresh the UI
+      queryClient.invalidateQueries({ queryKey: ["duplicates"] });
+      queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Update Failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+    onSettled: () => {
+      setTogglingFileId(null);
+    },
+  });
+
   function handleStartScan() {
     if (selectedLibraries.length === 0) return;
     startScanMutation.mutate(selectedLibraries);
@@ -333,6 +425,10 @@ export default function Scan() {
     deleteMutation.mutate({ setId, dryRun });
   }
 
+  function handleToggleKeep(setId: number, fileId: number, keep: boolean) {
+    toggleKeepMutation.mutate({ setId, fileId, keep });
+  }
+
   function toggleLibrary(library: string) {
     setSelectedLibraries((prev) =>
       prev.includes(library) ? prev.filter((l) => l !== library) : [...prev, library]
@@ -340,6 +436,32 @@ export default function Scan() {
   }
 
   const isScanning = startScanMutation.isPending;
+
+  // Dev-only: Direct disk scan mutation
+  const devScanMutation = useMutation({
+    mutationFn: () => scanAPI.devDiskScan(),
+    onSuccess: async (data) => {
+      toast({
+        title: "Dev Scan Complete",
+        description: `Created ${data.sets_created} duplicate sets (${data.duplicates_found} files)`,
+      });
+      // Invalidate all caches to show results immediately
+      await queryClient.invalidateQueries({ queryKey: ["duplicates"] });
+      await queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Dev Scan Failed",
+        description: error.message.includes("403")
+          ? "Dev endpoint only available when LOG_LEVEL=DEBUG"
+          : error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const isDev = import.meta.env.DEV;
 
   return (
     <div className="space-y-6 md:space-y-8 animate-fade-in">
@@ -424,15 +546,30 @@ export default function Scan() {
           </div>
         </div>
 
-        <Button
-          size="lg"
-          disabled={selectedLibraries.length === 0 || isScanning}
-          onClick={handleStartScan}
-          className="w-full sm:w-auto"
-        >
-          <Search className="w-4 h-4 mr-2" />
-          {isScanning ? "Scanning..." : "Start Scan"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="lg"
+            disabled={selectedLibraries.length === 0 || isScanning}
+            onClick={handleStartScan}
+            className="w-full sm:w-auto"
+          >
+            <Search className="w-4 h-4 mr-2" />
+            {isScanning ? "Scanning..." : "Start Scan"}
+          </Button>
+
+          {isDev && (
+            <Button
+              size="lg"
+              variant="outline"
+              disabled={devScanMutation.isPending}
+              onClick={() => devScanMutation.mutate()}
+              className="w-full sm:w-auto border-dashed"
+            >
+              <FlaskConical className="w-4 h-4 mr-2" />
+              {devScanMutation.isPending ? "Scanning..." : "Dev: Disk Scan"}
+            </Button>
+          )}
+        </div>
       </Card>
 
       {/* Results */}
@@ -448,7 +585,9 @@ export default function Scan() {
               key={dupSet.id}
               dupSet={dupSet}
               onDelete={handleDelete}
+              onToggleKeep={handleToggleKeep}
               isDeleting={deleteMutation.isPending}
+              isTogglingFile={togglingFileId}
             />
           ))
         )}

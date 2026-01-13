@@ -11,6 +11,18 @@
   .bg-destructive {
     background-color: hsl(var(--destructive));
   }
+  .bg-destructive-light {
+    background-color: hsl(var(--destructive-light));
+  }
+  .bg-destructive-hover {
+    background-color: hsl(var(--destructive-hover));
+  }
+  .hover\:bg-destructive-hover:hover {
+    background-color: hsl(var(--destructive-hover));
+  }
+  .border-destructive-border {
+    border-color: hsl(var(--destructive-border));
+  }
   .bg-success {
     background-color: hsl(var(--success));
   }
@@ -180,11 +192,12 @@ All colors MUST be HSL.
     --warning-light: 45 50% 20%;
     --warning-border: 45 50% 30%;
 
-    /* Destructive red - muted for dark mode */
-    --destructive: 0 65% 45%;
+    /* Destructive red - dark muted for dark mode (easier on eyes) */
+    --destructive: 0 50% 25%;
     --destructive-foreground: 0 0% 100%;
     --destructive-light: 0 50% 20%;
-    --destructive-border: 0 50% 30%;
+    --destructive-border: 0 50% 35%;
+    --destructive-hover: 0 50% 30%;
 
     --border: 0 0% 25%;
     --input: 0 0% 25%;

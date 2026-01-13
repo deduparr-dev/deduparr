@@ -260,6 +260,31 @@ async function putAPI<T, U>(endpoint: string, data: U): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function patchAPI<T, U>(endpoint: string, data: U): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`API request failed: ${error || response.statusText}`);
+  }
+
+  return response.json() as Promise<T>;
+}
+
+export interface UpdateFileKeepResponse {
+  success: boolean;
+  message: string;
+  file_id: number;
+  keep: boolean;
+  space_to_reclaim: number;
+}
+
 export const statsAPI = {
   getDashboardStats: (): Promise<DashboardStats> =>
     fetchAPI<DashboardStats>("/api/stats/dashboard"),
@@ -274,6 +299,12 @@ export const statsAPI = {
 export const scanAPI = {
   startScan: (request: ScanRequest) =>
     postAPI<ScanResponse, ScanRequest>("/api/scan/start", request),
+  // Dev-only: Direct disk scan that creates real DB records (only works when LOG_LEVEL=DEBUG)
+  devDiskScan: (paths: string[] = ["/media/movies", "/media/tv"], mediaType = "movie") =>
+    postAPI<ScanResponse, { paths: string[]; media_type: string }>("/api/scan/dev/disk-scan", {
+      paths,
+      media_type: mediaType,
+    }),
   getDuplicates: (status?: string, mediaType?: string) => {
     const params = new URLSearchParams();
     if (status) params.append("status", status);
@@ -286,6 +317,11 @@ export const scanAPI = {
     postAPI<DeleteResponse, DeleteRequest>(`/api/scan/duplicates/${setId}/delete`, {
       dry_run: dryRun,
     }),
+  updateFileKeep: (setId: number, fileId: number, keep: boolean) =>
+    patchAPI<UpdateFileKeepResponse, { keep: boolean }>(
+      `/api/scan/duplicates/${setId}/files/${fileId}`,
+      { keep }
+    ),
 };
 
 export interface DeepScanSetting {

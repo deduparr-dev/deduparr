@@ -9,7 +9,8 @@ const labelVariants = cva(
 );
 
 interface LabelProps
-  extends React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root>,
+  extends
+    React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root>,
     VariantProps<typeof labelVariants> {
   ref?: React.Ref<React.ElementRef<typeof LabelPrimitive.Root>>;
 }

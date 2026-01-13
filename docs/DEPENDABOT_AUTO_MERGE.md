@@ -31,6 +31,9 @@ For auto-merge to work, you need to configure branch protection on `develop`:
    - ✅ **Require status checks to pass before merging**
      - Enable: `Backend Lint & Test`
      - Enable: `Frontend Lint & Build`
+     - Enable: `Docker Build Test`
+     - Enable: `NPM Security Audit`
+     - Enable: `Python Security Audit`
    - ✅ **Require branches to be up to date before merging**
    - ✅ **Allow auto-merge**
 

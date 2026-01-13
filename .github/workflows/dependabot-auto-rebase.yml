@@ -1,0 +1,26 @@
+name: Dependabot Auto-Rebase
+
+on:
+  # Manual trigger only
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  rebase-dependabot-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Rebase outdated Dependabot PRs
+        run: |
+          # Get all open Dependabot PRs targeting develop
+          prs=$(gh pr list --author "dependabot[bot]" --base develop --state open --json number --jq '.[].number')
+          
+          for pr in $prs; do
+            echo "Commenting @dependabot rebase on PR #$pr"
+            gh pr comment "$pr" --body "@dependabot rebase" || echo "Failed to comment on PR #$pr"
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}

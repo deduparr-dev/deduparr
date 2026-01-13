@@ -205,6 +205,15 @@ npm test
 - [ ] Commit messages follow convention
 - [ ] Branch is up-to-date with `main`
 
+## Automated Dependency Updates
+
+Deduparr uses Dependabot to keep dependencies up to date. The workflow automatically:
+- **Auto-approves** patch and minor version updates
+- **Auto-merges** after CI passes
+- **Requires manual review** for major version updates
+
+See [docs/DEPENDABOT_AUTO_MERGE.md](docs/DEPENDABOT_AUTO_MERGE.md) for details.
+
 ## Feature Requests & Bug Reports
 
 - Use [GitHub Issues](https://github.com/deduparr-dev/deduparr/issues)

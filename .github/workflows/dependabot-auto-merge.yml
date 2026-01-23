@@ -14,46 +14,53 @@ jobs:
     runs-on: ubuntu-latest
     if: github.actor == 'dependabot[bot]'
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
-
       - name: Fetch Dependabot metadata
         id: metadata
         uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Check if PR is behind base branch
-        id: check-behind
+      - name: Check PR mergeable status
+        id: check-mergeable
         run: |
-          git fetch origin ${{ github.event.pull_request.base.ref }}
-          BEHIND=$(git rev-list --count HEAD..origin/${{ github.event.pull_request.base.ref }})
-          echo "behind=$BEHIND" >> $GITHUB_OUTPUT
-          if [ "$BEHIND" -gt 0 ]; then
-            echo "PR is $BEHIND commits behind base branch"
-          else
-            echo "PR is up to date with base branch"
-          fi
+          # Wait a moment for GitHub to calculate mergeable status
+          sleep 20
+          
+          MERGEABLE=$(gh pr view "$PR_URL" --json mergeable,mergeStateStatus -q '.mergeable')
+          MERGE_STATE=$(gh pr view "$PR_URL" --json mergeable,mergeStateStatus -q '.mergeStateStatus')
+          
+          echo "mergeable=$MERGEABLE" >> $GITHUB_OUTPUT
+          echo "merge_state=$MERGE_STATE" >> $GITHUB_OUTPUT
+          echo "PR mergeable: $MERGEABLE, state: $MERGE_STATE"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update branch if behind
-        if: steps.check-behind.outputs.behind != '0'
+      - name: Handle conflicts - ask Dependabot to recreate
+        if: steps.check-mergeable.outputs.mergeable == 'CONFLICTING'
         run: |
-          echo "Attempting to update PR branch..."
-          gh pr update-branch "$PR_URL" --rebase || {
-            echo "::warning::Could not auto-rebase PR. May have conflicts requiring manual resolution."
-            exit 0
-          }
+          echo "PR has conflicts. Asking Dependabot to recreate..."
+          gh pr comment "$PR_URL" --body "@dependabot recreate"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update branch if behind (no conflicts)
+        if: |
+          steps.check-mergeable.outputs.mergeable == 'MERGEABLE' &&
+          steps.check-mergeable.outputs.merge_state == 'BEHIND'
+        run: |
+          echo "PR is behind base branch. Asking Dependabot to rebase..."
+          gh pr comment "$PR_URL" --body "@dependabot rebase"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Auto-approve Dependabot PR
         if: |
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+          steps.check-mergeable.outputs.mergeable == 'MERGEABLE' &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
         run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -61,8 +68,9 @@ jobs:
 
       - name: Enable auto-merge for Dependabot PRs
         if: |
-          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+          steps.check-mergeable.outputs.mergeable == 'MERGEABLE' &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}

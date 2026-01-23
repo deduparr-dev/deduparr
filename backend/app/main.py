@@ -17,7 +17,6 @@ from app.services.scheduler import get_scheduler
 from app.services.security import SensitiveDataFilter
 from app.services.system_service import SystemService
 
-
 # Configure logging based on environment variable
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.DEBUG),

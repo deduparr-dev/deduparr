@@ -243,9 +243,7 @@ class EmailService:
             Server: {host}:{port}<br>
             Username: {user}
         </p>
-        """.format(
-            host=self.smtp_host, port=self.smtp_port, user=self.smtp_user
-        )
+        """.format(host=self.smtp_host, port=self.smtp_port, user=self.smtp_user)
 
         html_content = self._get_email_template(
             title="Test Email - SMTP Configuration Success",

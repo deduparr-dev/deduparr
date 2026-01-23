@@ -4,6 +4,9 @@ on:
   pull_request_target:
     branches: [develop]
     types: [opened, synchronize, reopened]
+  pull_request:
+    branches: [develop]
+    types: [opened, synchronize, reopened]
 
 permissions:
   pull-requests: write
@@ -12,7 +15,8 @@ permissions:
 jobs:
   dependabot:
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
+    # Check if PR author is dependabot (works for both trigger types)
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
@@ -24,7 +28,7 @@ jobs:
         id: check-mergeable
         run: |
           # Wait a moment for GitHub to calculate mergeable status
-          sleep 20
+          sleep 5
           
           MERGEABLE=$(gh pr view "$PR_URL" --json mergeable,mergeStateStatus -q '.mergeable')
           MERGE_STATE=$(gh pr view "$PR_URL" --json mergeable,mergeStateStatus -q '.mergeStateStatus')

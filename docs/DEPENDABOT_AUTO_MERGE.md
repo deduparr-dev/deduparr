@@ -8,12 +8,33 @@ The [dependabot-auto-merge.yml](../.github/workflows/dependabot-auto-merge.yml) 
 
 1. **Triggers** on pull requests to the `develop` branch (using `pull_request_target` for security)
 2. **Filters** to only run for Dependabot PRs (`github.actor == 'dependabot[bot]'`)
-3. **Checks if PR is behind** the base branch and auto-rebases if needed
-4. **Fetches metadata** using `dependabot/fetch-metadata@v2` to determine update type
+3. **Fetches metadata** using `dependabot/fetch-metadata@v2` to determine update type
+4. **Checks PR mergeable status** via GitHub API:
+   - **CONFLICTING**: Comments `@dependabot recreate` to get a fresh PR
+   - **BEHIND**: Comments `@dependabot rebase` to update the branch
+   - **MERGEABLE**: Proceeds with approval and auto-merge
 5. **Auto-approves** patch and minor version updates
 6. **Enables auto-merge** with squash merge strategy
 
-Additionally, `dependabot.yml` is configured with `rebase-strategy: auto` so Dependabot itself keeps PRs up to date when the base branch changes.
+### Automatic Conflict Resolution
+
+When multiple Dependabot PRs touch the same file (e.g., `requirements.txt`), the first one merges and the others get conflicts. The workflow automatically handles this:
+
+```
+PR #1 merges successfully
+        ↓
+PR #2 now has conflicts
+        ↓
+Workflow detects CONFLICTING status
+        ↓
+Comments "@dependabot recreate"
+        ↓
+Dependabot closes old PR and creates fresh one
+        ↓
+New PR triggers workflow → auto-merges
+```
+
+No manual intervention required!
 
 ## What Gets Auto-Merged
 

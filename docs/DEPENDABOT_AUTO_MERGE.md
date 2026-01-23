@@ -6,11 +6,14 @@ This project uses GitHub Actions to automatically approve and merge Dependabot p
 
 The [dependabot-auto-merge.yml](../.github/workflows/dependabot-auto-merge.yml) workflow:
 
-1. **Triggers** on pull requests to the `develop` branch
+1. **Triggers** on pull requests to the `develop` branch (using `pull_request_target` for security)
 2. **Filters** to only run for Dependabot PRs (`github.actor == 'dependabot[bot]'`)
-3. **Fetches metadata** using `dependabot/fetch-metadata@v2` to determine update type
-4. **Auto-approves** patch and minor version updates
-5. **Enables auto-merge** with squash merge strategy
+3. **Checks if PR is behind** the base branch and auto-rebases if needed
+4. **Fetches metadata** using `dependabot/fetch-metadata@v2` to determine update type
+5. **Auto-approves** patch and minor version updates
+6. **Enables auto-merge** with squash merge strategy
+
+Additionally, `dependabot.yml` is configured with `rebase-strategy: auto` so Dependabot itself keeps PRs up to date when the base branch changes.
 
 ## What Gets Auto-Merged
 
@@ -22,11 +25,16 @@ The workflow automatically approves and merges:
 
 ## Requirements
 
+### Repository Settings
+
+1. **Settings → Actions → General → Workflow permissions**:
+   - ✅ **Allow GitHub Actions to create and approve pull requests**
+
 ### Branch Protection Rules
 
 For auto-merge to work, you need to configure branch protection on `develop`:
 
-1. Go to **Settings → Branches → Branch protection rules**
+1. Go to **Settings → Branches → Branch protection rules** (or **Settings → Rules → Rulesets**)
 2. Add rule for `develop` branch with:
    - ✅ **Require status checks to pass before merging**
      - Enable: `Backend Lint & Test`
@@ -41,7 +49,7 @@ For auto-merge to work, you need to configure branch protection on `develop`:
 
 The workflow requires these permissions (already configured in the workflow file):
 - `pull-requests: write` - To approve PRs
-- `contents: write` - To enable auto-merge
+- `contents: write` - To enable auto-merge and update branches
 
 ## Testing the Workflow
 
@@ -56,7 +64,7 @@ To test the workflow:
 
 ### Change Auto-Merge Strategy
 
-To use a different merge strategy, edit line 35 in the workflow:
+To use a different merge strategy, edit the workflow:
 ```yaml
 run: gh pr merge --auto --squash "$PR_URL"  # Change --squash to --merge or --rebase
 ```

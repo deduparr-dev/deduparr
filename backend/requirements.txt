@@ -24,7 +24,7 @@ python-dotenv==1.2.1
 pyyaml==6.0.3
 python-multipart==0.0.22
 itsdangerous==2.2.0  # For token encryption
-psutil==7.2.1  # For system information
+psutil==7.2.2  # For system information
 
 # Development
 pytest==9.0.2

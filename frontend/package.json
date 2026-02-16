@@ -63,7 +63,7 @@
     "vaul": "1.1.2"
   },
   "devDependencies": {
-    "@eslint/js": "9.39.2",
+    "@eslint/js": "10.0.1",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/node": "25.2.3",
     "@types/react": "^19.2.14",

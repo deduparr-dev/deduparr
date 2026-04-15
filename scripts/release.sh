@@ -58,7 +58,7 @@ sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
 # Update package-lock.json
 echo "Updating frontend/package-lock.json"
 cd frontend
-npm install --package-lock-only
+npx --yes npm@10.8.2 install --package-lock-only
 cd ..
 
 # Commit version changes

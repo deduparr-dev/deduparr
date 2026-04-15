@@ -101,7 +101,7 @@ EXPOSE 8655
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8655/api/health || exit 1
+    CMD curl -f http://localhost:8655/health || exit 1
 
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

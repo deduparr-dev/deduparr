@@ -1,8 +1,8 @@
 # Core dependencies
-fastapi==0.135.3
+fastapi==0.136.0
 uvicorn[standard]==0.44.0
-pydantic==2.13.0
-pydantic-settings==2.13.1
+pydantic==2.13.3
+pydantic-settings==2.14.0
 
 # Database
 sqlalchemy==2.0.49

@@ -27,7 +27,7 @@ itsdangerous==2.2.0  # For token encryption
 psutil==7.2.2  # For system information
 
 # Development
-pytest==9.0.3
+pytest==9.1.0
 pytest-asyncio==1.4.0
 pytest-cov==7.1.0
 black==26.5.1

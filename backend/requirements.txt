@@ -1,5 +1,5 @@
 # Core dependencies
-fastapi==0.138.0
+fastapi==0.138.2
 uvicorn[standard]==0.49.0
 pydantic==2.13.4
 pydantic-settings==2.14.2

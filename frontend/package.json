@@ -23,7 +23,7 @@
     "quality": "npm run type-check && npm run lint && npm run format:check"
   },
   "dependencies": {
-    "@radix-ui/react-alert-dialog": "1.1.19",
+    "@radix-ui/react-alert-dialog": "1.1.20",
     "@radix-ui/react-aspect-ratio": "1.1.11",
     "@radix-ui/react-avatar": "1.2.2",
     "@radix-ui/react-checkbox": "1.3.7",

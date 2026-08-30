@@ -132,7 +132,7 @@ docker logs deduparr-frontend-dev
 docker logs deduparr-backend-dev
 
 # Rebuild if needed
-docker compose -f docker-compose.dev.yml up --build -d
+systemctl --user start deduparr-frontend.service
 ```
 
 ### Access Points

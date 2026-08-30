@@ -5,12 +5,9 @@ set -e
 MODE="prod"
 if [ "$1" == "--dev" ]; then
     MODE="dev"
-    COMPOSE_FILE="docker-compose.dev.yml"
-    PORT_PATTERN="300[0-9]"
 elif [ "$1" == "--prod" ] || [ -z "$1" ]; then
     MODE="prod"
     COMPOSE_FILE="docker-compose.yml"
-    PORT_PATTERN="8655"
     IMAGE_TAG="ghcr.io/deduparr-dev/deduparr:latest"
 else
     echo "❌ Invalid argument. Use --dev or --prod (default)"
@@ -20,18 +17,50 @@ fi
 # Change to project directory
 cd /workspaces/deduparr
 
-echo "🔄 Starting Docker rebuild process (${MODE} mode)..."
+echo "🔄 Starting rebuild process (${MODE} mode)..."
 echo ""
 
-# 1. Stop and remove containers using the relevant ports
-echo "🔍 Checking for containers using ports (${PORT_PATTERN})..."
 if [ "$MODE" == "dev" ]; then
-    # For dev mode, check ports 3000 and 3001
-    CONTAINERS=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep -E "300[0-9]" | awk '{print $1}' || true)
-else
-    # For prod mode, check port 8655
-    CONTAINERS=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep "8655" | awk '{print $1}' || true)
+    # Development runs under Podman quadlets (see quadlet/README.md), so the
+    # lifecycle is systemd units rather than compose.
+
+    echo "🛑 Stopping development services..."
+    systemctl --user stop deduparr-frontend.service deduparr-backend.service 2>/dev/null || true
+    podman pod rm -f deduparr-dev 2>/dev/null || true
+    echo "✅ Services stopped"
+    echo ""
+
+    echo "🗑️  Removing database and encryption key..."
+    rm -f config/deduparr.db config/deduparr.db-shm config/deduparr.db-wal config/.encryption_key
+    echo "✅ Database and encryption key removed"
+    echo ""
+
+    echo "🧹 Removing development images..."
+    podman rmi -f localhost/deduparr-backend-dev:latest \
+                  localhost/deduparr-frontend-dev:latest 2>/dev/null || true
+    echo "✅ Images removed"
+    echo ""
+
+    # Images rebuild automatically on start via the .build units.
+    echo "🚀 Starting development pod (rebuilds images)..."
+    systemctl --user daemon-reload
+    systemctl --user start deduparr-frontend.service
+    echo "✅ Pod started"
+    echo ""
+
+    echo "✨ Rebuild complete (dev mode)!"
+    echo ""
+    echo "📊 View logs with: journalctl --user -u deduparr-frontend.service -f"
+    echo "🌐 Frontend: http://localhost:3000"
+    echo "🔧 Backend:  http://localhost:3001"
+    exit 0
 fi
+
+# ---------------------------------------------------------------- production
+
+# 1. Stop and remove containers using the relevant ports
+echo "🔍 Checking for containers using port 8655..."
+CONTAINERS=$(docker ps -a --format "{{.ID}} {{.Ports}}" | grep "8655" | awk '{print $1}' || true)
 
 if [ -n "$CONTAINERS" ]; then
     echo "🛑 Stopping and removing containers..."
@@ -62,11 +91,7 @@ echo ""
 
 # 5. Rebuild without cache
 echo "🔨 Building Docker image (no cache)..."
-if [ "$MODE" == "dev" ]; then
-    docker compose -f ${COMPOSE_FILE} build --no-cache
-else
-    docker build --no-cache -t ${IMAGE_TAG} .
-fi
+docker build --no-cache -t ${IMAGE_TAG} .
 echo "✅ Build complete"
 echo ""
 
@@ -76,12 +101,7 @@ docker compose -f ${COMPOSE_FILE} up -d
 echo "✅ Containers started"
 echo ""
 
-echo "✨ Docker rebuild complete (${MODE} mode)!"
+echo "✨ Docker rebuild complete (prod mode)!"
 echo ""
 echo "📊 View logs with: docker compose -f ${COMPOSE_FILE} logs -f"
-if [ "$MODE" == "dev" ]; then
-    echo "🌐 Frontend: http://localhost:3000"
-    echo "🔧 Backend:  http://localhost:3001"
-else
-    echo "🌐 Setup at: http://127.0.0.1:8655/setup"
-fi
+echo "🌐 Setup at: http://127.0.0.1:8655/setup"

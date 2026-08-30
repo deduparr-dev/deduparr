@@ -48,14 +48,14 @@ This script handles:
 If you only need to start/stop without rebuilding:
 
 ```bash
-# Start development environment
-docker-compose -f docker-compose.dev.yml up -d
+# Start development environment (Podman quadlets)
+systemctl --user start deduparr-frontend.service
 
 # View logs
-docker-compose -f docker-compose.dev.yml logs -f
+journalctl --user -u deduparr-frontend.service -f
 
 # Stop everything
-docker-compose -f docker-compose.dev.yml down
+systemctl --user stop deduparr-frontend.service deduparr-backend.service
 ```
 
 ### Production Without Rebuild
@@ -191,7 +191,7 @@ The tutorial recommends using the **Docker extension for VS Code**:
 - Verify all dependencies are available
 
 **"Container exits immediately"**
-- Check logs: `docker compose logs` (prod) or `docker compose -f docker-compose.dev.yml logs` (dev)
+- Check logs: `docker compose logs` (prod) or `journalctl --user -u deduparr-frontend.service` (dev)
 - Likely an application error in the logs
 
 ---

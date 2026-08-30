@@ -167,10 +167,14 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for developmen
 ```bash
 git clone https://github.com/deduparr-dev/deduparr.git
 cd deduparr
-docker-compose -f docker-compose.dev.yml up
+ln -sf "$PWD"/quadlet/*.{pod,build,container} ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start deduparr-frontend.service
 ```
 
 Frontend: http://localhost:3000 | Backend: http://localhost:3001
+
+See [quadlet/README.md](quadlet/README.md) for requirements and day-to-day commands.
 
 ---
 

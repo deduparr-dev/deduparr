@@ -1,0 +1,16 @@
+# Development pod for Deduparr.
+#
+# Containers in a pod share one network namespace, so the frontend reaches the
+# backend on 127.0.0.1:3001 — no service-name DNS needed. Ports are published
+# once here, at the pod level, rather than per container.
+
+[Unit]
+Description=Deduparr development pod
+
+[Pod]
+PodName=deduparr-dev
+PublishPort=3000:3000
+PublishPort=3001:3001
+
+[Install]
+WantedBy=default.target

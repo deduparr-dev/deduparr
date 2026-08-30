@@ -1,0 +1,11 @@
+# Builds the backend development image from backend/Dockerfile.dev.
+# Requires Podman 5.0 or newer (.build quadlets).
+#
+# REPO_ROOT: adjust File= if the checkout is not at /workspaces/deduparr.
+
+[Unit]
+Description=Build Deduparr backend development image
+
+[Build]
+ImageTag=localhost/deduparr-backend-dev:latest
+File=/workspaces/deduparr/backend/Dockerfile.dev

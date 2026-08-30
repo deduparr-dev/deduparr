@@ -46,7 +46,7 @@ Welcome to the Deduparr documentation! This directory contains technical guides 
 
 ### For DevOps
 - [Docker Compose](../docker-compose.yml) - Production deployment
-- [Docker Compose Dev](../docker-compose.dev.yml) - Development environment
+- [Podman quadlets](../quadlet/README.md) - Development environment
 
 ## 🔗 External Resources
 

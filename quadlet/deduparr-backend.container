@@ -1,0 +1,30 @@
+# Deduparr backend, development.
+#
+# REPO_ROOT: the Volume= source paths assume the checkout is at
+# /workspaces/deduparr. Adjust all three if yours differs.
+
+[Unit]
+Description=Deduparr backend (development)
+
+[Container]
+ContainerName=deduparr-backend-dev
+Pod=deduparr-dev.pod
+Image=deduparr-backend.build
+
+# Live-reload the source; :Z relabels for SELinux, harmless without it.
+Volume=/workspaces/deduparr/backend:/app:Z
+Volume=/workspaces/deduparr/config:/config:Z
+# Persists the encryption key, without which stored tokens stop decrypting.
+Volume=/workspaces/deduparr/data:/app/data:Z
+
+Environment=DATABASE_TYPE=sqlite
+Environment=DATABASE_URL=sqlite:////config/deduparr.db
+Environment=ENABLE_SCHEDULED_SCANS=yes
+Environment=SCAN_INTERVAL_HOURS=1
+Environment=LOG_LEVEL=DEBUG
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

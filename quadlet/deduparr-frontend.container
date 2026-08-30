@@ -1,0 +1,31 @@
+# Deduparr frontend, development.
+#
+# REPO_ROOT: the Volume= source path assumes the checkout is at
+# /workspaces/deduparr. Adjust if yours differs.
+
+[Unit]
+Description=Deduparr frontend (development)
+# The dev server proxies /api to the backend, so start it after.
+After=deduparr-backend.service
+Requires=deduparr-backend.service
+
+[Container]
+ContainerName=deduparr-frontend-dev
+Pod=deduparr-dev.pod
+Image=deduparr-frontend.build
+
+Volume=/workspaces/deduparr/frontend:/app:Z
+# Anonymous volume keeps the image's node_modules from being shadowed by the
+# bind mount above.
+Volume=/app/node_modules
+
+# Sharing the pod's network namespace, the backend is on localhost - not a
+# service name as it was under Compose.
+Environment=VITE_API_URL=http://localhost:3001
+Environment=VITE_PROXY_TARGET=http://127.0.0.1:3001
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

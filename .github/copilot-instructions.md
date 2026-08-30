@@ -259,7 +259,7 @@ Backend runs via `uvicorn` with hot reload. Frontend proxies API requests to `ht
 
 ```bash
 # Full stack (separate containers for hot reload)
-docker-compose -f docker-compose.dev.yml up
+systemctl --user start deduparr-frontend.service   # Podman quadlets, see quadlet/
 
 # Production build test
 docker build -t deduparr:test .

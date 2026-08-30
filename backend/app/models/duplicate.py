@@ -37,6 +37,26 @@ class MediaType(str, enum.Enum):
     EPISODE = "episode"
 
 
+def encode_inode(inode):
+    """
+    Encode a filesystem inode number for database storage.
+
+    Inodes are stored as strings because some filesystems (notably mergerfs)
+    report values above SQLite's signed 64-bit INTEGER range.
+    """
+    return None if inode is None else str(inode)
+
+
+def decode_inode(inode):
+    """
+    Decode a stored inode number back to an int.
+
+    Accepts int as well as str so rows written before inodes were stored as
+    strings continue to load.
+    """
+    return None if inode is None else int(inode)
+
+
 class DuplicateSet(Base):
     """Represents a set of duplicate media items"""
 
@@ -87,7 +107,10 @@ class DuplicateFile(Base):
     keep = Column(Boolean, default=False, nullable=False)
 
     # Hardlink detection fields
-    inode = Column(BigInteger, nullable=True, index=True)
+    # Stored as a string: some filesystems (e.g. mergerfs) report inode numbers
+    # above SQLite's signed 64-bit INTEGER range, which the sqlite3 driver refuses
+    # to bind ("Python int too large to convert to SQLite INTEGER").
+    inode = Column(String(32), nullable=True, index=True)
     is_hardlink = Column(Boolean, default=False, nullable=False)
 
     # File metadata stored as JSON/JSONB (resolution, codecs, etc.)

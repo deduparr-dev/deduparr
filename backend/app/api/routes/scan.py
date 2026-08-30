@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db
 from app.models import Config, DuplicateSet, ScoringRule
-from app.models.duplicate import DuplicateStatus, MediaType
+from app.models.duplicate import DuplicateStatus, MediaType, encode_inode
 from app.services.deletion_pipeline import DeletionPipeline
 from app.services.disk_scan_service import (
     DiskScanConfig,
@@ -1011,7 +1011,7 @@ async def dev_disk_scan(
                         "audio_codec": metadata.audio_codec,
                     }
                 ),
-                inode=metadata.inode,
+                inode=encode_inode(metadata.inode),
                 is_hardlink=metadata.is_hardlink,
             )
             db.add(dup_file)

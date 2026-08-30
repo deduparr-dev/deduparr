@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import DuplicateFile, DuplicateSet, MediaType
+from app.models.duplicate import decode_inode
 from app.services.scan_helpers import (
     cleanup_stale_set,
     collect_media_metadata,
@@ -322,12 +323,81 @@ async def test_create_duplicate_set(test_db: AsyncSession):
     # Verify files were created with proper metadata
     file1 = next(f for f in dup_set.files if f.file_path == "/media/movie1.mkv")
     assert file1.file_size == 1000000000
-    assert file1.inode == 12345
+    assert file1.inode == "12345"
     assert file1.is_hardlink is False
 
     file_metadata = json.loads(file1.file_metadata)
     assert file_metadata["resolution"] == "1080p"
     assert file_metadata["video_codec"] == "h264"
+
+
+@pytest.mark.asyncio
+async def test_create_duplicate_set_with_large_inodes(test_db: AsyncSession):
+    """
+    Inodes above SQLite's signed 64-bit INTEGER range must persist.
+
+    Filesystems such as mergerfs report inode numbers larger than 2**63-1.
+    Binding those as integers raises "Python int too large to convert to
+    SQLite INTEGER", which aborted the whole scan.
+    """
+    large_inode_a = 14141372941677636890
+    large_inode_b = 11140823705740417837
+    assert large_inode_a > 2**63 - 1
+
+    files = [
+        MediaMetadata(
+            file_path="/movies/9 Songs (2004) a/9 Songs (2004).mp4",
+            file_size=1000000000,
+            resolution="1080p",
+            video_codec="h264",
+            audio_codec="aac",
+            bitrate=5000,
+            width=1920,
+            height=1080,
+            inode=large_inode_a,
+            is_hardlink=False,
+        ),
+        MediaMetadata(
+            file_path="/movies/9 Songs (2004)/9 Songs (2004).mp4",
+            file_size=2000000000,
+            resolution="2160p",
+            video_codec="hevc",
+            audio_codec="aac",
+            bitrate=15000,
+            width=3840,
+            height=2160,
+            inode=large_inode_b,
+            is_hardlink=False,
+        ),
+    ]
+
+    await create_duplicate_set(
+        test_db,
+        plex_item_id="9songs",
+        title="9 Songs",
+        media_type=MediaType.MOVIE,
+        files_metadata=files,
+        scoring_engine=ScoringEngine(),
+        custom_rules=[],
+        logger_inst=Mock(),
+    )
+
+    result = await test_db.execute(
+        select(DuplicateSet)
+        .options(selectinload(DuplicateSet.files))
+        .where(DuplicateSet.plex_item_id == "9songs")
+    )
+    dup_set = result.scalar_one()
+
+    stored = {f.file_path: f.inode for f in dup_set.files}
+    assert stored["/movies/9 Songs (2004) a/9 Songs (2004).mp4"] == str(large_inode_a)
+    assert stored["/movies/9 Songs (2004)/9 Songs (2004).mp4"] == str(large_inode_b)
+
+    # Values round-trip back to the original ints without loss of precision
+    assert (
+        decode_inode(stored["/movies/9 Songs (2004) a/9 Songs (2004).mp4"])
+        == large_inode_a
+    )
 
 
 @pytest.mark.asyncio

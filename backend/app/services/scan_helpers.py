@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models import DuplicateFile, DuplicateSet
-from app.models.duplicate import DuplicateStatus, MediaType
+from app.models.duplicate import DuplicateStatus, MediaType, decode_inode, encode_inode
 from app.services.plex_service import is_sample_file
 from app.services.scoring_engine import MediaMetadata, ScoringEngine
 
@@ -99,7 +99,7 @@ async def verify_and_update_existing_set(
                         score=score,
                         keep=keep,
                         file_metadata=json.dumps(file_metadata_dict),
-                        inode=metadata.inode,
+                        inode=encode_inode(metadata.inode),
                         is_hardlink=metadata.is_hardlink,
                     )
                     db.add(new_file)
@@ -170,7 +170,7 @@ async def verify_and_update_existing_set(
                     if file.file_metadata
                     else None
                 ),
-                inode=file.inode,
+                inode=decode_inode(file.inode),
                 is_hardlink=file.is_hardlink,
             )
             all_metadata.append((file, metadata))
@@ -438,7 +438,7 @@ async def create_duplicate_set(
             score=score,
             keep=keep,
             file_metadata=json.dumps(file_metadata_dict),
-            inode=metadata.inode,
+            inode=encode_inode(metadata.inode),
             is_hardlink=metadata.is_hardlink,
         )
         db.add(dup_file)

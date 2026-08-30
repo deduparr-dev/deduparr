@@ -40,12 +40,65 @@ interface SelectedLibrary {
 }
 
 type WizardStep =
-  | "welcome"
-  | "plex-auth"
-  | "plex-server"
-  | "libraries"
-  | "required-services"
-  | "complete";
+  "welcome" | "plex-auth" | "plex-server" | "libraries" | "required-services" | "complete";
+
+function ProgressIndicator({ currentStep }: { currentStep: WizardStep }) {
+  const steps = ["plex-auth", "plex-server", "libraries", "required-services"];
+  const currentIndex = steps.indexOf(currentStep);
+
+  if (currentStep === "welcome" || currentStep === "complete") return null;
+
+  return (
+    <div className="mb-8 flex items-center justify-center gap-2">
+      {steps.map((step, index) => (
+        <div key={step} className="flex items-center gap-2">
+          <div
+            className={`w-3 h-3 rounded-full transition-colors ${
+              index <= currentIndex ? "bg-primary" : "bg-border"
+            }`}
+          />
+          {index < steps.length - 1 && <div className="w-8 h-1 bg-border rounded" />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TestResultDisplay({ result }: { result?: ConnectionTestResult }) {
+  if (!result) return null;
+
+  return (
+    <div
+      className={`mt-3 p-3 rounded-lg border flex items-start gap-2 ${
+        result.success ? "bg-card border-border" : "bg-destructive-light border-destructive-border"
+      }`}
+    >
+      {result.success ? (
+        <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
+      ) : (
+        <X className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+      )}
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium">
+          {result.success ? "Connection successful" : "Connection failed"}
+        </p>
+        {result.error && <p className="text-xs text-muted-foreground mt-1">{result.error}</p>}
+        {result.username && (
+          <p className="text-xs text-muted-foreground mt-1">User: {result.username}</p>
+        )}
+        {result.email && (
+          <p className="text-xs text-muted-foreground mt-1">Email: {result.email}</p>
+        )}
+        {result.server_name && (
+          <p className="text-xs text-muted-foreground mt-1">Server: {result.server_name}</p>
+        )}
+        {result.version && (
+          <p className="text-xs text-muted-foreground mt-1">Version: {result.version}</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function SetupWizard() {
   const navigate = useNavigate();
@@ -296,71 +349,10 @@ export default function SetupWizard() {
     });
   }
 
-  function ProgressIndicator() {
-    const steps = ["plex-auth", "plex-server", "libraries", "required-services"];
-    const currentIndex = steps.indexOf(currentStep);
-
-    if (currentStep === "welcome" || currentStep === "complete") return null;
-
-    return (
-      <div className="mb-8 flex items-center justify-center gap-2">
-        {steps.map((step, index) => (
-          <div key={step} className="flex items-center gap-2">
-            <div
-              className={`w-3 h-3 rounded-full transition-colors ${
-                index <= currentIndex ? "bg-primary" : "bg-border"
-              }`}
-            />
-            {index < steps.length - 1 && <div className="w-8 h-1 bg-border rounded" />}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  function TestResultDisplay({ service }: { service: string }) {
-    const result = testResults[service];
-    if (!result) return null;
-
-    return (
-      <div
-        className={`mt-3 p-3 rounded-lg border flex items-start gap-2 ${
-          result.success
-            ? "bg-card border-border"
-            : "bg-destructive-light border-destructive-border"
-        }`}
-      >
-        {result.success ? (
-          <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
-        ) : (
-          <X className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-        )}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium">
-            {result.success ? "Connection successful" : "Connection failed"}
-          </p>
-          {result.error && <p className="text-xs text-muted-foreground mt-1">{result.error}</p>}
-          {result.username && (
-            <p className="text-xs text-muted-foreground mt-1">User: {result.username}</p>
-          )}
-          {result.email && (
-            <p className="text-xs text-muted-foreground mt-1">Email: {result.email}</p>
-          )}
-          {result.server_name && (
-            <p className="text-xs text-muted-foreground mt-1">Server: {result.server_name}</p>
-          )}
-          {result.version && (
-            <p className="text-xs text-muted-foreground mt-1">Version: {result.version}</p>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-muted/30 to-muted/50 py-6 md:py-12 px-4">
       <div className="max-w-4xl mx-auto">
-        <ProgressIndicator />
+        <ProgressIndicator currentStep={currentStep} />
 
         {error && (
           <Card className="mb-4 md:mb-6 p-3 md:p-4 bg-destructive-light border-destructive-border">
@@ -495,7 +487,7 @@ export default function SetupWizard() {
                 </div>
               ) : (
                 <>
-                  <TestResultDisplay service="plex" />
+                  <TestResultDisplay result={testResults.plex} />
 
                   <div className="flex flex-col sm:flex-row gap-3">
                     <Button
@@ -704,7 +696,7 @@ export default function SetupWizard() {
                   >
                     Test Connection
                   </Button>
-                  <TestResultDisplay service="radarr" />
+                  <TestResultDisplay result={testResults.radarr} />
                 </div>
               </Card>
 
@@ -748,7 +740,7 @@ export default function SetupWizard() {
                   >
                     Test Connection
                   </Button>
-                  <TestResultDisplay service="sonarr" />
+                  <TestResultDisplay result={testResults.sonarr} />
                 </div>
               </Card>
 
@@ -804,7 +796,7 @@ export default function SetupWizard() {
                   >
                     Test Connection
                   </Button>
-                  <TestResultDisplay service="qbittorrent" />
+                  <TestResultDisplay result={testResults.qbittorrent} />
                 </div>
               </Card>
 

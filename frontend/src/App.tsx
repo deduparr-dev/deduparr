@@ -31,11 +31,22 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/setup" element={<SetupWizard />} />
+      {/*
+        Two <Route> elements for "/" cannot express this: React Router picks the
+        first match on equal specificity, so a later redirect route is
+        unreachable. The choice has to happen inside the one route's element.
+        While config is still loading, render the dashboard rather than
+        flashing the wizard.
+      */}
       <Route
         element={
-          <Layout>
-            <Dashboard />
-          </Layout>
+          !plexConfigured && config !== undefined ? (
+            <Navigate to="/setup" replace />
+          ) : (
+            <Layout>
+              <Dashboard />
+            </Layout>
+          )
         }
         path="/"
       />
@@ -63,10 +74,6 @@ function AppRoutes() {
         }
         path="/system"
       />
-      {/* Redirect to setup if not configured */}
-      {!plexConfigured && config !== undefined && (
-        <Route path="/" element={<Navigate to="/setup" replace />} />
-      )}
       {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
       <Route path="*" element={<NotFound />} />
     </Routes>

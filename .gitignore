@@ -120,3 +120,9 @@ media/
 # Docker development artifact - manifest.json gets synced from container volume mount
 # The real manifest.json is in the root directory
 backend/manifest.json
+
+# Playwright E2E
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/e2e/.tmp/

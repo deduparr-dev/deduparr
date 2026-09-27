@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.models import Config
 from app.models.scoring_rule import ScoringRule
+from app.services.arr_quality import PREFER_ARR_QUALITY_PROFILE_KEY
 
 
 class ScoringRuleImportData(TypedDict, total=False):
@@ -64,6 +65,34 @@ class DeepScanUpdate(BaseModel):
     enabled: bool
 
 
+class ArrQualityProfileSetting(BaseModel):
+    """Request/response model for the 'Prefer *arr quality profile' setting"""
+
+    enabled: bool
+
+
+async def _get_bool_config(db: AsyncSession, key: str) -> bool:
+    """Read a "true"/"false" config value, defaulting to False"""
+    result = await db.execute(select(Config).where(Config.key == key))
+    config = result.scalar_one_or_none()
+    return config.value == "true" if config else False
+
+
+async def _set_bool_config(db: AsyncSession, key: str, enabled: bool) -> None:
+    """Store a "true"/"false" config value"""
+    result = await db.execute(select(Config).where(Config.key == key))
+    config = result.scalar_one_or_none()
+
+    value = "true" if enabled else "false"
+
+    if config:
+        config.value = value
+    else:
+        db.add(Config(key=key, value=value))
+
+    await db.commit()
+
+
 @router.get("/", response_model=Dict[str, Optional[str]])
 async def get_all_config(db: AsyncSession = Depends(get_db)):
     """
@@ -82,11 +111,7 @@ async def get_deep_scan_setting(db: AsyncSession = Depends(get_db)):
     Returns:
         enabled: True if deep scan is enabled, False otherwise (default)
     """
-    result = await db.execute(select(Config).where(Config.key == "enable_deep_scan"))
-    config = result.scalar_one_or_none()
-
-    enabled = config.value == "true" if config else False
-
+    enabled = await _get_bool_config(db, "enable_deep_scan")
     return DeepScanResponse(enabled=enabled)
 
 
@@ -107,21 +132,43 @@ async def update_deep_scan_setting(
     Returns:
         enabled: Updated deep scan status
     """
-    result = await db.execute(select(Config).where(Config.key == "enable_deep_scan"))
-    config = result.scalar_one_or_none()
-
-    value = "true" if update.enabled else "false"
-
-    if config:
-        config.value = value
-    else:
-        config = Config(key="enable_deep_scan", value=value)
-        db.add(config)
-
-    await db.commit()
-    await db.refresh(config)
-
+    await _set_bool_config(db, "enable_deep_scan", update.enabled)
     return DeepScanResponse(enabled=update.enabled)
+
+
+@router.get("/arr-quality-profile", response_model=ArrQualityProfileSetting)
+async def get_arr_quality_profile_setting(db: AsyncSession = Depends(get_db)):
+    """
+    Get the 'Prefer *arr quality profile' setting
+
+    Returns:
+        enabled: True if the file to keep is chosen by the Radarr/Sonarr quality
+        profile, False if by Deduparr's score (default)
+    """
+    enabled = await _get_bool_config(db, PREFER_ARR_QUALITY_PROFILE_KEY)
+    return ArrQualityProfileSetting(enabled=enabled)
+
+
+@router.put("/arr-quality-profile", response_model=ArrQualityProfileSetting)
+async def update_arr_quality_profile_setting(
+    update: ArrQualityProfileSetting, db: AsyncSession = Depends(get_db)
+):
+    """
+    Update the 'Prefer *arr quality profile' setting
+
+    When enabled, the file to keep in a duplicate set is the one Radarr/Sonarr
+    ranks highest: quality position in the item's quality profile, then
+    revision (proper/repack), then custom format score. Sets that cannot be
+    fully evaluated by the *arr fall back to Deduparr's score.
+
+    Args:
+        update: Setting update
+
+    Returns:
+        enabled: Updated setting
+    """
+    await _set_bool_config(db, PREFER_ARR_QUALITY_PROFILE_KEY, update.enabled)
+    return ArrQualityProfileSetting(enabled=update.enabled)
 
 
 # Scheduler configuration endpoints (must come before /{key} catch-all route)

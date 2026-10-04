@@ -214,6 +214,31 @@ QualityTest.1080p.WEB-DL.mkv        25000   ✗       Medium quality
 QualityTest.720p.HDTV.mkv           15000   ✗       Lowest quality
 ```
 
+### Prefer *arr Quality Profile (optional)
+
+If you manage quality profiles and custom formats in Radarr/Sonarr (for example with Recyclarr and the TRaSH guides), Deduparr can keep the file your *arr would keep instead of relying on its own score. Enable **Settings → General → Scan Settings → Prefer *arr Quality Profile**, or use the API:
+
+```bash
+curl -X PUT http://localhost:3001/api/config/arr-quality-profile \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+Files are then ranked the way Radarr/Sonarr rank upgrades:
+
+1. **Quality** - Position in the movie's/series' quality profile (a quality group counts as one rank)
+2. **Revision** - Propers and repacks beat the original release
+3. **Custom format score** - As calculated by the quality profile
+4. **Deduparr score** - Only breaks ties
+
+Radarr is used for movies and Sonarr for episodes. Tracked files are read from `/api/v3/moviefile` or `/api/v3/episodefile`. Files the *arr does not track yet are evaluated with `/api/v3/manualimport` against the item's own quality profile. When the kept file is untracked, the deletion pipeline's existing rescan makes the *arr import it.
+
+If any file in a duplicate set cannot be evaluated (no matching movie/series, *arr not configured or unreachable, or a quality the *arr cannot parse), the **whole set** uses Deduparr's score and the reason is logged. The two scales are never mixed within one set. Files ranked by the *arr show their quality and custom format score in the duplicate set (`file_metadata.arr_quality` and `file_metadata.arr_custom_format_score`).
+
+The setting applies when a duplicate set is created, or re-ranked because its files changed. Existing pending sets and keep choices made by hand are left as they are.
+
+> **Paths:** Deduparr matches files by the path Plex reports, so Plex and Radarr/Sonarr must see your media under the same paths, as for deletion.
+
 ## Deletion Pipeline Stages
 
 When deletion is executed (non-dry-run), the following stages occur:

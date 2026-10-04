@@ -209,6 +209,21 @@ class ArrClient:
             raise ArrClientError("Expected dict but got list from command")
         return result
 
+    async def get_quality_profile(self, profile_id: int) -> dict[str, object]:
+        """
+        Get a quality profile
+
+        Args:
+            profile_id: Quality profile ID
+
+        Returns:
+            Quality profile with its ordered quality items and custom format scores
+        """
+        result = await self._request("GET", f"/qualityprofile/{profile_id}")
+        if isinstance(result, list):
+            raise ArrClientError("Expected dict but got list from qualityprofile")
+        return result
+
 
 class RadarrClient(ArrClient):
     """
@@ -300,6 +315,21 @@ class RadarrClient(ArrClient):
         result = await self._request("DELETE", f"/moviefile/{movie_file_id}")
         if isinstance(result, list):
             return {}
+        return result
+
+    async def get_movie_files(self, movie_id: int) -> list[dict[str, object]]:
+        """
+        Get movie files tracked for a movie
+
+        Args:
+            movie_id: Movie ID
+
+        Returns:
+            List of movie files
+        """
+        result = await self._request("GET", "/moviefile", params={"movieId": movie_id})
+        if isinstance(result, dict):
+            return [result]
         return result
 
     async def get_manual_import(

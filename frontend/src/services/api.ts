@@ -173,6 +173,7 @@ export interface PlexConfig {
   qbittorrent_username?: string;
   qbittorrent_password?: string;
   enable_deep_scan?: string; // "true" or "false" string from backend
+  prefer_arr_quality_profile?: string; // "true" or "false" string from backend
   email_notifications_enabled?: string; // "true" or "false" string from backend
   notification_email?: string;
   smtp_host?: string;
@@ -328,6 +329,10 @@ export interface DeepScanSetting {
   enabled: boolean;
 }
 
+export interface ArrQualityProfileSetting {
+  enabled: boolean;
+}
+
 export interface SchedulerConfig {
   enable_scheduled_scans: boolean;
   scan_schedule_mode: "daily" | "interval";
@@ -345,6 +350,14 @@ export const configAPI = {
   getDeepScanSetting: () => fetchAPI<DeepScanSetting>("/api/config/deep-scan"),
   updateDeepScanSetting: (enabled: boolean) =>
     putAPI<DeepScanSetting, { enabled: boolean }>("/api/config/deep-scan", { enabled }),
+
+  // Keep the file ranked highest by the Radarr/Sonarr quality profile
+  getArrQualityProfileSetting: () =>
+    fetchAPI<ArrQualityProfileSetting>("/api/config/arr-quality-profile"),
+  updateArrQualityProfileSetting: (enabled: boolean) =>
+    putAPI<ArrQualityProfileSetting, { enabled: boolean }>("/api/config/arr-quality-profile", {
+      enabled,
+    }),
 
   // Scheduler configuration
   getSchedulerConfig: () => fetchAPI<SchedulerConfig>("/api/config/scheduler"),

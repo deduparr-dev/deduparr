@@ -6,7 +6,7 @@ Extracts common logic from scan routes for processing duplicate media
 import json
 import logging
 import os
-from typing import List, Literal, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,12 +14,82 @@ from sqlalchemy.orm import selectinload
 
 from app.models import DuplicateFile, DuplicateSet
 from app.models.duplicate import DuplicateStatus, MediaType, decode_inode, encode_inode
+from app.services.arr_quality import (
+    ArrQuality,
+    ArrQualityRanker,
+    ArrQualityUnavailable,
+    RankedFile,
+    rank_by_arr_quality,
+)
 from app.services.plex_service import is_sample_file
 from app.services.scoring_engine import MediaMetadata, ScoringEngine
 
 logger = logging.getLogger(__name__)
 
 MediaItem = Literal["movie", "episode"]
+
+
+def build_file_metadata(
+    metadata: MediaMetadata, arr_quality: Optional[ArrQuality] = None
+) -> str:
+    """Serialize file metadata for storage on a DuplicateFile"""
+    file_metadata: Dict[str, str | int | None] = {
+        "resolution": metadata.resolution,
+        "video_codec": metadata.video_codec,
+        "audio_codec": metadata.audio_codec,
+        "bitrate": metadata.bitrate,
+        "width": metadata.width,
+        "height": metadata.height,
+    }
+    if arr_quality:
+        file_metadata["arr_quality"] = arr_quality.quality_name
+        file_metadata["arr_custom_format_score"] = arr_quality.custom_format_score
+    return json.dumps(file_metadata)
+
+
+async def rank_files(
+    files_metadata: List[MediaMetadata],
+    media_type: MediaType,
+    title: str,
+    scoring_engine: ScoringEngine,
+    custom_rules: List[dict],
+    logger_inst: logging.Logger,
+    arr_ranker: Optional[ArrQualityRanker] = None,
+) -> Tuple[List[RankedFile], Dict[str, ArrQuality]]:
+    """
+    Rank the files of a duplicate set and mark the one to keep
+
+    Uses Deduparr's score, or the Radarr/Sonarr quality profile when an
+    ArrQualityRanker is given and every file can be evaluated by the *arr.
+
+    Returns:
+        Tuple of (ranked files, ArrQuality per file path - empty if not used)
+    """
+    ranked = scoring_engine.rank_duplicates(files_metadata, custom_rules)
+    if arr_ranker is None:
+        return ranked, {}
+
+    try:
+        arr_qualities = await arr_ranker.evaluate(
+            media_type, [m.file_path for m in files_metadata]
+        )
+    except ArrQualityUnavailable as e:
+        logger_inst.warning(
+            f"'{title}': *arr quality profile unavailable ({e}), "
+            f"using Deduparr score to choose the file to keep"
+        )
+        return ranked, {}
+
+    ranked = rank_by_arr_quality(ranked, arr_qualities)
+    for metadata, score, keep in ranked:
+        quality = arr_qualities[metadata.file_path]
+        logger_inst.info(
+            f"'{title}': {'keep' if keep else 'delete'} {metadata.file_path} - "
+            f"{quality.quality_name} (profile rank {quality.quality_rank}, "
+            f"revision {quality.revision[0]}.{quality.revision[1]}, "
+            f"custom format score {quality.custom_format_score}, score {score})"
+        )
+    return ranked, arr_qualities
 
 
 async def verify_and_update_existing_set(
@@ -29,6 +99,7 @@ async def verify_and_update_existing_set(
     scoring_engine: ScoringEngine,
     custom_rules: List[dict],
     logger_inst: logging.Logger,
+    arr_ranker: Optional[ArrQualityRanker] = None,
 ) -> Tuple[bool, int]:
     """
     Verify an existing duplicate set against current file state.
@@ -46,6 +117,7 @@ async def verify_and_update_existing_set(
         scoring_engine: Scoring engine instance
         custom_rules: Custom scoring rules
         logger_inst: Logger instance to use
+        arr_ranker: Rank files by *arr quality profile when set
 
     Returns:
         Tuple of (set_still_valid, files_removed_count)
@@ -84,21 +156,13 @@ async def verify_and_update_existing_set(
                 ranked = scoring_engine.rank_duplicates([metadata], custom_rules)
                 if ranked:
                     _, score, keep = ranked[0]
-                    file_metadata_dict = {
-                        "resolution": metadata.resolution,
-                        "video_codec": metadata.video_codec,
-                        "audio_codec": metadata.audio_codec,
-                        "bitrate": metadata.bitrate,
-                        "width": metadata.width,
-                        "height": metadata.height,
-                    }
                     new_file = DuplicateFile(
                         set_id=existing_set.id,
                         file_path=metadata.file_path,
                         file_size=metadata.file_size,
                         score=score,
                         keep=keep,
-                        file_metadata=json.dumps(file_metadata_dict),
+                        file_metadata=build_file_metadata(metadata),
                         inode=encode_inode(metadata.inode),
                         is_hardlink=metadata.is_hardlink,
                     )
@@ -175,8 +239,14 @@ async def verify_and_update_existing_set(
             )
             all_metadata.append((file, metadata))
 
-        ranked = scoring_engine.rank_duplicates(
-            [m for _, m in all_metadata], custom_rules
+        ranked, arr_qualities = await rank_files(
+            [m for _, m in all_metadata],
+            updated_set.media_type,
+            updated_set.title,
+            scoring_engine,
+            custom_rules,
+            logger_inst,
+            arr_ranker,
         )
 
         # Update files with new scores and keep flags
@@ -187,6 +257,9 @@ async def verify_and_update_existing_set(
                 score, keep = path_to_ranking[file.file_path]
                 file.score = score
                 file.keep = keep
+                file.file_metadata = build_file_metadata(
+                    metadata, arr_qualities.get(file.file_path)
+                )
                 if not keep:
                     space_to_reclaim += file.file_size
 
@@ -388,6 +461,7 @@ async def create_duplicate_set(
     scoring_engine: ScoringEngine,
     custom_rules: List[dict],
     logger_inst: logging.Logger,
+    arr_ranker: Optional[ArrQualityRanker] = None,
 ) -> bool:
     """
     Create a duplicate set with ranked files
@@ -401,11 +475,20 @@ async def create_duplicate_set(
         scoring_engine: Scoring engine instance
         custom_rules: Custom scoring rules
         logger_inst: Logger instance to use
+        arr_ranker: Rank files by *arr quality profile when set
 
     Returns:
         True if set was created
     """
-    ranked_files = scoring_engine.rank_duplicates(files_metadata, custom_rules)
+    ranked_files, arr_qualities = await rank_files(
+        files_metadata,
+        media_type,
+        title,
+        scoring_engine,
+        custom_rules,
+        logger_inst,
+        arr_ranker,
+    )
 
     space_to_reclaim = sum(
         metadata.file_size for metadata, score, keep in ranked_files if not keep
@@ -422,22 +505,15 @@ async def create_duplicate_set(
     await db.flush()
 
     for metadata, score, keep in ranked_files:
-        file_metadata_dict = {
-            "resolution": metadata.resolution,
-            "video_codec": metadata.video_codec,
-            "audio_codec": metadata.audio_codec,
-            "bitrate": metadata.bitrate,
-            "width": metadata.width,
-            "height": metadata.height,
-        }
-
         dup_file = DuplicateFile(
             set_id=dup_set.id,
             file_path=metadata.file_path,
             file_size=metadata.file_size,
             score=score,
             keep=keep,
-            file_metadata=json.dumps(file_metadata_dict),
+            file_metadata=build_file_metadata(
+                metadata, arr_qualities.get(metadata.file_path)
+            ),
             inode=encode_inode(metadata.inode),
             is_hardlink=metadata.is_hardlink,
         )

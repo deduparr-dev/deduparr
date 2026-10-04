@@ -209,7 +209,7 @@ class ArrClient:
             raise ArrClientError("Expected dict but got list from command")
         return result
 
-    async def get_quality_profile(self, profile_id: int) -> Dict[str, Any]:
+    async def get_quality_profile(self, profile_id: int) -> dict[str, object]:
         """
         Get a quality profile
 
@@ -317,7 +317,7 @@ class RadarrClient(ArrClient):
             return {}
         return result
 
-    async def get_movie_files(self, movie_id: int) -> List[Dict[str, Any]]:
+    async def get_movie_files(self, movie_id: int) -> list[dict[str, object]]:
         """
         Get movie files tracked for a movie
 

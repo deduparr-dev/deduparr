@@ -5,11 +5,13 @@ Tests for arr_helpers module
 import logging
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from app.services.arr_client import RadarrClient, SonarrClient
 from app.services.arr_helpers import (
+    manual_import_file,
     rescan_media_item,
     trigger_full_library_scan,
     _create_media_subfolder,
@@ -278,3 +280,89 @@ def test_create_media_subfolder_no_year():
         expected_folder = os.path.join(tmpdir, "Test Series")
         assert result == expected_folder
         assert os.path.exists(expected_folder)
+
+
+@pytest.mark.asyncio
+async def test_manual_import_file_movie_queues_import(tmp_path):
+    """Manual import scans the file's folder, then queues a ManualImport command"""
+    media_file = tmp_path / "Film.2020.1080p.mkv"
+    media_file.write_bytes(b"x")
+    client = RadarrClient(base_url="http://radarr:7878", api_key="key")
+    request = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "path": str(media_file),
+                    "quality": {"quality": {"id": 7}},
+                    "languages": [{"id": 1}],
+                    "releaseGroup": "GRP",
+                }
+            ],
+            {"id": 99},
+        ]
+    )
+
+    with patch.object(client, "_request", request):
+        result = await manual_import_file(
+            client, str(media_file), 42, "movie", logging.getLogger("test")
+        )
+
+    assert result is True
+    assert request.await_args_list[0] == call(
+        "GET",
+        "/manualimport",
+        params={"folder": str(tmp_path), "filterExistingFiles": True, "movieId": 42},
+    )
+    assert request.await_args_list[1] == call(
+        "POST",
+        "/command",
+        json_data={
+            "name": "ManualImport",
+            "files": [
+                {
+                    "path": str(media_file),
+                    "movieId": 42,
+                    "quality": {"quality": {"id": 7}},
+                    "languages": [{"id": 1}],
+                    "releaseGroup": "GRP",
+                }
+            ],
+            "importMode": "Move",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_import_file_series_queues_import(tmp_path):
+    """Series manual import filters by seriesId and sends the matched episode IDs"""
+    media_file = tmp_path / "Show.S01E01.1080p.mkv"
+    media_file.write_bytes(b"x")
+    client = SonarrClient(base_url="http://sonarr:8989", api_key="key")
+    request = AsyncMock(
+        side_effect=[
+            [
+                {
+                    "path": str(media_file),
+                    "quality": {"quality": {"id": 7}},
+                    "episodes": [{"id": 5}, {"id": 6}],
+                }
+            ],
+            {"id": 100},
+        ]
+    )
+
+    with patch.object(client, "_request", request):
+        result = await manual_import_file(
+            client, str(media_file), 7, "series", logging.getLogger("test")
+        )
+
+    assert result is True
+    assert request.await_args_list[0] == call(
+        "GET",
+        "/manualimport",
+        params={"folder": str(tmp_path), "filterExistingFiles": True, "seriesId": 7},
+    )
+    command = request.await_args_list[1].kwargs["json_data"]
+    assert command["name"] == "ManualImport"
+    assert command["files"][0]["seriesId"] == 7
+    assert command["files"][0]["episodeIds"] == [5, 6]

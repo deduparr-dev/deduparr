@@ -125,13 +125,13 @@ class ScanScheduler:
                             await _cleanup_stale_duplicate_sets(
                                 db, movie_dupes, MediaType.MOVIE
                             )
-                            sets_created, sets_existing = (
+                            sets_created, sets_updated, _ = (
                                 await _process_duplicate_movies(
                                     db, movie_dupes, scoring_engine, custom_rules
                                 )
                             )
                             total_sets_created += sets_created
-                            total_sets_existing += sets_existing
+                            total_sets_existing += sets_updated
 
                         elif library.type == "show":
                             episode_dupes = plex_service.find_duplicate_episodes(
@@ -140,13 +140,13 @@ class ScanScheduler:
                             await _cleanup_stale_duplicate_sets(
                                 db, episode_dupes, MediaType.EPISODE
                             )
-                            sets_created, sets_existing = (
+                            sets_created, sets_updated, _ = (
                                 await _process_duplicate_episodes(
                                     db, episode_dupes, scoring_engine, custom_rules
                                 )
                             )
                             total_sets_created += sets_created
-                            total_sets_existing += sets_existing
+                            total_sets_existing += sets_updated
 
                         else:
                             logger.warning(f"Unsupported library type: {library.type}")

@@ -1,6 +1,7 @@
 """Tests for scan helper functions"""
 
 import json
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from app.services.scan_helpers import (
     collect_media_metadata,
     create_duplicate_set,
     validate_duplicate_files,
+    verify_and_update_existing_set,
 )
 from app.services.scoring_engine import MediaMetadata, ScoringEngine
 
@@ -843,3 +845,64 @@ async def test_verify_and_update_existing_set_no_changes(test_db: AsyncSession):
     )
     all_files = result.scalars().all()
     assert len(all_files) == 2
+
+
+async def _create_movie_set(test_db, files_metadata):
+    await create_duplicate_set(
+        test_db,
+        "plex-1",
+        "Film",
+        MediaType.MOVIE,
+        files_metadata,
+        ScoringEngine(),
+        [],
+        logging.getLogger("test"),
+    )
+    await test_db.commit()
+    result = await test_db.execute(
+        select(DuplicateSet).options(selectinload(DuplicateSet.files))
+    )
+    return result.scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_verify_set_reranks_when_a_better_file_appears(test_db):
+    """A new file joins an existing set: exactly one file is kept, the best one"""
+    hd = MediaMetadata(
+        file_path="/m/Film.1080p.mkv", file_size=4000, resolution="1080p"
+    )
+    sd = MediaMetadata(file_path="/m/Film.720p.mkv", file_size=2000, resolution="720p")
+    uhd = MediaMetadata(
+        file_path="/m/Film.2160p.mkv", file_size=9000, resolution="2160p"
+    )
+    dup_set = await _create_movie_set(test_db, [hd, sd])
+
+    set_valid, files_removed = await verify_and_update_existing_set(
+        test_db, dup_set, [hd, sd, uhd], ScoringEngine(), [], logging.getLogger("test")
+    )
+    await test_db.commit()
+
+    assert set_valid and files_removed == 0
+    files = {f.file_path: f for f in dup_set.files}
+    assert len(files) == 3
+    assert [path for path, f in files.items() if f.keep] == [uhd.file_path]
+    assert dup_set.space_to_reclaim == hd.file_size + sd.file_size
+
+
+@pytest.mark.asyncio
+async def test_verify_set_space_to_reclaim_ignores_removed_files(test_db):
+    """A file removed outside Deduparr no longer counts as space to reclaim"""
+    best = MediaMetadata(
+        file_path="/m/Film.1080p.mkv", file_size=4000, resolution="1080p"
+    )
+    mid = MediaMetadata(file_path="/m/Film.720p.mkv", file_size=2000, resolution="720p")
+    gone = MediaMetadata(file_path="/m/Film.480p.mkv", file_size=500, resolution="480p")
+    dup_set = await _create_movie_set(test_db, [best, mid, gone])
+
+    await verify_and_update_existing_set(
+        test_db, dup_set, [best, mid], ScoringEngine(), [], logging.getLogger("test")
+    )
+    await test_db.commit()
+
+    assert {f.file_path for f in dup_set.files} == {best.file_path, mid.file_path}
+    assert dup_set.space_to_reclaim == mid.file_size

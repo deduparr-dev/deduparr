@@ -231,6 +231,12 @@ function DuplicateSetCard({
                       {file.file_metadata?.audio_codec && (
                         <span>{file.file_metadata.audio_codec}</span>
                       )}
+                      {file.file_metadata?.arr_quality && (
+                        <span>
+                          {file.file_metadata.arr_quality} (CF score:{" "}
+                          {file.file_metadata.arr_custom_format_score})
+                        </span>
+                      )}
                     </div>
                   </div>
                   <button

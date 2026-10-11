@@ -99,6 +99,8 @@ function TestResultBadge({
 function GeneralSettings({
   deepScanEnabled,
   setDeepScanEnabled,
+  preferArrQualityProfile,
+  setPreferArrQualityProfile,
   emailNotificationsEnabled,
   setEmailNotificationsEnabled,
   smtpHost,
@@ -126,6 +128,8 @@ function GeneralSettings({
 }: {
   deepScanEnabled: boolean;
   setDeepScanEnabled: (value: boolean) => void;
+  preferArrQualityProfile: boolean;
+  setPreferArrQualityProfile: (value: boolean) => void;
   emailNotificationsEnabled: boolean;
   setEmailNotificationsEnabled: (value: boolean) => void;
   smtpHost: string;
@@ -185,6 +189,37 @@ function GeneralSettings({
               <AlertCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
               <p className="text-sm text-muted-foreground">
                 Please note that this might significantly slow down scans for large libraries.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-start space-x-3 p-4 rounded-lg border border-border bg-card">
+          <input
+            type="checkbox"
+            id="prefer-arr-quality-profile"
+            checked={preferArrQualityProfile}
+            onChange={(e) => setPreferArrQualityProfile(e.target.checked)}
+            className="mt-1 h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+          />
+          <div className="flex-1">
+            <label
+              htmlFor="prefer-arr-quality-profile"
+              className="font-medium text-foreground cursor-pointer"
+            >
+              Prefer *arr Quality Profile
+            </label>
+            <p className="text-sm text-muted-foreground mt-1">
+              Keep the file Radarr/Sonarr ranks highest: quality order in the item&apos;s quality
+              profile, then proper/repack, then custom format score. Deduparr&apos;s score only
+              breaks ties.
+            </p>
+            <div className="flex items-start gap-2 mt-3">
+              <AlertCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+              <p className="text-sm text-muted-foreground">
+                If any file in a duplicate set cannot be evaluated by Radarr/Sonarr, the whole set
+                uses Deduparr&apos;s score. Applies to duplicate sets created or updated by the next
+                scans.
               </p>
             </div>
           </div>
@@ -796,6 +831,9 @@ function SettingsContent({
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
 
   const [deepScanEnabled, setDeepScanEnabled] = useState(initialConfig.enable_deep_scan === "true");
+  const [preferArrQualityProfile, setPreferArrQualityProfile] = useState(
+    initialConfig.prefer_arr_quality_profile === "true"
+  );
   const [emailNotificationsEnabled, setEmailNotificationsEnabled] = useState(
     initialConfig.email_notifications_enabled === "true"
   );
@@ -835,6 +873,7 @@ function SettingsContent({
       try {
         // Save deep scan setting first
         await configAPI.updateDeepScanSetting(deepScanEnabled);
+        await configAPI.updateArrQualityProfileSetting(preferArrQualityProfile);
 
         // Build config object, only including non-empty values
         const config: Record<string, string> = {
@@ -917,6 +956,7 @@ function SettingsContent({
   function handleCancel() {
     // Reset all state to initial values
     setDeepScanEnabled(initialConfig.enable_deep_scan === "true");
+    setPreferArrQualityProfile(initialConfig.prefer_arr_quality_profile === "true");
     setEmailNotificationsEnabled(initialConfig.email_notifications_enabled === "true");
     setNotificationEmail(initialConfig.notification_email || "");
     setSmtpHost(initialConfig.smtp_host || "");
@@ -983,6 +1023,8 @@ function SettingsContent({
             <GeneralSettings
               deepScanEnabled={deepScanEnabled}
               setDeepScanEnabled={setDeepScanEnabled}
+              preferArrQualityProfile={preferArrQualityProfile}
+              setPreferArrQualityProfile={setPreferArrQualityProfile}
               emailNotificationsEnabled={emailNotificationsEnabled}
               setEmailNotificationsEnabled={setEmailNotificationsEnabled}
               smtpHost={smtpHost}

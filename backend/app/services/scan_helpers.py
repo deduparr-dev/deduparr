@@ -128,6 +128,7 @@ async def verify_and_update_existing_set(
             select(DuplicateSet)
             .options(selectinload(DuplicateSet.files))
             .where(DuplicateSet.id == existing_set.id)
+            .execution_options(populate_existing=True)
         )
         updated_set = result.scalar_one_or_none()
 

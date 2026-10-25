@@ -20,7 +20,7 @@ httpx==0.28.1
 apscheduler==3.11.3
 
 # Utilities
-python-dotenv==1.2.3
+python-dotenv==1.2.4
 pyyaml==6.0.3
 python-multipart==0.0.32
 itsdangerous==2.2.0  # For token encryption

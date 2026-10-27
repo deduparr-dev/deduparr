@@ -90,6 +90,15 @@ export interface DeleteResponse {
   errors: string[];
 }
 
+export interface DeleteAllResponse {
+  success: boolean;
+  message: string;
+  dry_run: boolean;
+  sets_processed: number;
+  files_deleted: number;
+  errors: string[];
+}
+
 export interface PlexLibrary {
   key: string;
   title: string;
@@ -316,6 +325,10 @@ export const scanAPI = {
   getScanStatus: () => fetchAPI<ScanStatus>("/api/scan/status"),
   deleteDuplicateSet: (setId: number, dryRun: boolean) =>
     postAPI<DeleteResponse, DeleteRequest>(`/api/scan/duplicates/${setId}/delete`, {
+      dry_run: dryRun,
+    }),
+  deleteAllDuplicateSets: (dryRun: boolean) =>
+    postAPI<DeleteAllResponse, DeleteRequest>("/api/scan/duplicates/delete-all", {
       dry_run: dryRun,
     }),
   updateFileKeep: (setId: number, fileId: number, keep: boolean) =>

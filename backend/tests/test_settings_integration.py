@@ -24,12 +24,14 @@ async def test_get_setup_status(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_plex_oauth_initiate():
     """Test initiating Plex OAuth authentication"""
-    with patch("app.services.plex_service.get_token_manager") as mock_token_manager:
+    with patch(
+        "app.services.media_server.plex_service.get_token_manager"
+    ) as mock_token_manager:
         mock_manager = MagicMock()
         mock_manager.generate_state_token.return_value = "test-state"
         mock_token_manager.return_value = mock_manager
 
-        with patch("app.services.plex_service.requests.post") as mock_post:
+        with patch("app.services.media_server.plex_service.requests.post") as mock_post:
             mock_response = MagicMock()
             mock_response.json.return_value = {
                 "id": 12345,
@@ -155,7 +157,7 @@ async def test_plex_connection_test_failure(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_radarr_connection_test_success(client: AsyncClient):
     """Test successful Radarr connection"""
-    with patch("app.services.radarr_service.RadarrClient") as mock_radarr:
+    with patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr:
         mock_instance = AsyncMock()
         mock_instance.get_system_status = AsyncMock(
             return_value={"version": "5.11.0.9244"}
@@ -175,7 +177,7 @@ async def test_radarr_connection_test_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_radarr_connection_test_failure(client: AsyncClient):
     """Test failed Radarr connection"""
-    with patch("app.services.radarr_service.RadarrClient") as mock_radarr:
+    with patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr:
         mock_instance = AsyncMock()
         mock_instance.get_system_status = AsyncMock(
             side_effect=Exception("Connection error")
@@ -195,7 +197,7 @@ async def test_radarr_connection_test_failure(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_sonarr_connection_test_success(client: AsyncClient):
     """Test successful Sonarr connection"""
-    with patch("app.services.sonarr_service.SonarrClient") as mock_sonarr:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_sonarr:
         mock_instance = AsyncMock()
         mock_instance.get_system_status = AsyncMock(
             return_value={"version": "4.0.10.2544"}
@@ -215,7 +217,7 @@ async def test_sonarr_connection_test_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_sonarr_connection_test_failure(client: AsyncClient):
     """Test failed Sonarr connection"""
-    with patch("app.services.sonarr_service.SonarrClient") as mock_sonarr:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_sonarr:
         mock_instance = AsyncMock()
         mock_instance.get_system_status = AsyncMock(
             side_effect=Exception("Invalid API key")
@@ -235,7 +237,7 @@ async def test_sonarr_connection_test_failure(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_qbittorrent_connection_test_success(client: AsyncClient):
     """Test successful qBittorrent connection"""
-    with patch("app.services.qbittorrent_service.Client") as mock_qbit:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_qbit:
         mock_instance = MagicMock()
         mock_instance.app_version.return_value = "v4.6.7"
         mock_qbit.return_value = mock_instance
@@ -257,7 +259,7 @@ async def test_qbittorrent_connection_test_success(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_qbittorrent_connection_test_failure(client: AsyncClient):
     """Test failed qBittorrent connection"""
-    with patch("app.services.qbittorrent_service.Client") as mock_qbit:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_qbit:
         mock_qbit.side_effect = Exception("Login failed")
 
         response = await client.post(

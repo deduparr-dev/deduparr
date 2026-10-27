@@ -20,13 +20,13 @@ from plexapi.video import Episode, Movie
 from typing_extensions import TypedDict
 
 from app.core.config import settings
-from app.services.plex_exceptions import (
+from app.services.media_server.plex_exceptions import (
     PlexConnectionError,
     PlexPinExpiredError,
     TokenExpiredError,
     UnauthorizedError,
 )
-from app.services.security import (
+from app.services.shared.security import (
     InvalidTokenError,
     get_token_manager,
     pin_cache,
@@ -1084,7 +1084,7 @@ class PlexService:
             logger.error(f"Failed to refresh library '{library_name}': {str(e)}")
             return False
 
-    def refresh_item(self, plex_item_id: str) -> bool:
+    def refresh_item(self, item_id: str) -> bool:
         """
         Refresh metadata for a specific Plex item (movie or episode).
 
@@ -1092,7 +1092,7 @@ class PlexService:
         which is much faster and more efficient than scanning the entire library.
 
         Args:
-            plex_item_id: Plex ratingKey of the item to refresh
+            item_id: Plex ratingKey of the item to refresh
 
         Returns:
             True if successful, False otherwise
@@ -1100,15 +1100,15 @@ class PlexService:
         try:
             server = self._get_server()
             # Fetch the item by its ratingKey
-            item = server.fetchItem(int(plex_item_id))
+            item = server.fetchItem(int(item_id))
             # Call the item's refresh() method to update its metadata
             item.refresh()
             logger.info(
-                f"Triggered metadata refresh for Plex item {plex_item_id} ('{item.title}')"
+                f"Triggered metadata refresh for Plex item {item_id} ('{item.title}')"
             )
             return True
         except Exception as e:
-            logger.error(f"Failed to refresh Plex item {plex_item_id}: {str(e)}")
+            logger.error(f"Failed to refresh Plex item {item_id}: {str(e)}")
             return False
 
     def get_collection_items(

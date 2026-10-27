@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 import smtplib
 
-from app.services.email_service import EmailService
+from app.services.notifications.service import EmailService
 
 
 @pytest.fixture

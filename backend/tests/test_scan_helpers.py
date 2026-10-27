@@ -2,7 +2,7 @@
 
 import json
 import logging
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import select
@@ -11,126 +11,13 @@ from sqlalchemy.orm import selectinload
 
 from app.models import DuplicateFile, DuplicateSet, MediaType
 from app.models.duplicate import decode_inode
-from app.services.scan_helpers import (
+from app.services.scan.helpers import (
     cleanup_stale_set,
-    collect_media_metadata,
     create_duplicate_set,
     validate_duplicate_files,
     verify_and_update_existing_set,
 )
-from app.services.scoring_engine import MediaMetadata, ScoringEngine
-
-
-@pytest.mark.asyncio
-async def test_collect_media_metadata_with_movie(caplog):
-    """Test collecting metadata from movie media"""
-    mock_movie = Mock()
-    mock_movie.title = "Test Movie"
-    mock_movie.media = [
-        Mock(
-            parts=[Mock(file="/media/movie1.mkv", size=1000000000)],
-            videoResolution="1080p",
-            videoCodec="h264",
-            audioCodec="aac",
-            bitrate=5000,
-            width=1920,
-            height=1080,
-        ),
-        Mock(
-            parts=[Mock(file="/media/movie2.mkv", size=2000000000)],
-            videoResolution="2160p",
-            videoCodec="hevc",
-            audioCodec="aac",
-            bitrate=15000,
-            width=3840,
-            height=2160,
-        ),
-    ]
-    mock_logger = Mock()
-
-    with patch("app.services.scan_helpers.os.path.exists", return_value=True), patch(
-        "app.services.scan_helpers.os.stat"
-    ) as mock_stat, patch(
-        "app.services.scan_helpers.is_sample_file", return_value=False
-    ):
-
-        # First file: regular file
-        mock_stat.side_effect = [
-            Mock(st_ino=12345, st_nlink=1),
-            Mock(st_ino=67890, st_nlink=1),
-        ]
-
-        result = await collect_media_metadata([mock_movie], "movie", mock_logger)
-
-    assert len(result) == 2
-    assert result[0].file_path == "/media/movie1.mkv"
-    assert result[0].file_size == 1000000000
-    assert result[0].resolution == "1080p"
-    assert result[0].inode == 12345
-    assert result[0].is_hardlink is False
-    assert result[1].file_path == "/media/movie2.mkv"
-    assert result[1].inode == 67890
-
-
-@pytest.mark.asyncio
-async def test_collect_media_metadata_skips_samples(caplog):
-    """Test that sample files are filtered out"""
-    mock_movie = Mock()
-    mock_movie.title = "Test Movie"
-    mock_movie.media = [
-        Mock(
-            parts=[Mock(file="/media/movie-sample.mkv", size=50000000)],
-            videoResolution="1080p",
-            videoCodec="h264",
-            audioCodec="aac",
-            bitrate=5000,
-            width=1920,
-            height=1080,
-        )
-    ]
-    mock_logger = Mock()
-
-    with patch("app.services.scan_helpers.os.path.exists", return_value=True), patch(
-        "app.services.scan_helpers.is_sample_file", return_value=True
-    ):
-
-        result = await collect_media_metadata([mock_movie], "movie", mock_logger)
-
-    assert len(result) == 0
-    mock_logger.info.assert_any_call("Skipping sample file: /media/movie-sample.mkv")
-
-
-@pytest.mark.asyncio
-async def test_collect_media_metadata_detects_hardlinks(caplog):
-    """Test detection of hardlinked files"""
-    mock_movie = Mock()
-    mock_movie.title = "Test Movie"
-    mock_movie.media = [
-        Mock(
-            parts=[Mock(file="/media/movie1.mkv", size=1000000000)],
-            videoResolution="1080p",
-            videoCodec="h264",
-            audioCodec="aac",
-            bitrate=5000,
-            width=1920,
-            height=1080,
-        )
-    ]
-    mock_logger = Mock()
-
-    with patch("app.services.scan_helpers.os.path.exists", return_value=True), patch(
-        "app.services.scan_helpers.os.stat"
-    ) as mock_stat, patch(
-        "app.services.scan_helpers.is_sample_file", return_value=False
-    ):
-
-        # Hardlink (st_nlink > 1)
-        mock_stat.return_value = Mock(st_ino=12345, st_nlink=2)
-
-        result = await collect_media_metadata([mock_movie], "movie", mock_logger)
-
-    assert len(result) == 1
-    assert result[0].is_hardlink is True
+from app.services.scan.scoring_engine import MediaMetadata, ScoringEngine
 
 
 @pytest.mark.asyncio
@@ -299,7 +186,8 @@ async def test_create_duplicate_set(test_db: AsyncSession):
 
     await create_duplicate_set(
         test_db,
-        plex_item_id="12345",
+        media_server="plex",
+        item_id="12345",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         files_metadata=files,
@@ -312,7 +200,7 @@ async def test_create_duplicate_set(test_db: AsyncSession):
     result = await test_db.execute(
         select(DuplicateSet)
         .options(selectinload(DuplicateSet.files))
-        .where(DuplicateSet.plex_item_id == "12345")
+        .where(DuplicateSet.item_id == "12345")
     )
     dup_set = result.scalar_one()
 
@@ -375,7 +263,8 @@ async def test_create_duplicate_set_with_large_inodes(test_db: AsyncSession):
 
     await create_duplicate_set(
         test_db,
-        plex_item_id="9songs",
+        media_server="plex",
+        item_id="9songs",
         title="9 Songs",
         media_type=MediaType.MOVIE,
         files_metadata=files,
@@ -387,7 +276,7 @@ async def test_create_duplicate_set_with_large_inodes(test_db: AsyncSession):
     result = await test_db.execute(
         select(DuplicateSet)
         .options(selectinload(DuplicateSet.files))
-        .where(DuplicateSet.plex_item_id == "9songs")
+        .where(DuplicateSet.item_id == "9songs")
     )
     dup_set = result.scalar_one()
 
@@ -407,7 +296,7 @@ async def test_cleanup_stale_set(test_db: AsyncSession):
     """Test cleanup of stale duplicate set"""
     # Create a duplicate set
     dup_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status="pending",
@@ -462,11 +351,11 @@ async def test_verify_and_update_existing_set_removes_stale_files(
     test_db: AsyncSession,
 ):
     """Test that externally removed files are detected and removed from DB"""
-    from app.services.scan_helpers import verify_and_update_existing_set
+    from app.services.scan.helpers import verify_and_update_existing_set
 
     # Create a duplicate set with 3 files
     dup_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status="pending",
@@ -568,11 +457,11 @@ async def test_verify_and_update_existing_set_removes_set_when_insufficient_file
     test_db: AsyncSession,
 ):
     """Test that set is removed when fewer than 2 files remain"""
-    from app.services.scan_helpers import verify_and_update_existing_set
+    from app.services.scan.helpers import verify_and_update_existing_set
 
     # Create a duplicate set with 2 files
     dup_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status="pending",
@@ -648,11 +537,11 @@ async def test_verify_and_update_existing_set_removes_set_when_insufficient_file
 @pytest.mark.asyncio
 async def test_verify_and_update_existing_set_adds_new_files(test_db: AsyncSession):
     """Test that new files appearing in Plex are added to existing set"""
-    from app.services.scan_helpers import verify_and_update_existing_set
+    from app.services.scan.helpers import verify_and_update_existing_set
 
     # Create a duplicate set with 2 files
     dup_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status="pending",
@@ -758,11 +647,11 @@ async def test_verify_and_update_existing_set_adds_new_files(test_db: AsyncSessi
 @pytest.mark.asyncio
 async def test_verify_and_update_existing_set_no_changes(test_db: AsyncSession):
     """Test that no changes are made when files match exactly"""
-    from app.services.scan_helpers import verify_and_update_existing_set
+    from app.services.scan.helpers import verify_and_update_existing_set
 
     # Create a duplicate set with 2 files
     dup_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status="pending",
@@ -850,6 +739,7 @@ async def test_verify_and_update_existing_set_no_changes(test_db: AsyncSession):
 async def _create_movie_set(test_db, files_metadata):
     await create_duplicate_set(
         test_db,
+        "plex",
         "plex-1",
         "Film",
         MediaType.MOVIE,

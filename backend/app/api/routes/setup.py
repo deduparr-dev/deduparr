@@ -11,12 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.services.setup_service import SetupService
-from app.services.plex_service import PlexAuthService
+from app.services.media_server.plex_service import PlexAuthService
 
 # Import token manager at module level so tests can patch it via
 # "app.api.routes.setup.get_token_manager". The actual decryption is used
 # only inside the endpoint.
-from app.services.security import get_token_manager
+from app.services.shared.security import get_token_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -264,7 +264,7 @@ async def test_email_connection(
     Returns:
         Connection test result
     """
-    from app.services.email_service import EmailService
+    from app.services.notifications.service import EmailService
 
     try:
         # Decrypt password if it looks encrypted (has the itsdangerous format)

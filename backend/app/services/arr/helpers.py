@@ -9,7 +9,7 @@ import re
 import shutil
 from typing import Literal, Optional, Union
 
-from app.services.arr_client import RadarrClient, SonarrClient
+from app.services.arr.client import RadarrClient, SonarrClient
 
 logger = logging.getLogger(__name__)
 

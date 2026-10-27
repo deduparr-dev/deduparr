@@ -14,15 +14,14 @@ from sqlalchemy.orm import selectinload
 
 from app.models import DuplicateFile, DuplicateSet
 from app.models.duplicate import DuplicateStatus, MediaType, decode_inode, encode_inode
-from app.services.arr_quality import (
+from app.services.arr.quality import (
     ArrQuality,
     ArrQualityRanker,
     ArrQualityUnavailable,
     RankedFile,
     rank_by_arr_quality,
 )
-from app.services.plex_service import is_sample_file
-from app.services.scoring_engine import MediaMetadata, ScoringEngine
+from app.services.scan.scoring_engine import MediaMetadata, ScoringEngine
 
 logger = logging.getLogger(__name__)
 
@@ -275,114 +274,6 @@ async def verify_and_update_existing_set(
     return True, files_removed
 
 
-async def collect_media_metadata(
-    media_items: List, media_type: MediaItem, logger_inst: logging.Logger
-) -> List[MediaMetadata]:
-    """
-    Collect metadata from Plex media items (movies or episodes)
-
-    Args:
-        media_items: List of Plex Movie or Episode objects
-        media_type: Type of media ("movie" or "episode")
-        logger_inst: Logger instance to use
-
-    Returns:
-        List of MediaMetadata objects
-    """
-    files_metadata = []
-
-    for item in media_items:
-        try:
-            old_paths = [
-                media.parts[0].file
-                for media in item.media
-                if media.parts and media.parts[0].file
-            ]
-
-            item.reload(checkFiles=True)
-
-            new_paths = [
-                media.parts[0].file
-                for media in item.media
-                if media.parts and media.parts[0].file
-            ]
-
-            if old_paths != new_paths:
-                title = (
-                    item.title
-                    if media_type == "movie"
-                    else f"{item.grandparentTitle} - {item.title}"
-                )
-                logger_inst.info(
-                    f"Plex metadata refreshed for '{title}' - paths updated:"
-                )
-                for old, new in zip(old_paths, new_paths):
-                    if old != new:
-                        logger_inst.info(f"  OLD: {old}")
-                        logger_inst.info(f"  NEW: {new}")
-        except Exception as e:
-            title = (
-                item.title
-                if media_type == "movie"
-                else f"{item.grandparentTitle} - {item.title}"
-            )
-            logger_inst.warning(f"Failed to reload metadata for '{title}': {e}")
-
-        for media in item.media:
-            try:
-                media_part = media.parts[0]
-                file_path = media_part.file
-                file_size = media_part.size or 0
-
-                title = (
-                    item.title
-                    if media_type == "movie"
-                    else f"{item.grandparentTitle} - {item.title}"
-                )
-                logger_inst.info(f"Plex reported file path for '{title}': {file_path}")
-                logger_inst.info(f"File exists check: {os.path.exists(file_path)}")
-
-                if is_sample_file(file_path):
-                    logger_inst.info(f"Skipping sample file: {file_path}")
-                    continue
-
-                inode = None
-                is_hardlink = False
-                if file_path and os.path.exists(file_path):
-                    try:
-                        stat_info = os.stat(file_path)
-                        inode = stat_info.st_ino
-                        is_hardlink = stat_info.st_nlink > 1
-                        logger_inst.info(
-                            f"File found - inode: {inode}, hardlink: {is_hardlink}"
-                        )
-                    except OSError as e:
-                        logger_inst.warning(f"Failed to stat file {file_path}: {e}")
-                else:
-                    logger_inst.warning(f"File not found on disk: {file_path}")
-
-                metadata = MediaMetadata(
-                    file_path=file_path,
-                    file_size=file_size,
-                    resolution=media.videoResolution,
-                    video_codec=media.videoCodec,
-                    audio_codec=(
-                        media.audioCodec if hasattr(media, "audioCodec") else None
-                    ),
-                    bitrate=media.bitrate,
-                    width=media.width,
-                    height=media.height,
-                    inode=inode,
-                    is_hardlink=is_hardlink,
-                )
-                files_metadata.append(metadata)
-            except (AttributeError, IndexError) as e:
-                logger_inst.warning(f"Could not extract metadata from media file: {e}")
-                continue
-
-    return files_metadata
-
-
 def validate_duplicate_files(
     files_metadata: List[MediaMetadata], title: str, logger_inst: logging.Logger
 ) -> Optional[str]:
@@ -425,7 +316,6 @@ def validate_duplicate_files(
             )
 
     # Check for identical files (same size and same filename - likely copies)
-    import os
 
     sizes = [m.file_size for m in files_metadata]
     filenames = [os.path.basename(m.file_path).lower() for m in files_metadata]
@@ -455,7 +345,8 @@ def validate_duplicate_files(
 
 async def create_duplicate_set(
     db: AsyncSession,
-    plex_item_id: str,
+    media_server: str,
+    item_id: str,
     title: str,
     media_type: MediaType,
     files_metadata: List[MediaMetadata],
@@ -469,7 +360,7 @@ async def create_duplicate_set(
 
     Args:
         db: Database session
-        plex_item_id: Plex item ID
+        item_id: Plex item ID
         title: Title of the media
         media_type: Type of media (MOVIE or EPISODE)
         files_metadata: List of file metadata
@@ -496,7 +387,8 @@ async def create_duplicate_set(
     )
 
     dup_set = DuplicateSet(
-        plex_item_id=plex_item_id,
+        media_server=media_server,
+        item_id=item_id,
         title=title,
         media_type=media_type,
         status=DuplicateStatus.PENDING,

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.disk_scan_service import (
+from app.services.scan.disk_scan import (
     DiskScanConfig,
     DiskScanService,
     DuplicateDetectionStrategy,

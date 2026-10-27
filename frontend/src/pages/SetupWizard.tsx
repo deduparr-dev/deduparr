@@ -300,7 +300,7 @@ export default function SetupWizard() {
         const config: Record<string, string> = {
           plex_auth_token: plexAuthToken,
           plex_server_name: plexServerName,
-          plex_libraries: selectedLibraries.map((lib) => lib.title).join(","),
+          media_libraries: selectedLibraries.map((lib) => lib.title).join(","),
         };
 
         // Add optional services only if configured

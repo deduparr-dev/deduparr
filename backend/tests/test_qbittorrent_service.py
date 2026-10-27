@@ -5,7 +5,7 @@ Tests for qBittorrent service
 import pytest
 from unittest.mock import MagicMock, patch
 
-from app.services.qbittorrent_service import QBittorrentService
+from app.services.download.qbittorrent_service import QBittorrentService
 from app.models.config import Config
 from tests.conftest import encrypt_test_password
 
@@ -26,7 +26,7 @@ async def test_qbittorrent_client_initialization(test_db):
 
     service = QBittorrentService(test_db)
 
-    with patch("app.services.qbittorrent_service.Client") as mock_client_class:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
 
@@ -72,7 +72,7 @@ async def test_find_item_by_file_path_found(test_db):
     mock_file = MagicMock()
     mock_file.name = "Movie.mkv"
 
-    with patch("app.services.qbittorrent_service.Client") as mock_client_class:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         mock_client.torrents_info.return_value = [mock_item]
@@ -110,7 +110,7 @@ async def test_find_item_by_file_path_not_found(test_db):
     mock_file = MagicMock()
     mock_file.name = "OtherMovie.mkv"
 
-    with patch("app.services.qbittorrent_service.Client") as mock_client_class:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         mock_client.torrents_info.return_value = [mock_item]
@@ -135,7 +135,7 @@ async def test_remove_item_with_files(test_db):
 
     service = QBittorrentService(test_db)
 
-    with patch("app.services.qbittorrent_service.Client") as mock_client_class:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
 
@@ -161,7 +161,7 @@ async def test_remove_item_without_files(test_db):
 
     service = QBittorrentService(test_db)
 
-    with patch("app.services.qbittorrent_service.Client") as mock_client_class:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
 
@@ -187,7 +187,7 @@ async def test_test_connection_success(test_db):
 
     service = QBittorrentService(test_db)
 
-    with patch("app.services.qbittorrent_service.Client") as mock_client_class:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         mock_client.app_version.return_value = "v4.5.0"
@@ -213,7 +213,7 @@ async def test_test_connection_failure(test_db):
 
     service = QBittorrentService(test_db)
 
-    with patch("app.services.qbittorrent_service.Client") as mock_client_class:
+    with patch("app.services.download.qbittorrent_service.Client") as mock_client_class:
         mock_client = MagicMock()
         mock_client_class.return_value = mock_client
         mock_client.app_version.side_effect = Exception("Connection failed")

@@ -8,7 +8,7 @@ from typing import Dict, Optional
 from qbittorrentapi import APIConnectionError, Client, LoginFailed
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.base_service import BaseExternalService
+from app.services.shared.base_service import BaseExternalService
 
 logger = logging.getLogger(__name__)
 

@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import Mock, patch
 from plexapi.exceptions import NotFound, Unauthorized
 
-from app.services.plex_service import PlexService, PlexAuthService
+from app.services.media_server.plex_service import PlexService, PlexAuthService
 
 
 @pytest.fixture
@@ -65,8 +65,8 @@ def mock_pin_login():
 
 
 @pytest.mark.asyncio
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.requests.post")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.requests.post")
 async def test_initiate_auth(mock_post, mock_token_manager):
     """Test initiating OAuth PIN authentication"""
     mock_response = Mock()
@@ -91,10 +91,10 @@ async def test_initiate_auth(mock_post, mock_token_manager):
 
 
 @pytest.mark.asyncio
-@patch("app.services.plex_service.requests.get")
-@patch("app.services.plex_service.pin_cache")
-@patch("app.services.plex_service.PlexAuthService.validate_token")
-@patch("app.services.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.requests.get")
+@patch("app.services.media_server.plex_service.pin_cache")
+@patch("app.services.media_server.plex_service.PlexAuthService.validate_token")
+@patch("app.services.media_server.plex_service.get_token_manager")
 async def test_check_auth_completed(
     mock_token_manager, mock_validate, mock_cache, mock_get
 ):
@@ -127,8 +127,8 @@ async def test_check_auth_completed(
 
 
 @pytest.mark.asyncio
-@patch("app.services.plex_service.requests.get")
-@patch("app.services.plex_service.pin_cache")
+@patch("app.services.media_server.plex_service.requests.get")
+@patch("app.services.media_server.plex_service.pin_cache")
 async def test_check_auth_pending(mock_cache, mock_get):
     """Test checking auth when user hasn't completed OAuth yet"""
     mock_cache.get.return_value = {
@@ -150,8 +150,8 @@ async def test_check_auth_pending(mock_cache, mock_get):
 
 
 @pytest.mark.asyncio
-@patch("app.services.plex_service.MyPlexAccount")
-@patch("app.services.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
 async def test_get_servers(
     mock_token_manager, mock_account_class, mock_plex_account, mock_plex_resource
 ):
@@ -187,7 +187,7 @@ def test_plex_service_init():
 
 def test_plex_service_init_from_settings():
     """Test PlexService initialization from settings"""
-    with patch("app.services.plex_service.settings") as mock_settings:
+    with patch("app.services.media_server.plex_service.settings") as mock_settings:
         mock_settings.plex_auth_token = "settings_token"
         mock_settings.plex_server_name = "Settings Server"
 
@@ -196,8 +196,8 @@ def test_plex_service_init_from_settings():
         assert service.server_name == "Settings Server"
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_get_account_success(mock_account_class, mock_token_manager, mock_plex_account):
     """Test successful account connection"""
     mock_account_class.return_value = mock_plex_account
@@ -214,8 +214,8 @@ def test_get_account_success(mock_account_class, mock_token_manager, mock_plex_a
     mock_account_class.assert_called_once_with(token="decrypted_token")
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_get_account_unauthorized(mock_account_class, mock_token_manager):
     """Test account connection with invalid token"""
     mock_account_class.side_effect = Unauthorized("Invalid token")
@@ -240,8 +240,8 @@ def test_get_account_no_token():
         service._get_account()
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_get_server_by_name(
     mock_account_class,
     mock_token_manager,
@@ -265,8 +265,8 @@ def test_get_server_by_name(
     mock_plex_account.resource.assert_called_once_with("Test Server")
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_get_server_first_available(
     mock_account_class,
     mock_token_manager,
@@ -290,8 +290,8 @@ def test_get_server_first_available(
     mock_plex_account.resources.assert_called_once()
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_get_server_not_found(
     mock_account_class, mock_token_manager, mock_plex_account
 ):
@@ -309,8 +309,8 @@ def test_get_server_not_found(
         service._get_server()
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_test_connection_success(
     mock_account_class,
     mock_token_manager,
@@ -337,8 +337,8 @@ def test_test_connection_success(
     assert result["version"] == "1.32.5"
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_test_connection_failure(mock_account_class, mock_token_manager):
     """Test failed connection test"""
     mock_account_class.side_effect = Exception("Connection failed")
@@ -355,7 +355,7 @@ def test_test_connection_failure(mock_account_class, mock_token_manager):
 
 
 @pytest.mark.asyncio
-@patch("app.services.plex_service.PlexAuthService.get_servers")
+@patch("app.services.media_server.plex_service.PlexAuthService.get_servers")
 async def test_get_available_servers(mock_get_servers):
     """Test getting available servers"""
     mock_get_servers.return_value = [{"name": "Test Server"}]
@@ -383,8 +383,8 @@ async def test_get_available_servers(mock_get_servers):
 # These tests ensure we properly use the native Plex API for duplicate detection.
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_find_duplicate_movies_with_multiple_versions(
     mock_account_class,
     mock_token_manager,
@@ -530,8 +530,8 @@ def test_find_duplicate_movies_with_multiple_versions(
     assert movie2_list[0] == movie2
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_find_duplicate_movies_no_duplicates(
     mock_account_class,
     mock_token_manager,
@@ -571,8 +571,8 @@ def test_find_duplicate_movies_no_duplicates(
     ), "Should find no duplicates when Plex returns empty list"
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_find_duplicate_movies_wrong_library_type(
     mock_account_class,
     mock_token_manager,
@@ -606,8 +606,8 @@ def test_find_duplicate_movies_wrong_library_type(
     assert duplicates == {}
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_find_duplicate_episodes_with_multiple_versions(
     mock_account_class,
     mock_token_manager,
@@ -772,8 +772,8 @@ def test_find_duplicate_episodes_with_multiple_versions(
     assert ep4_list[0] == ep4
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_find_duplicate_episodes_no_duplicates(
     mock_account_class,
     mock_token_manager,
@@ -811,8 +811,8 @@ def test_find_duplicate_episodes_no_duplicates(
     ), "Should find no duplicates when Plex returns empty list"
 
 
-@patch("app.services.plex_service.get_token_manager")
-@patch("app.services.plex_service.MyPlexAccount")
+@patch("app.services.media_server.plex_service.get_token_manager")
+@patch("app.services.media_server.plex_service.MyPlexAccount")
 def test_find_duplicate_episodes_wrong_library_type(
     mock_account_class,
     mock_token_manager,

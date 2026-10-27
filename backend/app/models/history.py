@@ -28,7 +28,7 @@ class DeletionHistory(Base):
     deleted_from_qbit = Column(Boolean, default=False, nullable=False)
     deleted_from_arr = Column(Boolean, default=False, nullable=False)
     deleted_from_disk = Column(Boolean, default=False, nullable=False)
-    plex_refreshed = Column(Boolean, default=False, nullable=False)
+    media_server_refreshed = Column(Boolean, default=False, nullable=False)
 
     # Error tracking
     error = Column(Text, nullable=True)
@@ -53,14 +53,14 @@ class DeletionHistory(Base):
 
         A deletion is considered successful if the critical stages completed:
         1. File deleted from disk (deleted_from_disk=True)
-        2. Plex metadata refreshed (plex_refreshed=True)
+        2. Media server metadata refreshed (media_server_refreshed=True)
         3. No unacceptable errors occurred
 
         The arr/qBit stages are optional - orphaned files won't be tracked in
         those services, so we only check that critical stages succeeded.
         """
         # Critical stages must always succeed
-        if not (self.deleted_from_disk and self.plex_refreshed):
+        if not (self.deleted_from_disk and self.media_server_refreshed):
             return False
 
         # If there's an error, check if it's only about unconfigured services

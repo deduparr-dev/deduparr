@@ -9,11 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import Config
-from app.services.plex_service import PlexAuthService, PlexService
-from app.services.qbittorrent_service import QBittorrentService
-from app.services.radarr_service import RadarrService
-from app.services.sonarr_service import SonarrService
-from app.services.security import InvalidTokenError, get_token_manager
+from app.services.media_server.plex_service import PlexAuthService, PlexService
+from app.services.download.qbittorrent_service import QBittorrentService
+from app.services.arr.radarr_service import RadarrService
+from app.services.arr.sonarr_service import SonarrService
+from app.services.shared.security import InvalidTokenError, get_token_manager
 
 logger = logging.getLogger(__name__)
 

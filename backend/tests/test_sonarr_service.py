@@ -5,7 +5,7 @@ Tests for Sonarr service
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.services.sonarr_service import SonarrService
+from app.services.arr.sonarr_service import SonarrService
 from app.models.config import Config
 
 
@@ -21,7 +21,7 @@ async def test_sonarr_client_initialization(test_db):
 
     service = SonarrService(test_db)
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
 
@@ -71,7 +71,7 @@ async def test_find_episode_by_file_path_found(test_db):
         "episodeFileId": 100,
     }
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.get_series = AsyncMock(return_value=[mock_series])
@@ -109,7 +109,7 @@ async def test_find_episode_by_file_path_not_found(test_db):
         "episodeFile": {"id": 100, "path": "/media/tv/Test Series/S01E01.mkv"},
     }
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.get_series = AsyncMock(return_value=[mock_series])
@@ -136,7 +136,7 @@ async def test_find_episode_no_episode_file(test_db):
     mock_series = {"id": 1, "title": "Test Series"}
     mock_episode = {"id": 10, "title": "Test Episode", "seriesId": 1}
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.get_series = AsyncMock(return_value=[mock_series])
@@ -160,7 +160,7 @@ async def test_delete_episode_file_success(test_db):
 
     service = SonarrService(test_db)
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.del_episode_file = AsyncMock()
@@ -182,7 +182,7 @@ async def test_delete_episode_file_failure(test_db):
 
     service = SonarrService(test_db)
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.del_episode_file = AsyncMock(side_effect=Exception("Delete failed"))
@@ -202,7 +202,7 @@ async def test_test_connection_success(test_db):
 
     service = SonarrService(test_db)
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.get_system_status = AsyncMock(return_value={"version": "3.0.0"})
@@ -217,7 +217,7 @@ async def test_test_connection_success(test_db):
 @pytest.mark.asyncio
 async def test_test_connection_failure(test_db):
     """Test connection test failure"""
-    from app.services.arr_client import ArrConnectionError
+    from app.services.arr.client import ArrConnectionError
 
     config_url = Config(key="sonarr_url", value="http://localhost:8989")
     config_api_key = Config(key="sonarr_api_key", value="test_api_key")
@@ -227,7 +227,7 @@ async def test_test_connection_failure(test_db):
 
     service = SonarrService(test_db)
 
-    with patch("app.services.sonarr_service.SonarrClient") as mock_client_class:
+    with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.get_system_status = AsyncMock(

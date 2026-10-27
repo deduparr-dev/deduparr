@@ -62,7 +62,7 @@ export interface DuplicateFile {
 
 export interface DuplicateSet {
   id: number;
-  plex_item_id: string;
+  item_id: string;
   title: string;
   media_type: string;
   found_at: string;
@@ -173,7 +173,7 @@ export interface LogsResponse {
 export interface PlexConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
-  plex_libraries?: string;
+  media_libraries?: string;
   radarr_url?: string;
   radarr_api_key?: string;
   sonarr_url?: string;

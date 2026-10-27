@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.models import DuplicateSet, DuplicateStatus
-from app.services.deletion_pipeline import DeletionPipeline
+from app.services.deletion.pipeline import DeletionPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ class ScheduledDeletionService:
 
     async def _send_deletion_email(self, summary: dict) -> None:
         """Send email summary of scheduled deletion"""
-        from app.services.email_helpers import get_email_service_from_config
+        from app.services.notifications.helpers import get_email_service_from_config
 
         # Get configured email service
         email_service, to_email, error = await get_email_service_from_config(self.db)

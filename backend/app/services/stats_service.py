@@ -188,7 +188,7 @@ class StatsService:
                 DeletionHistory.deleted_from_qbit.is_(True),
                 DeletionHistory.deleted_from_arr.is_(True),
                 DeletionHistory.deleted_from_disk.is_(True),
-                DeletionHistory.plex_refreshed.is_(True),
+                DeletionHistory.media_server_refreshed.is_(True),
                 DeletionHistory.error.is_(None),
             )
         )

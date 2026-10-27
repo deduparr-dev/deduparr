@@ -15,11 +15,11 @@ from sqlalchemy.orm import selectinload
 from app.core.config import settings
 from app.models import DeletionHistory, DuplicateFile, DuplicateSet
 from app.models.duplicate import MediaType
-from app.services.arr_helpers import refresh_media_item
-from app.services.plex_service import PlexService
-from app.services.qbittorrent_service import QBittorrentService
-from app.services.radarr_service import RadarrService
-from app.services.sonarr_service import SonarrService
+from app.services.arr.helpers import refresh_media_item
+from app.services.media_server import MediaServerType, get_media_server
+from app.services.download.qbittorrent_service import QBittorrentService
+from app.services.arr.radarr_service import RadarrService
+from app.services.arr.sonarr_service import SonarrService
 
 logger = logging.getLogger(__name__)
 
@@ -156,34 +156,6 @@ class DeletionPipeline:
             f"File not found (checked exact path and {media_root}): {plex_path}"
         )
         return None
-
-    async def _get_plex_service(self) -> PlexService:
-        """Get Plex service instance with stored credentials"""
-        from app.models.config import Config
-
-        result = await self.db.execute(
-            select(Config).where(Config.key == "plex_auth_token")
-        )
-        token_config = result.scalar_one_or_none()
-
-        result = await self.db.execute(
-            select(Config).where(Config.key == "plex_server_name")
-        )
-        server_config = result.scalar_one_or_none()
-
-        if not token_config:
-            raise ValueError("Plex authentication token not found in database")
-
-        # Convert to plain string to detach from SQLAlchemy session
-        encrypted_token = str(token_config.value) if token_config.value else None
-        server_name = (
-            str(server_config.value) if server_config and server_config.value else None
-        )
-
-        return PlexService(
-            encrypted_token=encrypted_token,
-            server_name=server_name,
-        )
 
     async def delete_file(
         self,
@@ -348,7 +320,7 @@ class DeletionPipeline:
             await self.db.commit()
 
             # Stage 5: Refresh only the specific media in Plex (targeted refresh)
-            await self._stage_plex_refresh(history, duplicate_file)
+            await self._stage_media_server_refresh(history, duplicate_file)
 
             # Store metadata in history
             history.arr_type = arr_type
@@ -1326,71 +1298,70 @@ class DeletionPipeline:
             # The file is already deleted, rescan is important but not critical
             logger.warning(f"*arr rescan failed (non-critical): {e}")
 
-    async def _stage_plex_refresh(
+    async def _stage_media_server_refresh(
         self, history: DeletionHistory, duplicate_file: DuplicateFile
     ):
         """
-        Stage 5: Trigger targeted Plex refresh for the specific item only
+        Stage 5: ask the media server that reported this set to re-read the item.
 
-        Refreshes only the specific movie/episode item, not the entire library.
-        This runs AFTER the better file has been imported by *arr, so Plex will:
-        1. Notice the deleted file is gone
-        2. Find the newly imported better-quality file
-        3. Update metadata to reflect the better version
-
-        This is much faster and more efficient than a full library scan.
-        Uses the item's refresh() method to only refresh metadata for that specific item.
-
-        Args:
-            history: DeletionHistory record
-            duplicate_file: DuplicateFile with duplicate_set relationship loaded
+        It runs after *arr has imported the file being kept, so the server
+        notices the deleted file is gone and picks the better version up. Only
+        the owning server is refreshed; another server configured over the same
+        media sees the change on its own next scan.
         """
+        duplicate_set = duplicate_file.duplicate_set
+
+        if self.dry_run:
+            logger.info(
+                f"[DRY-RUN] Would refresh {duplicate_set.media_server} item "
+                f"for: {duplicate_file.file_path}"
+            )
+            history.media_server_refreshed = True
+            return
+
         try:
-            if self.dry_run:
+            server_type = MediaServerType(duplicate_set.media_server)
+        except ValueError:
+            # Sets created by the dev disk scan belong to no server.
+            logger.debug(
+                f"No media server owns set {duplicate_set.id} "
+                f"('{duplicate_set.media_server}') - nothing to refresh"
+            )
+            history.media_server_refreshed = True
+            return
+
+        try:
+            server = await get_media_server(self.db, server_type)
+
+            if await server.refresh_item(duplicate_set.item_id):
+                history.media_server_refreshed = True
                 logger.info(
-                    f"[DRY-RUN] Would trigger targeted Plex refresh for: {duplicate_file.file_path}"
+                    f"Refreshed {server_type.value} item {duplicate_set.item_id}"
                 )
-                history.plex_refreshed = True
-            else:
-                plex_service = await self._get_plex_service()
-                # Use already-loaded relationship
-                plex_item_id = duplicate_file.duplicate_set.plex_item_id
+                return
 
-                # Use item-specific refresh instead of path-based library scan
-                success = plex_service.refresh_item(plex_item_id)
-
-                if success:
-                    history.plex_refreshed = True
-                    logger.info(
-                        f"Triggered targeted Plex refresh for item: {plex_item_id}"
-                    )
-                else:
-                    # Fallback to full library refresh if targeted refresh fails
-                    logger.warning(
-                        "Targeted item refresh failed, falling back to library scan"
-                    )
-
-                    from app.models.config import Config
-
-                    result = await self.db.execute(
-                        select(Config).where(Config.key == "plex_libraries")
-                    )
-                    library_config = result.scalar_one_or_none()
-
-                    if library_config and library_config.value:
-                        library_names = library_config.value.split(",")
-                        for library_name in library_names:
-                            library_name = library_name.strip()
-                            if library_name:
-                                # Use refresh_library with library name (not ID)
-                                plex_service.refresh_library(library_name)
-
-                    history.plex_refreshed = True
-                    logger.info("Completed fallback library refresh")
+            # A targeted refresh can fail if the item is already gone, so fall
+            # back to re-scanning the libraries the user selected.
+            logger.warning("Targeted refresh failed - falling back to library scan")
+            for library_name in await self._configured_libraries():
+                await server.refresh_library(library_name)
+            history.media_server_refreshed = True
 
         except Exception as e:
-            logger.error(f"Plex refresh failed: {e}")
+            logger.error(f"Media server refresh failed: {e}")
             raise
+
+    async def _configured_libraries(self) -> list[str]:
+        """Library names the user selected during setup."""
+        from app.models.config import Config
+
+        result = await self.db.execute(
+            select(Config).where(Config.key == "media_libraries")
+        )
+        config = result.scalar_one_or_none()
+        if not config or not config.value:
+            return []
+        return [name.strip() for name in config.value.split(",") if name.strip()]
 
     async def _rollback_deletion(
         self,

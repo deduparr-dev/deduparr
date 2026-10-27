@@ -288,7 +288,7 @@ async def test_mark_setup_complete_missing_config(test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
+@patch("app.services.notifications.service.EmailService")
 async def test_test_email_connection_success(mock_email_service, test_db):
     """Test successful email connection test"""
     # Mock email service
@@ -316,7 +316,7 @@ async def test_test_email_connection_success(mock_email_service, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
+@patch("app.services.notifications.service.EmailService")
 async def test_test_email_connection_failure(mock_email_service, test_db):
     """Test failed email connection test"""
     # Mock email service to fail
@@ -347,7 +347,7 @@ async def test_test_email_connection_failure(mock_email_service, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
+@patch("app.services.notifications.service.EmailService")
 async def test_test_email_connection_exception(mock_email_service, test_db):
     """Test email connection test with exception"""
     # Mock email service to raise exception
@@ -373,7 +373,7 @@ async def test_test_email_connection_exception(mock_email_service, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
+@patch("app.services.notifications.service.EmailService")
 @patch("app.api.routes.setup.get_token_manager")
 async def test_test_email_connection_with_encrypted_password(
     mock_get_token_manager, mock_email_service, test_db

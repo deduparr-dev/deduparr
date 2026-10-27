@@ -5,7 +5,7 @@ Provides token encryption, CSRF protection, and secure logging.
 Usage Examples:
 
     Encrypting/Decrypting Tokens (any service):
-        from app.services.security import get_token_manager
+        from app.services.shared.security import get_token_manager
 
         # Plex token
         tm = get_token_manager()
@@ -21,20 +21,20 @@ Usage Examples:
         decrypted_sonarr = tm.decrypt(encrypted_sonarr)
 
     Sanitizing Sensitive Data for Logs:
-        from app.services.security import sanitize_log_data
+        from app.services.shared.security import sanitize_log_data
 
         logger.info(f"Authenticated with token: {sanitize_log_data(api_key)}")
         # Output: "Authenticated with token: abcd...xyz"
 
     OAuth PIN Flow (for services that support it):
-        from app.services.security import pin_cache
+        from app.services.shared.security import pin_cache
 
         pin_cache.set("pin-123", {"code": "ABCD", "state": "xyz"}, ttl=600)
         data = pin_cache.get("pin-123")
         pin_cache.delete("pin-123")
 
     Setting up Secure Logging Filter:
-        from app.services.security import SensitiveDataFilter
+        from app.services.shared.security import SensitiveDataFilter
 
         # In your main.py or logging config:
         logging.basicConfig(...)

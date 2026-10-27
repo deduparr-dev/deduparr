@@ -38,7 +38,7 @@ async def test_get_dashboard_stats_with_data(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate1 = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie 1",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -46,7 +46,7 @@ async def test_get_dashboard_stats_with_data(test_db):
         space_to_reclaim=1024 * 1024 * 1024,  # 1 GB
     )
     duplicate2 = DuplicateSet(
-        plex_item_id="movie2",
+        item_id="movie2",
         title="Test Movie 2",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -92,7 +92,7 @@ async def test_get_recent_activity_with_data(test_db):
 
     for i in range(5):
         duplicate = DuplicateSet(
-            plex_item_id=f"item{i}",
+            item_id=f"item{i}",
             title=f"Test Item {i}",
             media_type=MediaType.MOVIE,
             found_at=now - timedelta(minutes=i),
@@ -126,7 +126,7 @@ async def test_get_recent_activity_with_limit(test_db):
 
     for i in range(15):
         duplicate = DuplicateSet(
-            plex_item_id=f"item{i}",
+            item_id=f"item{i}",
             title=f"Test Item {i}",
             media_type=MediaType.EPISODE,
             found_at=now - timedelta(minutes=i),
@@ -171,7 +171,7 @@ async def test_get_recent_deletions_with_data(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -197,7 +197,7 @@ async def test_get_recent_deletions_with_data(test_db):
             deleted_from_qbit=True,
             deleted_from_arr=True,
             deleted_from_disk=True,
-            plex_refreshed=True,
+            media_server_refreshed=True,
             error=None,
         )
         test_db.add(history)
@@ -225,7 +225,7 @@ async def test_get_recent_deletions_with_errors(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -250,7 +250,7 @@ async def test_get_recent_deletions_with_errors(test_db):
         deleted_from_qbit=True,
         deleted_from_arr=False,
         deleted_from_disk=False,
-        plex_refreshed=False,
+        media_server_refreshed=False,
         error="Failed to connect to Radarr API",
     )
     test_db.add(history)
@@ -276,7 +276,7 @@ async def test_get_recent_deletions_with_limit(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -302,7 +302,7 @@ async def test_get_recent_deletions_with_limit(test_db):
             deleted_from_qbit=True,
             deleted_from_arr=True,
             deleted_from_disk=True,
-            plex_refreshed=True,
+            media_server_refreshed=True,
         )
         test_db.add(history)
 

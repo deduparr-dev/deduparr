@@ -9,7 +9,7 @@ FULL PATH, not just filename, to avoid deleting the wrong file.
 import pytest
 from unittest.mock import AsyncMock
 
-from app.services.sonarr_service import SonarrService
+from app.services.arr.sonarr_service import SonarrService
 from app.models.config import Config
 
 

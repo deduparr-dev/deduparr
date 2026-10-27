@@ -209,7 +209,7 @@ async def test_get_plex_libraries_exception(test_db):
 @pytest.mark.asyncio
 async def test_save_configuration_new_keys(test_db):
     """Test saving new configuration keys with encryption for sensitive data"""
-    from app.services.security import get_token_manager
+    from app.services.shared.security import get_token_manager
 
     setup_service = SetupService(test_db)
     config_data = {
@@ -260,7 +260,7 @@ async def test_save_configuration_new_keys(test_db):
 @pytest.mark.asyncio
 async def test_save_configuration_update_existing(test_db):
     """Test updating existing configuration keys with encryption"""
-    from app.services.security import get_token_manager
+    from app.services.shared.security import get_token_manager
 
     token_manager = get_token_manager()
     old_encrypted = token_manager.encrypt("old_password")

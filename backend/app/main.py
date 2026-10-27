@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.database import init_db
 from app.api.routes import config, setup, scoring, stats, scan, system
 from app.services.scheduler import get_scheduler
-from app.services.security import SensitiveDataFilter
+from app.services.shared.security import SensitiveDataFilter
 from app.services.system_service import SystemService
 
 # Configure logging based on environment variable

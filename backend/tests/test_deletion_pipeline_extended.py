@@ -9,7 +9,7 @@ Extended tests for deletion pipeline - comprehensive coverage of new features:
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.deletion_pipeline import DeletionPipeline
+from app.services.deletion.pipeline import DeletionPipeline
 from app.models import DuplicateSet, DuplicateFile
 from app.models.duplicate import MediaType, DuplicateStatus
 from app.models.config import Config
@@ -38,7 +38,7 @@ async def setup_configs(test_db):
         Config(key="sonarr_api_key", value="sonarr_key"),
         Config(key="plex_auth_token", value=encrypt_test_password("test_plex_token")),
         Config(key="plex_server_name", value="Test Server"),
-        Config(key="plex_libraries", value="Movies,TV Shows"),
+        Config(key="media_libraries", value="Movies,TV Shows"),
     ]
     test_db.add_all(configs)
     await test_db.commit()
@@ -53,7 +53,7 @@ async def movie_with_mismatched_path(test_db):
     Deduparr: /media/Movies/Avatar (2009)/Avatar.mkv
     """
     dup_set = DuplicateSet(
-        plex_item_id="movie123",
+        item_id="movie123",
         title="Avatar",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.APPROVED,
@@ -92,7 +92,7 @@ async def episode_with_mismatched_path(test_db):
     Deduparr: /media/TV/Breaking Bad/Season 01/S01E01.mkv
     """
     dup_set = DuplicateSet(
-        plex_item_id="episode456",
+        item_id="episode456",
         title="Breaking Bad - S01E01",
         media_type=MediaType.EPISODE,
         status=DuplicateStatus.APPROVED,
@@ -129,9 +129,12 @@ async def test_path_agnostic_radarr_matching(
 ):
     """Test that Radarr deletion works correctly with mocked Radarr API"""
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
         patch("os.listdir") as mock_listdir,
@@ -165,7 +168,7 @@ async def test_path_agnostic_radarr_matching(
         mock_isfile.return_value = True
 
         # Setup Plex
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -187,20 +190,23 @@ async def test_path_agnostic_sonarr_matching(
 ):
     """Test that Sonarr finds episodes by filename only, not full path"""
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
         patch(
-            "app.services.sonarr_service.SonarrService.find_episode_by_file_path",
+            "app.services.arr.sonarr_service.SonarrService.find_episode_by_file_path",
             new_callable=AsyncMock,
         ) as mock_find_episode,
         patch(
-            "app.services.sonarr_service.SonarrService.delete_episode_file",
+            "app.services.arr.sonarr_service.SonarrService.delete_episode_file",
             new_callable=AsyncMock,
         ) as mock_delete_episode_file,
         patch(
-            "app.services.sonarr_service.SonarrService.rescan_series",
+            "app.services.arr.sonarr_service.SonarrService.rescan_series",
             new_callable=AsyncMock,
         ) as mock_rescan_series,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
         patch("os.listdir") as mock_listdir,
@@ -232,7 +238,7 @@ async def test_path_agnostic_sonarr_matching(
         mock_isfile.return_value = True
 
         # Setup Plex
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -313,9 +319,12 @@ async def test_comprehensive_disk_cleanup_with_associated_files(
     """Test that deletion removes main file plus associated files (.nfo, .srt, etc.)"""
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
         patch("os.listdir") as mock_listdir,
@@ -346,7 +355,7 @@ async def test_comprehensive_disk_cleanup_with_associated_files(
         )
         mock_radarr_instance.del_movie_file = AsyncMock()
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -413,19 +422,22 @@ async def test_recursive_empty_directory_cleanup(
 
     with (
         patch(
-            "app.services.sonarr_service.SonarrService.find_episode_by_file_path",
+            "app.services.arr.sonarr_service.SonarrService.find_episode_by_file_path",
             new_callable=AsyncMock,
         ) as mock_find,
         patch(
-            "app.services.sonarr_service.SonarrService.delete_episode_file",
+            "app.services.arr.sonarr_service.SonarrService.delete_episode_file",
             new_callable=AsyncMock,
         ) as mock_delete,
         patch(
-            "app.services.sonarr_service.SonarrService.rescan_series",
+            "app.services.arr.sonarr_service.SonarrService.rescan_series",
             new_callable=AsyncMock,
         ),
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
         patch("os.listdir") as mock_listdir,
@@ -446,7 +458,7 @@ async def test_recursive_empty_directory_cleanup(
         mock_qbit_instance.torrents_info.return_value = []
 
         # Setup Plex
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -538,9 +550,12 @@ async def test_targeted_plex_refresh_with_library_id(
     """Test that Plex refresh uses targeted path refresh instead of full library scan"""
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
         patch("os.listdir") as mock_listdir,
@@ -568,7 +583,7 @@ async def test_targeted_plex_refresh_with_library_id(
         mock_radarr_instance.del_movie_file = AsyncMock()
 
         # Setup Plex with refresh_item method
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -579,18 +594,16 @@ async def test_targeted_plex_refresh_with_library_id(
         # Execute deletion
         history = await deletion_pipeline.delete_file(movie_with_mismatched_path.id)
 
-        # Verify refresh_item was called with the plex_item_id (targeted refresh)
+        # Verify refresh_item was called with the item_id (targeted refresh)
         mock_plex_instance.refresh_item.assert_called_once()
         call_args = mock_plex_instance.refresh_item.call_args[0]
-        # refresh_item should be called with the plex_item_id (ratingKey)
-        assert call_args[0] == str(
-            movie_with_mismatched_path.duplicate_set.plex_item_id
-        )
+        # refresh_item should be called with the item_id (ratingKey)
+        assert call_args[0] == str(movie_with_mismatched_path.duplicate_set.item_id)
 
         # Verify full library refresh was NOT called
         mock_plex_instance.refresh_library.assert_not_called()
 
-        assert history.plex_refreshed is True
+        assert history.media_server_refreshed is True
         assert history.is_complete is True
 
 
@@ -601,9 +614,12 @@ async def test_plex_refresh_fallback_to_full_scan(
     """Test that if targeted refresh fails, falls back to full library scan"""
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
         patch("os.listdir") as mock_listdir,
@@ -631,7 +647,7 @@ async def test_plex_refresh_fallback_to_full_scan(
         mock_radarr_instance.del_movie_file = AsyncMock()
 
         # Setup Plex - refresh_item fails, refresh_library succeeds
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = False  # Targeted refresh fails
         mock_plex_instance.refresh_library.return_value = True  # Full scan succeeds
@@ -648,7 +664,7 @@ async def test_plex_refresh_fallback_to_full_scan(
         # Fallback refreshes all configured libraries (Movies,TV Shows = 2 calls)
         assert mock_plex_instance.refresh_library.call_count == 2
 
-        assert history.plex_refreshed is True
+        assert history.media_server_refreshed is True
         assert history.is_complete is True
 
 
@@ -659,9 +675,12 @@ async def test_file_not_found_on_disk_after_cache_lookup(
     """Test handling when file isn't found even after recursive search"""
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.walk") as mock_walk,
     ):
@@ -683,7 +702,7 @@ async def test_file_not_found_on_disk_after_cache_lookup(
         )
         mock_radarr_instance.del_movie_file = AsyncMock()
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -772,7 +791,7 @@ async def test_special_characters_in_filenames(
     """Test handling of special characters in filenames (spaces, unicode, etc.)"""
 
     dup_set = DuplicateSet(
-        plex_item_id="movie_special",
+        item_id="movie_special",
         title="Movie with Special Chars",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.APPROVED,
@@ -793,21 +812,24 @@ async def test_special_characters_in_filenames(
 
     with (
         patch(
-            "app.services.radarr_service.RadarrService.find_movie_by_file_path",
+            "app.services.arr.radarr_service.RadarrService.find_movie_by_file_path",
             new_callable=AsyncMock,
         ) as mock_find,
         patch(
-            "app.services.radarr_service.RadarrService.delete_movie_file",
+            "app.services.arr.radarr_service.RadarrService.delete_movie_file",
             new_callable=AsyncMock,
         ) as mock_delete,
         patch(
-            "app.services.radarr_service.RadarrService.rescan_movie",
+            "app.services.arr.radarr_service.RadarrService.rescan_movie",
             new_callable=AsyncMock,
         ),
         patch("os.walk") as mock_walk,
         patch("os.path.exists") as mock_exists,
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.remove") as mock_remove,
         patch("os.listdir", return_value=[]),
         patch("os.path.isfile", return_value=True),
@@ -824,7 +846,7 @@ async def test_special_characters_in_filenames(
         mock_qbit_instance.torrents_info.return_value = []
 
         # Setup Plex
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -868,9 +890,12 @@ async def test_dry_run_mode_no_actual_changes(
     dry_run_pipeline = DeletionPipeline(test_db, dry_run=True)
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists", return_value=True),
         patch("os.remove") as mock_remove,
         patch("os.listdir", return_value=[]),
@@ -882,7 +907,7 @@ async def test_dry_run_mode_no_actual_changes(
         mock_radarr_instance = AsyncMock()
         mock_radarr.return_value = mock_radarr_instance
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
 
         # Execute deletion in dry-run mode

@@ -14,12 +14,12 @@ from sqlalchemy.orm import selectinload
 from app.main import app
 from app.models import Config, DuplicateSet
 from app.models.duplicate import MediaType
-from app.services.arr_client import (
+from app.services.arr.client import (
     ArrConnectionError,
     RadarrClient,
     SonarrClient,
 )
-from app.services.arr_quality import (
+from app.services.arr.quality import (
     PREFER_ARR_QUALITY_PROFILE_KEY,
     ArrQuality,
     ArrQualityRanker,
@@ -28,11 +28,11 @@ from app.services.arr_quality import (
     get_quality_rank,
     rank_by_arr_quality,
 )
-from app.services.scan_helpers import (
+from app.services.scan.helpers import (
     create_duplicate_set,
     verify_and_update_existing_set,
 )
-from app.services.scoring_engine import MediaMetadata, ScoringEngine
+from app.services.scan.scoring_engine import MediaMetadata, ScoringEngine
 
 # Profile items are ordered lowest to highest, like the *arr API returns them
 PROFILE = {
@@ -441,6 +441,7 @@ async def _create_set(test_db, arr_ranker, caplog) -> DuplicateSet:
     with caplog.at_level(logging.INFO):
         await create_duplicate_set(
             test_db,
+            "plex",
             "plex-1",
             "Film",
             MediaType.MOVIE,
@@ -533,6 +534,7 @@ async def test_existing_set_rerank_uses_arr_ranker(test_db):
     gone = metadata("/movies/Film (2020)/Film.2020.720p.HDTV.mkv", 2**29)
     await create_duplicate_set(
         test_db,
+        "plex",
         "plex-1",
         "Film",
         MediaType.MOVIE,

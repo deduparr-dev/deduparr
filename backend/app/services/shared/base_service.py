@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import Config
-from app.services.security import get_token_manager, InvalidTokenError
+from app.services.shared.security import get_token_manager, InvalidTokenError
 
 logger = logging.getLogger(__name__)
 

@@ -1346,14 +1346,13 @@ class DeletionPipeline:
             duplicate_file: DuplicateFile with duplicate_set relationship loaded
         """
         try:
-            plex_service = await self._get_plex_service()
-
             if self.dry_run:
                 logger.info(
                     f"[DRY-RUN] Would trigger targeted Plex refresh for: {duplicate_file.file_path}"
                 )
                 history.plex_refreshed = True
             else:
+                plex_service = await self._get_plex_service()
                 # Use already-loaded relationship
                 plex_item_id = duplicate_file.duplicate_set.plex_item_id
 

@@ -6,6 +6,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
+from sqlalchemy import func, select
+
 from app.services.scheduled_deletion import ScheduledDeletionService
 from app.models import (
     DuplicateSet,
@@ -111,8 +113,11 @@ async def test_run_scheduled_deletion_success(mock_pipeline_class, test_db):
     assert summary["files_deleted"] == 1  # Only one file marked for deletion
     assert summary["errors"] == []
 
-    # Verify deletion pipeline was called
-    mock_pipeline.delete_file.assert_called_once_with(file1.id)
+    # A real run must not inherit the pipeline's dry_run=True default
+    mock_pipeline_class.assert_called_once_with(test_db, dry_run=False)
+    # Rescan happens once per set, not once per file
+    mock_pipeline.delete_file.assert_called_once_with(file1.id, skip_rescan=True)
+    mock_pipeline.rescan_for_kept_file.assert_awaited_once()
 
     # Verify set status updated
     await test_db.refresh(duplicate_set)
@@ -488,3 +493,63 @@ async def test_run_scheduled_deletion_no_email_in_dry_run(mock_pipeline_class, t
 
     # Email should not be sent in dry run
     # (No easy way to verify without mocking, but documented in docstring)
+
+
+@pytest.mark.asyncio
+async def test_real_run_deletes_from_disk(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path, monkeypatch
+):
+    """A dry_run=False run drives the real pipeline, so the file leaves the disk."""
+    from app.models import DeletionHistory
+    from app.services.deletion_pipeline import DeletionPipeline
+
+    monkeypatch.setattr(
+        DeletionPipeline, "_get_plex_service", AsyncMock(return_value=MagicMock())
+    )
+    keep = tmp_path / "keep.mkv"
+    drop = tmp_path / "drop.mkv"
+    keep.write_bytes(b"k" * 2048)
+    drop.write_bytes(b"d" * 1024)
+
+    dup_set = await create_duplicate_set(title="Bulk Movie")
+    await create_duplicate_file(dup_set.id, file_path=str(keep), keep=True, score=90)
+    await create_duplicate_file(dup_set.id, file_path=str(drop), keep=False, score=10)
+
+    summary = await ScheduledDeletionService(test_db).run_scheduled_deletion(
+        dry_run=False, send_email=False
+    )
+
+    assert summary["files_deleted"] == 1
+    assert summary["errors"] == []
+    assert not drop.exists()
+    assert keep.exists()
+    assert (await test_db.execute(select(func.count(DeletionHistory.id)))).scalar() == 1
+    await test_db.refresh(dup_set)
+    assert dup_set.status == DuplicateStatus.PROCESSED
+
+
+@pytest.mark.asyncio
+async def test_dry_run_leaves_files_in_place(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """A dry run reports what it would do without deleting or recording anything."""
+    from app.models import DeletionHistory
+
+    drop = tmp_path / "drop.mkv"
+    drop.write_bytes(b"d" * 1024)
+
+    dup_set = await create_duplicate_set(title="Bulk Movie")
+    await create_duplicate_file(
+        dup_set.id, file_path=str(tmp_path / "keep.mkv"), keep=True, score=90
+    )
+    await create_duplicate_file(dup_set.id, file_path=str(drop), keep=False, score=10)
+
+    summary = await ScheduledDeletionService(test_db).run_scheduled_deletion(
+        dry_run=True, send_email=False
+    )
+
+    assert summary["files_deleted"] == 1
+    assert drop.exists()
+    assert (await test_db.execute(select(func.count(DeletionHistory.id)))).scalar() == 0
+    await test_db.refresh(dup_set)
+    assert dup_set.status == DuplicateStatus.PENDING

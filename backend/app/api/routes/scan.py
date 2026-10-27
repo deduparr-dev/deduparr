@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import get_db
 from app.models import Config, DuplicateSet, ScoringRule
 from app.models.duplicate import DuplicateStatus, MediaType, encode_inode
+from app.services.arr_quality import ArrQualityRanker
 from app.services.deletion_pipeline import DeletionPipeline
 from app.services.disk_scan_service import (
     DiskScanConfig,
@@ -338,6 +339,7 @@ async def _process_duplicate_movies(
     Returns:
         tuple[int, int, int]: (sets_created, sets_updated, sets_removed)
     """
+    arr_ranker = await ArrQualityRanker.from_config(db)
     sets_created = 0
     sets_updated = 0
     sets_removed = 0
@@ -380,6 +382,7 @@ async def _process_duplicate_movies(
                 scoring_engine,
                 custom_rules,
                 logger,
+                arr_ranker,
             )
             if set_valid:
                 if files_removed > 0:
@@ -401,6 +404,7 @@ async def _process_duplicate_movies(
             scoring_engine,
             custom_rules,
             logger,
+            arr_ranker,
         )
         sets_created += 1
 
@@ -418,6 +422,7 @@ async def _process_duplicate_episodes(
     Returns:
         tuple[int, int, int]: (sets_created, sets_updated, sets_removed)
     """
+    arr_ranker = await ArrQualityRanker.from_config(db)
     sets_created = 0
     sets_updated = 0
     sets_removed = 0
@@ -461,6 +466,7 @@ async def _process_duplicate_episodes(
                 scoring_engine,
                 custom_rules,
                 logger,
+                arr_ranker,
             )
             if set_valid:
                 if files_removed > 0:
@@ -484,6 +490,7 @@ async def _process_duplicate_episodes(
             scoring_engine,
             custom_rules,
             logger,
+            arr_ranker,
         )
         sets_created += 1
 

@@ -250,8 +250,7 @@ def demonstrate_scoring():
 
     print_separator("DEDUPARR SCORING LOGIC DEMONSTRATION")
 
-    print(
-        """
+    print("""
 This demonstrates how Deduparr decides which duplicate file to keep.
 The file with the HIGHEST SCORE is kept, all others are marked for deletion.
 
@@ -266,8 +265,7 @@ SCORING FACTORS:
 SUBTITLE HANDLING:
 Currently, subtitles are NOT considered in scoring. This is a planned feature.
 The scoring focuses on video/audio quality only.
-    """
-    )
+    """)
 
     # Create scoring engine
     engine = ScoringEngine()
@@ -441,8 +439,7 @@ The scoring focuses on video/audio quality only.
         print(f"  {component:30s}: {score:+7,} points")
 
     print_separator("CONCLUSION")
-    print(
-        """
+    print("""
 The scoring system prioritizes:
 1. Video quality (resolution, codec, bitrate)
 2. Audio quality (codec)
@@ -468,8 +465,7 @@ To add subtitle scoring, you would:
 2. Add SUBTITLE_SCORES to ScoringEngine
 3. Add _score_subtitles() method
 4. Include in calculate_score()
-    """
-    )
+    """)
 
 
 def print_results(ranked_files):

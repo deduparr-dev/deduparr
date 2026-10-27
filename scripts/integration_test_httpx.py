@@ -431,8 +431,7 @@ def print_manual_test_checklist():
     print("\n" + "=" * 70)
     print("MANUAL INTEGRATION TEST CHECKLIST")
     print("=" * 70)
-    print(
-        """
+    print("""
 If you have Radarr/Sonarr running, you can manually verify the httpx migration:
 
 1. CONNECTION TESTING
@@ -469,8 +468,7 @@ EXPECTED RESULTS:
 ✅ No new errors or exceptions in logs
 ✅ Response times should be similar or better than PyArr
 ✅ All duplicate detection and deletion workflows function normally
-"""
-    )
+""")
     print("=" * 70 + "\n")
 
 

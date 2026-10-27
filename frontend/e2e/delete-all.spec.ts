@@ -14,7 +14,7 @@ test.describe("delete all duplicates", () => {
 
     await gotoApp(page, "/scan");
 
-    await expect(page.getByRole("button", { name: /^Delete All/ })).toHaveCount(0);
+    await expect(page.getByTestId("delete-all")).toHaveCount(0);
   });
 
   test("a dry run reports every pending set without deleting anything", async ({
@@ -27,10 +27,10 @@ test.describe("delete all duplicates", () => {
 
     await gotoApp(page, "/scan");
 
-    const deleteAll = page.getByRole("button", {
-      name: new RegExp(`^Delete All \\(${pendingBefore.length}\\)`),
-    });
-    await expect(deleteAll).toBeVisible();
+    const deleteAll = page.getByTestId("delete-all");
+    // Exactly one bulk control, whatever the number of pending sets
+    await expect(deleteAll).toHaveCount(1);
+    await expect(deleteAll).toHaveText(new RegExp(`Delete All \\(${pendingBefore.length}\\)`));
     await deleteAll.click();
 
     // Dry run is pre-selected, so the destructive action is never the default
@@ -51,15 +51,14 @@ test.describe("delete all duplicates", () => {
     await seedDuplicateSet(request, "Cancel Movie (2024)");
 
     await gotoApp(page, "/scan");
-    await page.getByRole("button", { name: /^Delete All/ }).click();
-    await expect(page.locator("#dry-run-all")).toBeVisible();
+    await expect(page.getByTestId("delete-all")).toHaveCount(1);
+    await page.getByTestId("delete-all").click();
 
-    await page
-      .locator("div", { has: page.locator("#dry-run-all") })
-      .getByRole("button", { name: "Cancel" })
-      .first()
-      .click();
+    const panel = page.getByTestId("delete-confirm-all");
+    await expect(panel).toBeVisible();
 
-    await expect(page.locator("#dry-run-all")).toHaveCount(0);
+    await panel.getByRole("button", { name: "Cancel" }).click();
+
+    await expect(panel).toHaveCount(0);
   });
 });

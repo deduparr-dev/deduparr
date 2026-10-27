@@ -53,7 +53,10 @@ function DeleteConfirmPanel({
   const checkboxId = `dry-run-${id}`;
 
   return (
-    <div className="mt-3 md:mt-4 p-3 md:p-4 rounded-lg bg-warning-light border border-warning-border">
+    <div
+      data-testid={`delete-confirm-${id}`}
+      className="mt-3 md:mt-4 p-3 md:p-4 rounded-lg bg-warning-light border border-warning-border"
+    >
       <div className="flex items-start gap-2 mb-3">
         <AlertTriangle className="w-4 h-4 md:w-5 md:h-5 text-warning flex-shrink-0 mt-0.5" />
         <div>
@@ -653,6 +656,7 @@ export default function Scan() {
             <Button
               size="sm"
               variant="destructive"
+              data-testid="delete-all"
               disabled={deleteAllMutation.isPending}
               onClick={() => setShowDeleteAllConfirm(!showDeleteAllConfirm)}
               className="w-full md:w-auto text-xs md:text-sm"

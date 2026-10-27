@@ -57,7 +57,9 @@ export default defineConfig({
         ENCRYPTION_KEY_FILE: path.join(E2E_TMP, ".encryption_key"),
         CONFIG_DIR: E2E_TMP,
         MEDIA_DIR: path.join(E2E_TMP, "media"),
-        LOG_LEVEL: "WARNING",
+        // DEBUG unlocks /api/scan/dev/disk-scan, the only way a spec can
+        // create duplicate sets without a real Plex server.
+        LOG_LEVEL: "DEBUG",
         ENABLE_SCHEDULED_SCANS: "false",
         ENABLE_SCHEDULED_DELETION: "false",
       },

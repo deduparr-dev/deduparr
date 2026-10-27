@@ -33,6 +33,69 @@ function formatBytes(bytes: number): string {
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
 }
 
+function DeleteConfirmPanel({
+  id,
+  heading,
+  description,
+  dryRun,
+  onDryRunChange,
+  onConfirm,
+  onCancel,
+}: {
+  id: string;
+  heading: string;
+  description: React.ReactNode;
+  dryRun: boolean;
+  onDryRunChange: (value: boolean) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const checkboxId = `dry-run-${id}`;
+
+  return (
+    <div className="mt-3 md:mt-4 p-3 md:p-4 rounded-lg bg-warning-light border border-warning-border">
+      <div className="flex items-start gap-2 mb-3">
+        <AlertTriangle className="w-4 h-4 md:w-5 md:h-5 text-warning flex-shrink-0 mt-0.5" />
+        <div>
+          <h5 className="font-semibold text-sm md:text-base text-foreground">{heading}</h5>
+          <p className="text-xs md:text-sm text-muted-foreground mt-1">{description}</p>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-2 mb-3">
+        <Checkbox
+          id={checkboxId}
+          checked={dryRun}
+          onCheckedChange={(checked) => onDryRunChange(checked === true)}
+          className="mt-0.5"
+        />
+        <label htmlFor={checkboxId} className="text-xs md:text-sm font-medium">
+          Dry Run <span className="text-muted-foreground font-normal">(Test without deleting)</span>
+        </label>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Button
+          size="sm"
+          variant={dryRun ? "secondary" : "destructive"}
+          onClick={onConfirm}
+          className="text-xs md:text-sm w-full sm:w-auto"
+        >
+          {dryRun ? "Test Deletion (Dry Run)" : "Delete Permanently"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onCancel}
+          className="text-xs md:text-sm w-full sm:w-auto"
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function DuplicateSetCard({
   dupSet,
   onDelete,
@@ -137,56 +200,23 @@ function DuplicateSetCard({
           )}
         </div>
 
-        {/* Delete Confirmation */}
         {showDeleteConfirm && !isDeleting && (
-          <div className="mt-3 md:mt-4 p-3 md:p-4 rounded-lg bg-warning-light border border-warning-border">
-            <div className="flex items-start gap-2 mb-3">
-              <AlertTriangle className="w-4 h-4 md:w-5 md:h-5 text-warning flex-shrink-0 mt-0.5" />
-              <div>
-                <h5 className="font-semibold text-sm md:text-base text-foreground">
-                  Confirm Deletion
-                </h5>
-                <p className="text-xs md:text-sm text-muted-foreground mt-1">
-                  This will delete <strong>{filesToDelete.length}</strong> file
-                  {filesToDelete.length === 1 ? "" : "s"} and keep{" "}
-                  <strong>{filesToKeep.length}</strong> file
-                  {filesToKeep.length === 1 ? "" : "s"}.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-2 mb-3">
-              <Checkbox
-                id="dry-run"
-                checked={dryRun}
-                onCheckedChange={(checked) => setDryRun(checked === true)}
-                className="mt-0.5"
-              />
-              <label htmlFor="dry-run" className="text-xs md:text-sm font-medium">
-                Dry Run{" "}
-                <span className="text-muted-foreground font-normal">(Test without deleting)</span>
-              </label>
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Button
-                size="sm"
-                variant={dryRun ? "secondary" : "destructive"}
-                onClick={handleDelete}
-                className="text-xs md:text-sm w-full sm:w-auto"
-              >
-                {dryRun ? "Test Deletion (Dry Run)" : "Delete Permanently"}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setShowDeleteConfirm(false)}
-                className="text-xs md:text-sm w-full sm:w-auto"
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
+          <DeleteConfirmPanel
+            id={String(dupSet.id)}
+            heading="Confirm Deletion"
+            description={
+              <>
+                This will delete <strong>{filesToDelete.length}</strong> file
+                {filesToDelete.length === 1 ? "" : "s"} and keep{" "}
+                <strong>{filesToKeep.length}</strong> file
+                {filesToKeep.length === 1 ? "" : "s"}.
+              </>
+            }
+            dryRun={dryRun}
+            onDryRunChange={setDryRun}
+            onConfirm={handleDelete}
+            onCancel={() => setShowDeleteConfirm(false)}
+          />
         )}
       </div>
 
@@ -367,6 +397,9 @@ export default function Scan() {
     },
   });
 
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [deleteAllDryRun, setDeleteAllDryRun] = useState(true);
+
   // Delete duplicate set mutation
   const deleteMutation = useMutation({
     mutationFn: ({ setId, dryRun }: { setId: number; dryRun: boolean }) =>
@@ -378,6 +411,33 @@ export default function Scan() {
       });
       if (!data.dry_run) {
         // Invalidate all relevant caches to show updated stats immediately
+        queryClient.invalidateQueries({ queryKey: ["duplicates"] });
+        queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
+        queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
+        queryClient.invalidateQueries({ queryKey: ["recentActivity"] });
+        queryClient.invalidateQueries({ queryKey: ["recentDeletions"] });
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Deletion Failed",
+        description: <div>{error.message}</div>,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Delete every pending set in one pass
+  const deleteAllMutation = useMutation({
+    mutationFn: (dryRun: boolean) => scanAPI.deleteAllDuplicateSets(dryRun),
+    onSuccess: (data) => {
+      toast({
+        title: data.dry_run ? "Dry Run Complete" : "Deletion Complete",
+        description: <div>{data.message}</div>,
+        variant: data.success ? undefined : "destructive",
+      });
+      setShowDeleteAllConfirm(false);
+      if (!data.dry_run) {
         queryClient.invalidateQueries({ queryKey: ["duplicates"] });
         queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
         queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
@@ -442,6 +502,13 @@ export default function Scan() {
   }
 
   const isScanning = startScanMutation.isPending;
+
+  const pendingSets = duplicates.filter((dupSet) => dupSet.status === "pending");
+  const pendingFilesToDelete = pendingSets.reduce(
+    (total, dupSet) => total + dupSet.files.filter((file) => !file.keep).length,
+    0
+  );
+  const pendingSpace = pendingSets.reduce((total, dupSet) => total + dupSet.space_to_reclaim, 0);
 
   // Dev-only: Direct disk scan mutation
   const devScanMutation = useMutation({
@@ -580,7 +647,45 @@ export default function Scan() {
 
       {/* Results */}
       <div className="space-y-3 md:space-y-4">
-        <h3 className="text-base md:text-lg font-semibold">Duplicate Sets Found</h3>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <h3 className="text-base md:text-lg font-semibold">Duplicate Sets Found</h3>
+          {pendingSets.length > 0 && (
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={deleteAllMutation.isPending}
+              onClick={() => setShowDeleteAllConfirm(!showDeleteAllConfirm)}
+              className="w-full md:w-auto text-xs md:text-sm"
+            >
+              {deleteAllMutation.isPending ? (
+                <Loader2 className="w-3 h-3 md:w-4 md:h-4 mr-2 animate-spin" />
+              ) : (
+                <Trash2 className="w-3 h-3 md:w-4 md:h-4 mr-2" />
+              )}
+              Delete All ({pendingSets.length})
+            </Button>
+          )}
+        </div>
+
+        {showDeleteAllConfirm && !deleteAllMutation.isPending && (
+          <DeleteConfirmPanel
+            id="all"
+            heading="Delete every pending duplicate set"
+            description={
+              <>
+                This will delete <strong>{pendingFilesToDelete}</strong> file
+                {pendingFilesToDelete === 1 ? "" : "s"} across <strong>{pendingSets.length}</strong>{" "}
+                set
+                {pendingSets.length === 1 ? "" : "s"}, keeping the highest ranked file in each, and
+                reclaim about <strong>{formatBytes(pendingSpace)}</strong>.
+              </>
+            }
+            dryRun={deleteAllDryRun}
+            onDryRunChange={setDeleteAllDryRun}
+            onConfirm={() => deleteAllMutation.mutate(deleteAllDryRun)}
+            onCancel={() => setShowDeleteAllConfirm(false)}
+          />
+        )}
         {duplicates.length === 0 ? (
           <Card className="p-6 md:p-8 text-center text-sm md:text-base text-muted-foreground">
             No duplicates found. Start a scan to find duplicate media files.

@@ -20,7 +20,6 @@ class ScheduledDeletionService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.deletion_pipeline = DeletionPipeline(db)
 
     async def run_scheduled_deletion(
         self,
@@ -62,6 +61,8 @@ class ScheduledDeletionService:
 
         logger.info(f"Found {len(pending_sets)} pending sets to delete")
 
+        pipeline = DeletionPipeline(self.db, dry_run=dry_run)
+
         sets_processed = 0
         files_deleted = 0
         errors = []
@@ -69,8 +70,9 @@ class ScheduledDeletionService:
         for duplicate_set in pending_sets:
             try:
                 set_errors: list[str] = []
-                # Get files marked for deletion (keep=False means delete)
+                # keep=False means delete
                 files_to_delete = [f for f in duplicate_set.files if not f.keep]
+                files_to_keep = [f for f in duplicate_set.files if f.keep]
 
                 if not files_to_delete:
                     logger.warning(
@@ -84,30 +86,34 @@ class ScheduledDeletionService:
                     f"({duplicate_set.title})"
                 )
 
-                if dry_run:
-                    # Simulate deletion
-                    logger.info(
-                        f"[DRY RUN] Would delete: {[f.file_path for f in files_to_delete]}"
-                    )
-                    files_deleted += len(files_to_delete)
-                    sets_processed += 1
-                else:
-                    # Actually delete files
-                    for file in files_to_delete:
-                        try:
-                            await self.deletion_pipeline.delete_file(file.id)
-                            files_deleted += 1
-                        except Exception as e:
-                            error_msg = f"Failed to delete {file.file_path}: {str(e)}"
-                            logger.error(error_msg)
-                            set_errors.append(error_msg)
+                # Rescan once per set after every file is gone, as the single-set
+                # endpoint does, instead of once per deleted file.
+                for file in files_to_delete:
+                    try:
+                        await pipeline.delete_file(file.id, skip_rescan=True)
+                        files_deleted += 1
+                    except Exception as e:
+                        error_msg = f"Failed to delete {file.file_path}: {str(e)}"
+                        logger.error(error_msg)
+                        set_errors.append(error_msg)
 
-                    # Mark set as processed if all deletions completed
-                    if not set_errors:
-                        duplicate_set.status = DuplicateStatus.PROCESSED
-                        sets_processed += 1
-                    else:
-                        errors.extend(set_errors)
+                if set_errors:
+                    errors.extend(set_errors)
+                    continue
+
+                if files_to_keep:
+                    try:
+                        await pipeline.rescan_for_kept_file(
+                            duplicate_set.media_type,
+                            files_to_keep[0].file_path,
+                            duplicate_set.id,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to trigger *arr rescan: {e}")
+
+                if not dry_run:
+                    duplicate_set.status = DuplicateStatus.PROCESSED
+                sets_processed += 1
 
             except Exception as e:
                 error_msg = f"Error processing set {duplicate_set.id}: {str(e)}"

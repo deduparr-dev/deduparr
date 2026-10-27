@@ -964,3 +964,68 @@ async def test_update_file_keep_recalculates_space(
     data = response.json()
     # Now only file3 (2 GB) should be reclaimable
     assert data["space_to_reclaim"] == file3.file_size
+
+
+@pytest.mark.asyncio
+async def test_delete_all_nothing_pending(client):
+    """Delete-all succeeds with zero counts when there is nothing pending"""
+    response = await client.post(
+        "/api/scan/duplicates/delete-all", json={"dry_run": True}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["sets_processed"] == 0
+    assert data["files_deleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_all_dry_run_spans_every_pending_set(client, test_db, tmp_path):
+    """Delete-all covers every pending set at once and keeps dry runs harmless"""
+    for n in (1, 2):
+        dup_set = DuplicateSet(
+            plex_item_id=f"item-{n}",
+            title=f"Movie {n}",
+            media_type=MediaType.MOVIE,
+            status=DuplicateStatus.PENDING,
+        )
+        test_db.add(dup_set)
+        await test_db.flush()
+        drop = tmp_path / f"drop{n}.mkv"
+        drop.write_bytes(b"d" * 1024)
+        test_db.add_all(
+            [
+                DuplicateFile(
+                    set_id=dup_set.id,
+                    file_path=str(tmp_path / f"keep{n}.mkv"),
+                    file_size=2048,
+                    score=90,
+                    keep=True,
+                ),
+                DuplicateFile(
+                    set_id=dup_set.id,
+                    file_path=str(drop),
+                    file_size=1024,
+                    score=10,
+                    keep=False,
+                ),
+            ]
+        )
+    await test_db.commit()
+
+    response = await client.post(
+        "/api/scan/duplicates/delete-all", json={"dry_run": True}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dry_run"] is True
+    assert data["sets_processed"] == 2
+    assert data["files_deleted"] == 2
+    assert "[DRY-RUN]" in data["message"]
+
+    # Nothing removed, nothing marked processed
+    assert (tmp_path / "drop1.mkv").exists()
+    statuses = (await test_db.execute(select(DuplicateSet.status))).scalars().all()
+    assert all(s == DuplicateStatus.PENDING for s in statuses)

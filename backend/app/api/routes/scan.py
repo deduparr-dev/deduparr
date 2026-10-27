@@ -18,6 +18,7 @@ from app.models import Config, DuplicateSet, ScoringRule
 from app.models.duplicate import DuplicateStatus, MediaType, encode_inode
 from app.services.arr_quality import ArrQualityRanker
 from app.services.deletion_pipeline import DeletionPipeline
+from app.services.scheduled_deletion import ScheduledDeletionService
 from app.services.disk_scan_service import (
     DiskScanConfig,
     DiskScanService,
@@ -97,6 +98,17 @@ class DeleteResponse(BaseModel):
     dry_run: bool
     files_deleted: int
     space_reclaimed: int
+    errors: List[str] = []
+
+
+class DeleteAllResponse(BaseModel):
+    """Response from deleting every pending duplicate set"""
+
+    success: bool
+    message: str
+    dry_run: bool
+    sets_processed: int
+    files_deleted: int
     errors: List[str] = []
 
 
@@ -576,6 +588,42 @@ async def get_scan_status(db: AsyncSession = Depends(get_db)):
         "pending_sets": pending_sets.scalar() or 0,
         "total_space_reclaimable": total_space.scalar() or 0,
     }
+
+
+@router.post("/duplicates/delete-all", response_model=DeleteAllResponse)
+async def delete_all_duplicate_sets(
+    delete_request: DeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete the non-kept files of every PENDING duplicate set in one pass.
+
+    Which file survives is whatever the scan already marked as keep, so the
+    criteria are the scoring rules and the optional *arr quality profile
+    preference. Runs the same pipeline as the scheduled deletion.
+
+    Args:
+        delete_request: Contains dry_run flag (default True for safety)
+    """
+    summary = await ScheduledDeletionService(db).run_scheduled_deletion(
+        dry_run=delete_request.dry_run,
+        send_email=False,
+    )
+
+    verb = "Would delete" if summary["dry_run"] else "Deleted"
+    message = (
+        f"{'[DRY-RUN] ' if summary['dry_run'] else ''}{verb} "
+        f"{summary['files_deleted']} file(s) across {summary['sets_processed']} duplicate set(s)"
+    )
+
+    return DeleteAllResponse(
+        success=not summary["errors"],
+        message=message,
+        dry_run=summary["dry_run"],
+        sets_processed=summary["sets_processed"],
+        files_deleted=summary["files_deleted"],
+        errors=summary["errors"],
+    )
 
 
 @router.post("/duplicates/{set_id}/delete", response_model=DeleteResponse)

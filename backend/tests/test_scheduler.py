@@ -2,6 +2,8 @@
 Tests for the scheduler service
 """
 
+import logging
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -408,3 +410,47 @@ def test_get_scheduler_singleton():
     scheduler2 = get_scheduler()
 
     assert scheduler1 is scheduler2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("library_type", ["movie", "show"])
+@patch("app.services.email_notifications.send_scan_complete_email")
+@patch("app.api.routes.scan._cleanup_stale_duplicate_sets")
+@patch("app.api.routes.scan._process_duplicate_episodes")
+@patch("app.api.routes.scan._process_duplicate_movies")
+@patch("app.services.scheduler.PlexService")
+@patch("app.services.scheduler.AsyncSessionLocal")
+async def test_run_scheduled_scan_uses_process_results(
+    mock_session_local,
+    mock_plex_service,
+    mock_process_movies,
+    mock_process_episodes,
+    mock_cleanup,
+    mock_send_email,
+    library_type,
+    test_db,
+    caplog,
+):
+    """The (created, updated, removed) results are consumed without errors"""
+    mock_session_local.return_value.__aenter__.return_value = test_db
+    mock_session_local.return_value.__aexit__.return_value = AsyncMock()
+
+    test_db.add(Config(key="plex_libraries", value="Library"))
+    test_db.add(Config(key="plex_auth_token", value="encrypted_token_123"))
+    await test_db.commit()
+
+    mock_library = MagicMock()
+    mock_library.type = library_type
+    mock_plex_instance = MagicMock()
+    mock_plex_instance.get_library.return_value = mock_library
+    mock_plex_service.return_value = mock_plex_instance
+    mock_process_movies.return_value = (5, 3, 1)
+    mock_process_episodes.return_value = (5, 3, 1)
+
+    with caplog.at_level(logging.ERROR, logger="app.services.scheduler"):
+        await ScanScheduler()._run_scheduled_scan()
+
+    assert "Error scanning library" not in caplog.text
+    mock_send_email.assert_awaited_once()
+    assert mock_send_email.await_args.kwargs["sets_created"] == 5
+    assert mock_send_email.await_args.kwargs["sets_existing"] == 3

@@ -260,16 +260,14 @@ async def manual_import_file(
         if media_type == "movie":
             manual_import_items = await client.get_manual_import(
                 folder=folder_path,
-                downloadId="",
-                movieId=media_id,
-                filterExistingFiles=True,
+                movie_id=media_id,
+                filter_existing_files=True,
             )
         else:  # series
             manual_import_items = await client.get_manual_import(
                 folder=folder_path,
-                downloadId="",
-                seriesId=media_id,
-                filterExistingFiles=True,
+                series_id=media_id,
+                filter_existing_files=True,
             )
 
         if not manual_import_items:
@@ -317,7 +315,7 @@ async def manual_import_file(
                 }
             ]
 
-        response = client.post_command(
+        response = await client.post_command(
             "ManualImport",
             files=import_files,
             importMode="Move",

@@ -19,6 +19,30 @@ function formatBytes(bytes: number): string {
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
 }
 
+interface DeletionBadge {
+  variant: "default" | "destructive" | "outline";
+  className: string;
+  text: string;
+}
+
+function deletionBadge(isComplete: boolean, hasError: boolean): DeletionBadge {
+  if (!isComplete) {
+    return { variant: "destructive", className: "", text: "Failed" };
+  }
+  if (hasError) {
+    return {
+      variant: "outline",
+      className: "border-warning-border bg-warning-light text-warning-foreground",
+      text: "Partial",
+    };
+  }
+  return {
+    variant: "outline",
+    className: "border-success-border bg-success-light text-success-foreground",
+    text: "Complete",
+  };
+}
+
 function getStatusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   if (status === "pending") return "outline";
   if (status === "approved") return "secondary";
@@ -136,27 +160,7 @@ export default function Dashboard() {
           <h2 className="text-lg md:text-xl font-semibold mb-4">Recent Deletions</h2>
           <div className="space-y-3 md:space-y-4">
             {deletions.map((deletion) => {
-              const hasWarnings = deletion.error && deletion.is_complete;
-              const statusText = deletion.is_complete
-                ? hasWarnings
-                  ? "Partial"
-                  : "Complete"
-                : "Failed";
-
-              let badgeVariant: "default" | "destructive" | "outline" = "default";
-              let badgeClassName = "";
-
-              if (deletion.is_complete) {
-                if (hasWarnings) {
-                  badgeVariant = "outline";
-                  badgeClassName = "border-warning-border bg-warning-light text-warning-foreground";
-                } else {
-                  badgeVariant = "outline";
-                  badgeClassName = "border-success-border bg-success-light text-success-foreground";
-                }
-              } else {
-                badgeVariant = "destructive";
-              }
+              const badge = deletionBadge(deletion.is_complete, Boolean(deletion.error));
 
               return (
                 <div
@@ -171,8 +175,8 @@ export default function Dashboard() {
                       {deletion.file_path}
                     </div>
                     <div className="mt-2">
-                      <Badge variant={badgeVariant} className={badgeClassName}>
-                        {statusText}
+                      <Badge variant={badge.variant} className={badge.className}>
+                        {badge.text}
                       </Badge>
                     </div>
                     {deletion.error && (

@@ -6,7 +6,7 @@ scan API route and the scheduler share one implementation.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 from sqlalchemy import select
@@ -41,6 +41,9 @@ class ScanTotals:
     sets_created: int = 0
     sets_updated: int = 0
     sets_removed: int = 0
+    # What was actually scanned, which is not the caller's request when the
+    # stored per-server selection is used.
+    libraries_scanned: List[str] = field(default_factory=list)
 
 
 async def get_custom_scoring_rules(db: AsyncSession) -> List[dict]:
@@ -126,6 +129,7 @@ async def run_scan(
                 db, groups, media_type, server.type.value, scoring_engine, custom_rules
             )
 
+            totals.libraries_scanned.append(library["title"])
             totals.duplicates_found += sum(len(group.files) for group in groups)
             totals.sets_created += created
             totals.sets_updated += updated

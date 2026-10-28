@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models import Config
-from app.services.media_server import get_media_servers, selected_libraries
+from app.services.media_server import get_media_servers
 from app.services.scan.runner import run_scan
 
 logger = logging.getLogger(__name__)
@@ -40,20 +40,10 @@ class ScanScheduler:
                     logger.error("No media server configured - skipping scheduled scan")
                     return
 
-                # Each server has its own selection, so the email reports the
-                # union of what was actually scanned.
-                libraries = sorted(
-                    {
-                        name
-                        for server in servers
-                        for name in await selected_libraries(db, server.type)
-                    }
-                )
-                if not libraries:
+                totals = await run_scan(db)
+                if not totals.libraries_scanned:
                     logger.warning("No libraries selected - skipping scheduled scan")
                     return
-
-                totals = await run_scan(db)
 
                 logger.info(
                     f"Scheduled scan complete: {totals.sets_created} new sets, "
@@ -70,7 +60,7 @@ class ScanScheduler:
                         duplicates_found=totals.duplicates_found,
                         sets_created=totals.sets_created,
                         sets_existing=totals.sets_updated,
-                        libraries_scanned=libraries,
+                        libraries_scanned=totals.libraries_scanned,
                     )
                 except Exception as e:
                     logger.warning(f"Failed to send scheduled scan email: {e}")

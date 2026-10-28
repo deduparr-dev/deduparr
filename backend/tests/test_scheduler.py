@@ -20,7 +20,7 @@ async def test_run_scheduled_scan_delegates_to_the_runner(
     mock_session_local.return_value.__aenter__.return_value = test_db
     mock_session_local.return_value.__aexit__.return_value = AsyncMock()
     mock_run_scan.return_value = ScanTotals(
-        duplicates_found=4, sets_created=2, sets_updated=1
+        duplicates_found=4, sets_created=2, sets_updated=1, libraries_scanned=["Movies"]
     )
 
     test_db.add_all(
@@ -110,7 +110,7 @@ async def test_run_scheduled_scan_queues_deletion_when_enabled(
     """Deletion is queued after a scan only when the setting is on."""
     mock_session_local.return_value.__aenter__.return_value = test_db
     mock_session_local.return_value.__aexit__.return_value = AsyncMock()
-    mock_run_scan.return_value = ScanTotals()
+    mock_run_scan.return_value = ScanTotals(libraries_scanned=["Movies"])
 
     test_db.add_all(
         [
@@ -262,3 +262,29 @@ def test_get_scheduler_singleton():
     scheduler2 = get_scheduler()
 
     assert scheduler1 is scheduler2
+
+
+@pytest.mark.asyncio
+@patch("app.services.scheduler.run_scan", new_callable=AsyncMock)
+@patch("app.services.scheduler.AsyncSessionLocal")
+async def test_run_scheduled_scan_stops_when_nothing_was_scanned(
+    mock_session_local, mock_run_scan, test_db
+):
+    """No libraries selected means no scan happened, so no deletion follows."""
+    mock_session_local.return_value.__aenter__.return_value = test_db
+    mock_session_local.return_value.__aexit__.return_value = AsyncMock()
+    mock_run_scan.return_value = ScanTotals()
+
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="token"),
+            Config(key="enable_scheduled_deletion", value="true"),
+        ]
+    )
+    await test_db.commit()
+
+    scheduler = ScanScheduler()
+    scheduler.scheduler = MagicMock()
+    await scheduler._run_scheduled_scan()
+
+    assert not scheduler.scheduler.add_job.called

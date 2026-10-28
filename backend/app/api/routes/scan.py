@@ -157,7 +157,12 @@ async def start_scan(
 
     return ScanResponse(
         success=True,
-        message=f"Scan completed for {len(scan_request.library_names)} libraries",
+        message=(
+            f"Scanned {len(totals.libraries_scanned)} librar"
+            f"{'y' if len(totals.libraries_scanned) == 1 else 'ies'}: "
+            f"{totals.sets_created} new, {totals.sets_updated} updated, "
+            f"{totals.sets_removed} removed"
+        ),
         duplicates_found=totals.duplicates_found,
         sets_created=totals.sets_created,
         sets_updated=totals.sets_updated,

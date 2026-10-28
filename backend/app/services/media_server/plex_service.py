@@ -518,17 +518,20 @@ class PlexService:
                 raise ValueError("Plex authentication required. Please sign in.")
 
             try:
-                token_manager = get_token_manager()
-                decrypted = token_manager.decrypt(self.encrypted_token)
-                # Check if decryption returned None
+                decrypted = get_token_manager().decrypt(self.encrypted_token)
                 if not decrypted:
                     raise ValueError("Decryption returned empty token")
                 self._decrypted_token = decrypted
             except Exception as e:
-                logger.error(f"Failed to decrypt Plex token: {str(e)}")
-                raise ValueError(
-                    "Failed to decrypt authentication token. Please re-authenticate with Plex."
+                # Before the config API encrypted secrets, a token written
+                # through it was stored in the clear. Use it and ask for a
+                # re-save, as the *arr services do, rather than locking the
+                # user out of their own instance.
+                logger.warning(
+                    f"Plex token decryption failed ({e}), treating as plain text. "
+                    f"Re-save configuration to encrypt it."
                 )
+                self._decrypted_token = self.encrypted_token
 
         return self._decrypted_token
 

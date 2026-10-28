@@ -34,10 +34,9 @@ test.describe("setup wizard media server step", () => {
   test("continuing needs at least one server selected", async ({ page }) => {
     await openServerChoice(page);
 
-    const plex = page.locator("#choose-plex");
-    if (await plex.isChecked()) {
-      await plex.uncheck();
-    }
+    // Nothing is pre-selected, so Continue starts unavailable
+    await expect(page.locator("#choose-plex")).not.toBeChecked();
+    await expect(page.locator("#choose-jellyfin")).not.toBeChecked();
     await expect(page.getByTestId("server-choice-continue")).toBeDisabled();
     await expect(page.getByText("Select at least one media server")).toBeVisible();
 
@@ -48,10 +47,6 @@ test.describe("setup wizard media server step", () => {
   test("Jellyfin alone leads straight to its own step, skipping Plex", async ({ page }) => {
     await openServerChoice(page);
 
-    const plex = page.locator("#choose-plex");
-    if (await plex.isChecked()) {
-      await plex.uncheck();
-    }
     await page.locator("#choose-jellyfin").check();
     await page.getByTestId("server-choice-continue").click();
 
@@ -62,10 +57,6 @@ test.describe("setup wizard media server step", () => {
 
   async function openJellyfinStep(page: import("@playwright/test").Page) {
     await openServerChoice(page);
-    const plex = page.locator("#choose-plex");
-    if (await plex.isChecked()) {
-      await plex.uncheck();
-    }
     await page.locator("#choose-jellyfin").check();
     await page.getByTestId("server-choice-continue").click();
     await expect(page.getByRole("heading", { name: /connect jellyfin/i })).toBeVisible();

@@ -274,3 +274,34 @@ async def test_jellyfin_adapter_reads_libraries_and_paths(test_db):
     assert libraries[0]["type"] == "movie"
     assert libraries[0]["count"] == 11
     assert await adapter.get_library_paths("Movies") == ["/media/movies"]
+
+
+@pytest.mark.asyncio
+async def test_selected_libraries_is_per_server(test_db):
+    """
+    Each server has its own selection, under its own key.
+
+    Two servers can hold libraries of the same name, and a user running both
+    may want only one of them scanned, so one shared list cannot express it.
+    """
+    from app.services.media_server import libraries_config_key, selected_libraries
+
+    assert libraries_config_key(MediaServerType.PLEX) == "plex_libraries"
+    assert libraries_config_key(MediaServerType.JELLYFIN) == "jellyfin_libraries"
+
+    assert await selected_libraries(test_db, MediaServerType.PLEX) == []
+
+    test_db.add_all(
+        [
+            Config(key="plex_libraries", value="Movies, TV Shows ,"),
+            Config(key="jellyfin_libraries", value="Films"),
+        ]
+    )
+    await test_db.commit()
+
+    # Whitespace trimmed and empty entries dropped
+    assert await selected_libraries(test_db, MediaServerType.PLEX) == [
+        "Movies",
+        "TV Shows",
+    ]
+    assert await selected_libraries(test_db, MediaServerType.JELLYFIN) == ["Films"]

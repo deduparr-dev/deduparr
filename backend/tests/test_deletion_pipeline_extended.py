@@ -38,7 +38,7 @@ async def setup_configs(test_db):
         Config(key="sonarr_api_key", value="sonarr_key"),
         Config(key="plex_auth_token", value=encrypt_test_password("test_plex_token")),
         Config(key="plex_server_name", value="Test Server"),
-        Config(key="media_libraries", value="Movies,TV Shows"),
+        Config(key="plex_libraries", value="Movies,TV Shows"),
     ]
     test_db.add_all(configs)
     await test_db.commit()

@@ -48,6 +48,30 @@ _ADAPTERS: Dict[MediaServerType, Type] = {
 }
 
 
+def libraries_config_key(server_type: MediaServerType) -> str:
+    """
+    The config key holding which of a server's libraries to scan.
+
+    Named per server - plex_libraries, jellyfin_libraries - so the two never
+    share a selection: a user running both may want only one of them scanned,
+    and two servers can have libraries of the same name.
+    """
+    return f"{server_type.value}_libraries"
+
+
+async def selected_libraries(
+    db: AsyncSession, server_type: MediaServerType
+) -> List[str]:
+    """Library names the user chose for one server."""
+    result = await db.execute(
+        select(Config).where(Config.key == libraries_config_key(server_type))
+    )
+    config = result.scalar_one_or_none()
+    if not config or not config.value:
+        return []
+    return [name.strip() for name in config.value.split(",") if name.strip()]
+
+
 async def configured_types(db: AsyncSession) -> List[MediaServerType]:
     """Media servers this instance has credentials for, in a stable order."""
     result = await db.execute(select(Config.key, Config.value))
@@ -97,5 +121,7 @@ __all__ = [
     "get_media_server",
     "get_media_servers",
     "is_sample_file",
+    "libraries_config_key",
     "probe_file",
+    "selected_libraries",
 ]

@@ -85,7 +85,7 @@ export async function getPendingSets(
 export async function markJellyfinConfigured(request: APIRequestContext) {
   await setConfig(request, "jellyfin_url", JELLYFIN_URL);
   await setConfig(request, "jellyfin_api_key", JELLYFIN_API_KEY);
-  await setConfig(request, "media_libraries", JELLYFIN_LIBRARY);
+  await setConfig(request, "jellyfin_libraries", JELLYFIN_LIBRARY);
 }
 
 export async function markJellyfinUnconfigured(request: APIRequestContext) {
@@ -126,9 +126,9 @@ export async function setJellyfinMode(
 }
 
 /** Run a scan through the real API and return what it reported. */
-export async function runScan(request: APIRequestContext, libraries: string[]) {
+export async function runScan(request: APIRequestContext, libraries?: string[]) {
   const res = await request.post(`${BACKEND_URL}/api/scan/start`, {
-    data: { library_names: libraries, media_types: ["movie"] },
+    data: { library_names: libraries ?? [], media_types: ["movie"] },
   });
   if (!res.ok()) {
     throw new Error(`scan failed: HTTP ${res.status()} ${await res.text()}`);

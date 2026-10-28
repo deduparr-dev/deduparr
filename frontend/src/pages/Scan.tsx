@@ -20,6 +20,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   scanAPI,
   configAPI,
+  setupAPI,
   type DuplicateSet as ApiDuplicateSet,
   type DuplicateFile,
 } from "@/services/api";
@@ -338,10 +339,10 @@ export default function Scan() {
 
   const deepScanEnabled = deepScanData?.enabled ?? false;
 
-  // Fetch Plex libraries only if Plex authentication token exists in database
+  // Libraries from every configured media server, each tagged with its origin
   const { data: libraries = [], isPending: librariesPending } = useQuery({
-    queryKey: ["plexLibraries"],
-    queryFn: () => configAPI.getPlexLibraries(),
+    queryKey: ["mediaLibraries"],
+    queryFn: () => setupAPI.getMediaLibraries(),
     enabled: plexConfigured, // Only run query if plex_auth_token exists in config
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes
     retry: false, // Don't retry failed requests to avoid delays
@@ -548,7 +549,7 @@ export default function Scan() {
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-foreground">Scan for Duplicates</h1>
         <p className="text-sm md:text-base text-muted-foreground mt-1">
-          Find duplicate media files in your Plex libraries
+          Find duplicate media files in your libraries
         </p>
       </div>
 

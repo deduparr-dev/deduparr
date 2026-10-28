@@ -7,7 +7,7 @@ scan API route and the scheduler share one implementation.
 
 import logging
 from dataclasses import dataclass
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,11 @@ from sqlalchemy.orm import selectinload
 from app.models import DuplicateSet, ScoringRule
 from app.models.duplicate import DuplicateStatus, MediaType
 from app.services.arr.quality import ArrQualityRanker
-from app.services.media_server import DuplicateGroup, get_media_servers
+from app.services.media_server import (
+    DuplicateGroup,
+    get_media_servers,
+    selected_libraries,
+)
 from app.services.scan.helpers import (
     cleanup_stale_set,
     create_duplicate_set,
@@ -52,20 +56,32 @@ async def get_custom_scoring_rules(db: AsyncSession) -> List[dict]:
     ]
 
 
-async def run_scan(db: AsyncSession, library_names: List[str]) -> ScanTotals:
+async def run_scan(
+    db: AsyncSession, library_names: Optional[List[str]] = None
+) -> ScanTotals:
     """
-    Scan the named libraries on every configured media server.
+    Scan every configured media server.
 
-    A library name is looked up per server, so an instance running both Plex
-    and Jellyfin over the same media covers both without the caller choosing.
+    Each server has its own stored selection, so an instance running both Plex
+    and Jellyfin scans only what was chosen for each. Passing library_names
+    overrides that for this run, applying the same names to every server.
+
     Sets are keyed per server, so each one's view is kept separately.
     """
     scoring_engine = ScoringEngine()
     custom_rules = await get_custom_scoring_rules(db)
     totals = ScanTotals()
-    wanted = set(library_names)
 
     for server in await get_media_servers(db):
+        wanted = set(
+            library_names
+            if library_names is not None
+            else await selected_libraries(db, server.type)
+        )
+        if not wanted:
+            logger.info(f"No libraries selected for {server.type.value} - skipping")
+            continue
+
         orchestrator = ScanOrchestrator(server, db)
 
         try:

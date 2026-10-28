@@ -190,3 +190,61 @@ async def test_run_scan_persists_what_it_found(test_db):
     test_db.expire_all()
     result = await test_db.execute(select(DuplicateSet))
     assert [s.item_id for s in result.scalars().all()] == ["committed"]
+
+
+@pytest.mark.asyncio
+async def test_run_scan_uses_each_servers_own_selection(test_db):
+    """Without explicit names, each server scans only what was chosen for it."""
+    from app.models import Config
+
+    plex = _server(
+        MediaServerType.PLEX,
+        [
+            {"key": "1", "title": "Movies", "type": "movie", "count": 1},
+            {"key": "2", "title": "Kids", "type": "movie", "count": 1},
+        ],
+        movie_groups=[_group("p1")],
+    )
+    jellyfin = _server(
+        MediaServerType.JELLYFIN,
+        [{"key": "3", "title": "Films", "type": "movie", "count": 1}],
+        movie_groups=[_group("j1")],
+    )
+
+    test_db.add_all(
+        [
+            Config(key="plex_libraries", value="Movies"),
+            Config(key="jellyfin_libraries", value="Films"),
+        ]
+    )
+    await test_db.commit()
+
+    with patch(
+        "app.services.scan.runner.get_media_servers",
+        new_callable=AsyncMock,
+        return_value=[plex, jellyfin],
+    ):
+        await run_scan(test_db)
+
+    plex.find_duplicate_movies.assert_awaited_once_with("Movies")
+    jellyfin.find_duplicate_movies.assert_awaited_once_with("Films")
+
+
+@pytest.mark.asyncio
+async def test_run_scan_skips_a_server_with_nothing_selected(test_db):
+    """A server the user chose no libraries for is left alone."""
+    plex = _server(
+        MediaServerType.PLEX,
+        [{"key": "1", "title": "Movies", "type": "movie", "count": 1}],
+        movie_groups=[_group("p1")],
+    )
+
+    with patch(
+        "app.services.scan.runner.get_media_servers",
+        new_callable=AsyncMock,
+        return_value=[plex],
+    ):
+        totals = await run_scan(test_db)
+
+    assert totals.sets_created == 0
+    plex.get_libraries.assert_not_awaited()

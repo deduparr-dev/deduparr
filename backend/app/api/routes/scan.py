@@ -143,11 +143,11 @@ async def start_scan(
     """
     Scan the named libraries for duplicates.
 
-    Every configured media server is scanned, so an instance running both Plex
-    and Jellyfin over the same media covers both.
+    Every configured media server is scanned, each over the libraries chosen
+    for it. Passing library_names overrides those selections for this run.
     """
     await get_configured_media_servers(db)
-    totals = await run_scan(db, scan_request.library_names)
+    totals = await run_scan(db, scan_request.library_names or None)
 
     total_result = await db.execute(
         select(func.count(DuplicateSet.id)).where(

@@ -11,53 +11,6 @@ from app.models import Config
 
 
 @pytest.mark.asyncio
-async def test_get_enabled_libraries_success(test_db):
-    """Test retrieving enabled libraries from config"""
-    # Setup: Add config with libraries
-    config = Config(key="media_libraries", value="Movies,TV Shows,Anime")
-    test_db.add(config)
-    await test_db.commit()
-
-    # Execute
-    scheduler = ScanScheduler()
-    libraries = await scheduler._get_enabled_libraries(test_db)
-
-    # Verify
-    assert len(libraries) == 3
-    assert "Movies" in libraries
-    assert "TV Shows" in libraries
-    assert "Anime" in libraries
-
-
-@pytest.mark.asyncio
-async def test_get_enabled_libraries_empty(test_db):
-    """Test retrieving libraries when none configured"""
-    scheduler = ScanScheduler()
-    libraries = await scheduler._get_enabled_libraries(test_db)
-
-    # Should return empty list and log warning
-    assert libraries == []
-
-
-@pytest.mark.asyncio
-async def test_get_enabled_libraries_strips_whitespace(test_db):
-    """Test that library names are properly trimmed"""
-    # Setup: Add config with extra whitespace
-    config = Config(key="media_libraries", value="  Movies  ,  TV Shows  ,  ")
-    test_db.add(config)
-    await test_db.commit()
-
-    # Execute
-    scheduler = ScanScheduler()
-    libraries = await scheduler._get_enabled_libraries(test_db)
-
-    # Verify whitespace is stripped and empty strings removed
-    assert len(libraries) == 2
-    assert "Movies" in libraries
-    assert "TV Shows" in libraries
-
-
-@pytest.mark.asyncio
 @patch("app.services.scheduler.run_scan", new_callable=AsyncMock)
 @patch("app.services.scheduler.AsyncSessionLocal")
 async def test_run_scheduled_scan_delegates_to_the_runner(
@@ -72,7 +25,7 @@ async def test_run_scheduled_scan_delegates_to_the_runner(
 
     test_db.add_all(
         [
-            Config(key="media_libraries", value="Movies, TV Shows"),
+            Config(key="plex_libraries", value="Movies, TV Shows"),
             Config(key="plex_auth_token", value="token"),
         ]
     )
@@ -80,7 +33,8 @@ async def test_run_scheduled_scan_delegates_to_the_runner(
 
     await ScanScheduler()._run_scheduled_scan()
 
-    mock_run_scan.assert_awaited_once_with(test_db, ["Movies", "TV Shows"])
+    # Each server's own selection is read inside the runner
+    mock_run_scan.assert_awaited_once_with(test_db)
 
 
 @pytest.mark.asyncio
@@ -93,7 +47,7 @@ async def test_run_scheduled_scan_needs_a_media_server(
     mock_session_local.return_value.__aenter__.return_value = test_db
     mock_session_local.return_value.__aexit__.return_value = AsyncMock()
 
-    test_db.add(Config(key="media_libraries", value="Movies"))
+    test_db.add(Config(key="plex_libraries", value="Movies"))
     await test_db.commit()
 
     await ScanScheduler()._run_scheduled_scan()
@@ -105,7 +59,7 @@ async def test_run_scheduled_scan_needs_a_media_server(
 async def test_run_scheduled_scan_no_plex_config(test_db):
     """Test scheduled scan fails gracefully when Plex not configured"""
     # Setup: No Plex config
-    test_db.add(Config(key="media_libraries", value="Movies"))
+    test_db.add(Config(key="plex_libraries", value="Movies"))
     await test_db.commit()
 
     # Execute
@@ -160,7 +114,7 @@ async def test_run_scheduled_scan_queues_deletion_when_enabled(
 
     test_db.add_all(
         [
-            Config(key="media_libraries", value="Movies"),
+            Config(key="plex_libraries", value="Movies"),
             Config(key="plex_auth_token", value="token"),
             Config(key="enable_scheduled_deletion", value="true"),
         ]

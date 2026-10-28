@@ -153,6 +153,41 @@ async def endpoint(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Model))
 ```
 
+### Media Servers
+
+Deduparr reads libraries from Plex, Jellyfin, or both at once. Everything above
+`app/services/media_server/` works against one contract and never touches a
+server SDK:
+
+- `base.py` - the `MediaServer` protocol and `DuplicateGroup`, which carries an
+  item id, a title and the `MediaMetadata` of each file
+- `plex_adapter.py` / `jellyfin_adapter.py` - one per server
+- `file_probe.py` - sample detection and the stat/inode probe both adapters and
+  the disk scanner share
+- `__init__.py` - `get_media_servers(db)`, and `selected_libraries()` for the
+  per-server `plex_libraries` / `jellyfin_libraries` selection
+
+**A server counts as configured when its credentials are present**, so there is
+no separate "which server" setting to drift out of step. Duplicate sets are
+keyed on `(media_server, item_id)`: the same title on both servers stays two
+sets, and one server's scan never discards the other's findings.
+
+Authentication is deliberately outside the protocol, because the two differ:
+
+- **Plex** uses the plex.tv OAuth PIN flow described below
+- **Jellyfin** uses a server URL and an API key, which **must belong to an
+  administrator** - library paths and scan triggers are admin-only endpoints,
+  and item queries need a user id only an admin key can look up
+
+The Jellyfin adapter uses the official `jellyfin-apiclient-python` SDK. That
+SDK is synchronous, so every call goes through `asyncio.to_thread`. Two of its
+quirks are worth knowing: `get_system_info()` reads `System/Configuration` and
+carries no version (`get_system_info_new()` reads `System/Info`), and Jellyfin
+routes and binds query parameters case-insensitively, which the SDK relies on.
+
+`e2e/fake-jellyfin/` is a stand-in server so the suite can drive the adapter
+without a Jellyfin install.
+
 ### Plex OAuth Authentication Flow
 
 Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token entry, this project uses **plex.tv OAuth with PIN login ONLY** with enterprise-grade security:
@@ -171,8 +206,9 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
 - **Secure Logging**: Sensitive data sanitized in logs (shows only first/last few chars)
 
 **Critical:** 
-- Never use direct Plex server URLs
-- Never support manual token entry - OAuth only
+- For **Plex**, never use direct server URLs and never support manual token
+  entry - OAuth only. This rule is specific to Plex; Jellyfin is configured
+  with a URL and an admin API key, which is the only thing it offers.
 - Always authenticate via plex.tv token first
 - All tokens/API keys encrypted using `services/security.py`
 - Use `get_token_manager()` for all encryption/decryption operations (works for any service)
@@ -181,13 +217,21 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
 
 ### Database Models Structure
 
+The schema is owned by **Alembic** (`backend/alembic/`), applied on startup by
+`init_db()`. Add a migration for any model change; `create_all` no longer
+decides the schema.
+
 Five core models with specific relationships:
 
-- `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`)
+- `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`).
+  `media_server` + `item_id` say which server reported it and its id there
 - `DuplicateFile`: Individual file in duplicate set (has one `DeletionHistory`)
 - `DeletionHistory`: Tracks multi-stage deletion (qBittorrent → *arr → disk → Plex refresh)
 - `ScoringRule`: User-defined regex patterns for scoring
 - `Config`: Key-value settings store
+
+`DeletionHistory.media_server_refreshed` records the final stage for whichever
+server owns the set.
 
 All models use timezone-aware UTC timestamps via `datetime.now(timezone.utc)`. Enums defined as `str, enum.Enum` for JSON serialization.
 
@@ -414,6 +458,10 @@ Not yet implemented. Will remove torrents by hash after verifying file path matc
 - Type-safe codebase (no `any` types in TypeScript or Python)
 - Comprehensive test suite (pytest with async support)
 
+**Also implemented:**
+- Jellyfin support, alongside or instead of Plex (#470)
+- Bulk deletion of every pending set (#442)
+
 **Partially Implemented ⏳:**
 - Settings page (UI exists, needs backend integration)
 - Setup wizard (UI exists, needs OAuth flow refinement)
@@ -422,7 +470,6 @@ Not yet implemented. Will remove torrents by hash after verifying file path matc
 - Plex smart collections support
 - Kometa integration
 - Preview thumbnails from Plex
-- Bulk actions (approve all, reject all)
 - "Keep both" option with reason logging
 - Export/import configuration
 - Scheduled scans (automation)

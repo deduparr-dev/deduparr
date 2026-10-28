@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models import Config
-from app.services.media_server import get_media_servers
+from app.services.media_server import get_media_servers, selected_libraries
 from app.services.scan.runner import run_scan
 
 logger = logging.getLogger(__name__)
@@ -29,36 +29,31 @@ class ScanScheduler:
         self.scheduler = AsyncIOScheduler()
         self.is_running = False
 
-    async def _get_enabled_libraries(self, db: AsyncSession) -> list[str]:
-        """Get list of enabled Plex libraries from config"""
-        result = await db.execute(select(Config).where(Config.key == "media_libraries"))
-        config = result.scalar_one_or_none()
-
-        if not config or not config.value:
-            logger.warning("No Plex libraries configured for scheduled scans")
-            return []
-
-        # Value is stored as comma-separated string
-        libraries = [lib.strip() for lib in config.value.split(",") if lib.strip()]
-        logger.info(f"Found {len(libraries)} configured libraries for scanning")
-        return libraries
-
     async def _run_scheduled_scan(self):
         """Execute a scheduled duplicate scan across every configured server."""
         logger.info("Starting scheduled duplicate scan")
 
         async with AsyncSessionLocal() as db:
             try:
-                libraries = await self._get_enabled_libraries(db)
-                if not libraries:
-                    logger.warning("No libraries configured - skipping scheduled scan")
-                    return
-
-                if not await get_media_servers(db):
+                servers = await get_media_servers(db)
+                if not servers:
                     logger.error("No media server configured - skipping scheduled scan")
                     return
 
-                totals = await run_scan(db, libraries)
+                # Each server has its own selection, so the email reports the
+                # union of what was actually scanned.
+                libraries = sorted(
+                    {
+                        name
+                        for server in servers
+                        for name in await selected_libraries(db, server.type)
+                    }
+                )
+                if not libraries:
+                    logger.warning("No libraries selected - skipping scheduled scan")
+                    return
+
+                totals = await run_scan(db)
 
                 logger.info(
                     f"Scheduled scan complete: {totals.sets_created} new sets, "

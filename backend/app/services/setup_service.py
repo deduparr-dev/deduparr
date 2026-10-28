@@ -19,7 +19,7 @@ from app.services.media_server.plex_service import PlexAuthService, PlexService
 from app.services.download.qbittorrent_service import QBittorrentService
 from app.services.arr.radarr_service import RadarrService
 from app.services.arr.sonarr_service import SonarrService
-from app.services.shared.security import InvalidTokenError, get_token_manager
+from app.services.shared.security import encrypt_if_sensitive, get_token_manager
 
 logger = logging.getLogger(__name__)
 
@@ -547,40 +547,14 @@ class SetupService:
         Args:
             config_data: Dictionary of config key-value pairs
         """
-        token_manager = get_token_manager()
-
-        # Keys that should be encrypted before storage
-        encrypted_keys = {
-            "qbittorrent_password",
-            "plex_auth_token",
-            "jellyfin_api_key",
-            "radarr_api_key",
-            "sonarr_api_key",
-            "smtp_password",
-        }
-
         for key, value in config_data.items():
             # Skip empty values - don't save them
             if not value:
                 logger.warning(f"Skipping empty value for key: {key}")
                 continue
 
-            # Encrypt sensitive values before saving
-            if key in encrypted_keys:
-                # Check if value is already encrypted to prevent double-encryption
-                try:
-                    token_manager.decrypt(value)
-                    # Successfully decrypted - it's already encrypted, use as-is
-                    logger.info(
-                        f"Value for {key} is already encrypted, skipping re-encryption"
-                    )
-                except (InvalidTokenError, Exception):
-                    # Not encrypted or invalid - encrypt it now
-                    encrypted_value = token_manager.encrypt(value)
-                    # Ensure encryption succeeded (should never return None for non-empty input)
-                    if not encrypted_value:
-                        raise ValueError(f"Failed to encrypt value for key: {key}")
-                    value = encrypted_value
+            # Secrets are encrypted by the one helper every write path uses
+            value = encrypt_if_sensitive(key, value)
 
             result = await self.db.execute(select(Config).where(Config.key == key))
             config = result.scalar_one_or_none()

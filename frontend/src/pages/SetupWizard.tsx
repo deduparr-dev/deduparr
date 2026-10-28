@@ -19,7 +19,8 @@ interface ConnectionTestResult {
 }
 
 interface SelectedLibrary {
-  key: string;
+  /** "plex" or "jellyfin": the selection is per server, not a shared name */
+  server: string;
   title: string;
 }
 
@@ -121,9 +122,9 @@ export default function SetupWizard() {
   const [isPending, startTransition] = useTransition();
   const [isLoadingLibraries, startLibrariesTransition] = useTransition();
 
-  // Which media servers to set up. Plex is pre-selected because it is what
-  // most installs use, but either one on its own is enough.
-  const [choice, setChoice] = useState<ServerChoice>({ plex: true, jellyfin: false });
+  // Nothing is pre-selected: Deduparr does not assume which media server the
+  // user runs, and either one on its own is enough.
+  const [choice, setChoice] = useState<ServerChoice>({ plex: false, jellyfin: false });
 
   // Jellyfin state
   const [jellyfinUrl, setJellyfinUrl] = useState<string>("");
@@ -351,30 +352,21 @@ export default function SetupWizard() {
     });
   }
 
-  // A library name can exist on both servers; it is one choice here, and a
-  // scan looks that name up on every configured server.
-  const mergedLibraries = Object.values(
-    libraries
-      .filter((library) => library.type === "movie" || library.type === "show")
-      .reduce<Record<string, { title: string; type: string; servers: string[] }>>(
-        (merged, library) => {
-          const existing = merged[library.title];
-          if (existing) {
-            if (!existing.servers.includes(library.server)) {
-              existing.servers.push(library.server);
-            }
-          } else {
-            merged[library.title] = {
-              title: library.title,
-              type: library.type,
-              servers: [library.server],
-            };
-          }
-          return merged;
-        },
-        {}
-      )
+  const scannableLibraries = libraries.filter(
+    (library) => library.type === "movie" || library.type === "show"
   );
+
+  function isSelected(server: string, title: string) {
+    return selectedLibraries.some((lib) => lib.server === server && lib.title === title);
+  }
+
+  function toggleLibrary(server: string, title: string, selected: boolean) {
+    setSelectedLibraries((prev) =>
+      selected
+        ? [...prev, { server, title }]
+        : prev.filter((lib) => !(lib.server === server && lib.title === title))
+    );
+  }
 
   function loadJellyfinLibraries() {
     setError("");
@@ -410,9 +402,17 @@ export default function SetupWizard() {
     startTransition(async () => {
       try {
         // Build config object, only including non-empty values
-        const config: Record<string, string> = {
-          media_libraries: selectedLibraries.map((lib) => lib.title).join(","),
-        };
+        const config: Record<string, string> = {};
+
+        // The selection is stored per server, under the key that names it
+        for (const server of ["plex", "jellyfin"]) {
+          const chosen = selectedLibraries
+            .filter((lib) => lib.server === server)
+            .map((lib) => lib.title);
+          if (chosen.length > 0) {
+            config[`${server}_libraries`] = chosen.join(",");
+          }
+        }
 
         // Only the servers that were actually set up are saved, since their
         // presence is what marks a server as configured.
@@ -842,27 +842,18 @@ export default function SetupWizard() {
                 </div>
               ) : (
                 <div className="space-y-2 md:space-y-3">
-                  {mergedLibraries.map((library) => (
+                  {scannableLibraries.map((library) => (
                     <label
-                      key={library.title}
-                      htmlFor={`library-${library.title}`}
+                      key={`${library.server}:${library.key}`}
+                      htmlFor={`library-${library.server}-${library.key}`}
                       className="flex items-center p-3 md:p-4 border-2 rounded-lg cursor-pointer hover:border-muted-foreground transition-colors"
                     >
                       <Checkbox
-                        id={`library-${library.title}`}
-                        checked={selectedLibraries.some((lib) => lib.title === library.title)}
-                        onCheckedChange={(checked) => {
-                          if (checked) {
-                            setSelectedLibraries([
-                              ...selectedLibraries,
-                              { key: library.title, title: library.title },
-                            ]);
-                          } else {
-                            setSelectedLibraries(
-                              selectedLibraries.filter((lib) => lib.title !== library.title)
-                            );
-                          }
-                        }}
+                        id={`library-${library.server}-${library.key}`}
+                        checked={isSelected(library.server, library.title)}
+                        onCheckedChange={(checked) =>
+                          toggleLibrary(library.server, library.title, checked === true)
+                        }
                       />
                       <div className="ml-3 flex-1">
                         <span className="font-semibold text-sm md:text-base">{library.title}</span>
@@ -870,7 +861,7 @@ export default function SetupWizard() {
                           ({library.type})
                         </span>
                         <span className="text-xs text-muted-foreground ml-2">
-                          on {library.servers.join(" and ")}
+                          on {library.server}
                         </span>
                       </div>
                     </label>

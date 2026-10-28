@@ -189,7 +189,8 @@ export interface LogsResponse {
 export interface PlexConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
-  media_libraries?: string;
+  plex_libraries?: string;
+  jellyfin_libraries?: string;
   radarr_url?: string;
   radarr_api_key?: string;
   sonarr_url?: string;

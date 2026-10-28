@@ -4,15 +4,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Film,
-  Tv,
-  Download,
-  Check,
-  X,
-  Loader2,
-  Settings as SettingsIcon,
   AlertCircle,
+  Check,
+  Download,
+  Film,
+  Loader2,
   Mail,
+  Server,
+  Settings as SettingsIcon,
+  Tv,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { configAPI } from "@/services/api";
@@ -30,6 +31,7 @@ interface PlexServer {
 const tabs = [
   { id: "general", name: "General", icon: SettingsIcon },
   { id: "plex", name: "Plex", icon: Film },
+  { id: "jellyfin", name: "Jellyfin", icon: Server },
   { id: "radarr", name: "Radarr", icon: Film },
   { id: "sonarr", name: "Sonarr", icon: Tv },
   { id: "qbittorrent", name: "qBittorrent", icon: Download },
@@ -620,7 +622,7 @@ function PlexSettings({
                       success: result.success,
                       server_name: result.server_name,
                       version: result.version,
-                      error: result.success ? undefined : result.message,
+                      error: result.success ? undefined : (result.error ?? result.message),
                     },
                   }));
                 } catch {
@@ -828,6 +830,8 @@ function SettingsContent({
   const queryClient = useQueryClient();
   const [isPending, startTransition] = useTransition();
   const [activeTab, setActiveTab] = useState("general");
+  const [jellyfinUrl, setJellyfinUrl] = useState(initialConfig.jellyfin_url || "");
+  const [jellyfinApiKey, setJellyfinApiKey] = useState(initialConfig.jellyfin_api_key || "");
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
 
   const [deepScanEnabled, setDeepScanEnabled] = useState(initialConfig.enable_deep_scan === "true");
@@ -879,8 +883,14 @@ function SettingsContent({
         const config: Record<string, string> = {
           plex_auth_token: initialConfig.plex_auth_token || "",
           plex_server_name: selectedServer,
-          media_libraries: initialConfig.media_libraries || "",
+          plex_libraries: initialConfig.plex_libraries || "",
+          jellyfin_libraries: initialConfig.jellyfin_libraries || "",
         };
+
+        if (jellyfinUrl && jellyfinApiKey) {
+          config.jellyfin_url = jellyfinUrl;
+          config.jellyfin_api_key = jellyfinApiKey;
+        }
 
         // Add email notification settings
         if (emailNotificationsEnabled) {
@@ -957,6 +967,8 @@ function SettingsContent({
     // Reset all state to initial values
     setDeepScanEnabled(initialConfig.enable_deep_scan === "true");
     setPreferArrQualityProfile(initialConfig.prefer_arr_quality_profile === "true");
+    setJellyfinUrl(initialConfig.jellyfin_url || "");
+    setJellyfinApiKey(initialConfig.jellyfin_api_key || "");
     setEmailNotificationsEnabled(initialConfig.email_notifications_enabled === "true");
     setNotificationEmail(initialConfig.notification_email || "");
     setSmtpHost(initialConfig.smtp_host || "");

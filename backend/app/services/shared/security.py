@@ -168,6 +168,39 @@ def get_or_create_key_file() -> str:
     return new_key
 
 
+# Config keys whose value is a secret and must never be stored in the clear.
+# One list, so every write path agrees: the setup wizard, the config API and
+# anything else that persists configuration.
+SENSITIVE_CONFIG_KEYS = frozenset(
+    {
+        "plex_auth_token",
+        "jellyfin_api_key",
+        "radarr_api_key",
+        "sonarr_api_key",
+        "qbittorrent_password",
+        "smtp_password",
+    }
+)
+
+
+def encrypt_if_sensitive(key: str, value: Optional[str]) -> Optional[str]:
+    """
+    Encrypt a config value when its key names a secret.
+
+    Already-encrypted values are left alone, so saving a form that round-trips
+    a stored secret does not encrypt it twice.
+    """
+    if not value or key not in SENSITIVE_CONFIG_KEYS:
+        return value
+
+    token_manager = get_token_manager()
+    try:
+        token_manager.decrypt(value)
+        return value
+    except (InvalidTokenError, Exception):
+        return token_manager.encrypt(value)
+
+
 def get_token_manager() -> TokenManager:
     """
     Get a TokenManager instance with the application encryption key.

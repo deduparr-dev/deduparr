@@ -36,6 +36,8 @@ INSERT INTO duplicate_sets VALUES
 INSERT INTO duplicate_files VALUES (1, 1, '/m/a.mkv', 10, 50, 1, NULL, NULL, 0);
 INSERT INTO deletion_history VALUES
   (1, 1, '2026-01-02 00:00:00', 1, 1, 1, 1, NULL, NULL, NULL, NULL);
+INSERT INTO config ("key", value) VALUES ('media_libraries', 'Movies,TV Shows');
+INSERT INTO config ("key", value) VALUES ('plex_auth_token', 'tok');
 """
 
 
@@ -53,6 +55,19 @@ def _upgrade(db_path: Path) -> None:
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _head_revision() -> str:
+    """The newest revision, read from Alembic rather than hardcoded."""
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "heads"],
+        cwd=BACKEND_DIR,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "DATABASE_TYPE": "sqlite"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout.split()[0]
 
 
 def _columns(db_path: Path, table: str) -> set:
@@ -83,9 +98,10 @@ def test_migration_lands_on_the_current_schema(tmp_path, seed):
     assert "plex_refreshed" not in _columns(db_path, "deletion_history")
 
     with sqlite3.connect(db_path) as conn:
+        # Whatever the newest revision is, upgrade must land on it
         assert [
             r[0] for r in conn.execute("SELECT version_num FROM alembic_version")
-        ] == ["0001"]
+        ] == [_head_revision()]
 
         if seed:
             # An upgrade must not cost the user their history
@@ -96,3 +112,10 @@ def test_migration_lands_on_the_current_schema(tmp_path, seed):
             assert conn.execute(
                 "SELECT media_server_refreshed FROM deletion_history"
             ).fetchone() == (1,)
+
+            # The single library list became one selection per configured server
+            settings = dict(conn.execute('SELECT "key", value FROM config').fetchall())
+            assert settings["plex_libraries"] == "Movies,TV Shows"
+            assert "media_libraries" not in settings
+            # Jellyfin has no credentials here, so it gets no selection
+            assert "jellyfin_libraries" not in settings

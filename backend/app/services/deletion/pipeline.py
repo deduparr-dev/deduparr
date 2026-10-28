@@ -16,7 +16,11 @@ from app.core.config import settings
 from app.models import DeletionHistory, DuplicateFile, DuplicateSet
 from app.models.duplicate import MediaType
 from app.services.arr.helpers import refresh_media_item
-from app.services.media_server import MediaServerType, get_media_server
+from app.services.media_server import (
+    MediaServerType,
+    get_media_server,
+    selected_libraries,
+)
 from app.services.download.qbittorrent_service import QBittorrentService
 from app.services.arr.radarr_service import RadarrService
 from app.services.arr.sonarr_service import SonarrService
@@ -1343,25 +1347,13 @@ class DeletionPipeline:
             # A targeted refresh can fail if the item is already gone, so fall
             # back to re-scanning the libraries the user selected.
             logger.warning("Targeted refresh failed - falling back to library scan")
-            for library_name in await self._configured_libraries():
+            for library_name in await selected_libraries(self.db, server_type):
                 await server.refresh_library(library_name)
             history.media_server_refreshed = True
 
         except Exception as e:
             logger.error(f"Media server refresh failed: {e}")
             raise
-
-    async def _configured_libraries(self) -> list[str]:
-        """Library names the user selected during setup."""
-        from app.models.config import Config
-
-        result = await self.db.execute(
-            select(Config).where(Config.key == "media_libraries")
-        )
-        config = result.scalar_one_or_none()
-        if not config or not config.value:
-            return []
-        return [name.strip() for name in config.value.split(",") if name.strip()]
 
     async def _rollback_deletion(
         self,

@@ -99,28 +99,29 @@ export async function markJellyfinUnconfigured(request: APIRequestContext) {
  * A duplicate set is only stored when every file is present on disk, so these
  * have to exist for a scan to produce anything.
  */
-export function seedJellyfinMedia() {
-  const dir = path.join(E2E_TMP, "media", "Movies", "Fake Duplicate (2024)");
+export function seedJellyfinMedia(title = "Fake Duplicate (2024)") {
+  const dir = path.join(E2E_TMP, "media", "Movies", title);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "Fake Duplicate (2024) 1080p.mkv"), Buffer.alloc(8_000_000, 1));
-  fs.writeFileSync(path.join(dir, "Fake Duplicate (2024) 720p.mkv"), Buffer.alloc(2_000_000, 2));
+  fs.writeFileSync(path.join(dir, `${title} 1080p.mkv`), Buffer.alloc(8_000_000, 1));
+  fs.writeFileSync(path.join(dir, `${title} 720p.mkv`), Buffer.alloc(2_000_000, 2));
 
   const single = path.join(E2E_TMP, "media", "Movies", "Fake Single (2024)");
   fs.mkdirSync(single, { recursive: true });
   fs.writeFileSync(path.join(single, "Fake Single (2024) 1080p.mkv"), Buffer.alloc(5_000_000, 3));
 
   return {
-    keep: path.join(dir, "Fake Duplicate (2024) 1080p.mkv"),
-    drop: path.join(dir, "Fake Duplicate (2024) 720p.mkv"),
+    keep: path.join(dir, `${title} 1080p.mkv`),
+    drop: path.join(dir, `${title} 720p.mkv`),
   };
 }
 
 /** Point the stand-in Jellyfin at a different library state. */
 export async function setJellyfinMode(
   request: APIRequestContext,
-  mode: "default" | "empty" | "no-duplicates"
+  mode: "default" | "empty" | "no-duplicates",
+  title?: string
 ) {
-  const res = await request.post(`${JELLYFIN_URL}/reset`, { data: { mode } });
+  const res = await request.post(`${JELLYFIN_URL}/reset`, { data: { mode, title } });
   expect(res.ok()).toBeTruthy();
 }
 
@@ -141,4 +142,15 @@ export async function clearDuplicates(request: APIRequestContext) {
     data: { dry_run: false },
   });
   expect(res.ok()).toBeTruthy();
+}
+
+/**
+ * A title no earlier run can have used.
+ *
+ * The e2e database is not reset between runs, and a processed set is kept on
+ * purpose as a record of a decision, so a spec that creates and deletes a set
+ * has to work on its own title each time.
+ */
+export function uniqueTitle(prefix: string) {
+  return `${prefix} (${Date.now().toString(36)})`;
 }

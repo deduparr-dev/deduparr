@@ -70,6 +70,8 @@ class DuplicateSetResponse(BaseModel):
     """Duplicate set information"""
 
     id: int
+    # Which server reported this set, so the UI can tell two servers apart
+    media_server: str
     item_id: str
     title: str
     media_type: str
@@ -198,6 +200,7 @@ async def get_duplicates(
     return [
         DuplicateSetResponse(
             id=dup_set.id,
+            media_server=dup_set.media_server,
             item_id=dup_set.item_id,
             title=dup_set.title,
             media_type=dup_set.media_type.value,

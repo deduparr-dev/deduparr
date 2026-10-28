@@ -11,6 +11,7 @@
  *   ADMIN_API_KEY     the only key accepted (default "fake-admin-key")
  */
 
+import crypto from "crypto";
 import http from "http";
 import path from "path";
 
@@ -22,6 +23,17 @@ const LIBRARY_ID = "22222222222222222222222222222222";
 
 /** Items the server pretends to hold. Mutated by /reset so specs can vary it. */
 let items = [];
+
+/**
+ * A stable id per title.
+ *
+ * Hashed rather than hex-encoded: hex of the title truncated to 32 characters
+ * only covers the first 16 characters, so titles sharing a prefix collided and
+ * a spec kept matching the set an earlier run had left behind.
+ */
+function itemId(title) {
+  return crypto.createHash("sha1").update(title).digest("hex").slice(0, 32);
+}
 
 function movieDir(title) {
   return path.join(MEDIA_DIR, "Movies", title);
@@ -46,7 +58,7 @@ function mediaSource(filePath, { size, bitrate, codec, width, height }) {
 function duplicateMovie(title, id) {
   const dir = movieDir(title);
   return {
-    Id: id,
+    Id: id ?? itemId(title),
     Name: title,
     Type: "Movie",
     ProductionYear: 2024,
@@ -74,7 +86,7 @@ function duplicateMovie(title, id) {
 function singleMovie(title, id) {
   const dir = movieDir(title);
   return {
-    Id: id,
+    Id: id ?? itemId(title),
     Name: title,
     Type: "Movie",
     ProductionYear: 2024,
@@ -145,16 +157,28 @@ const server = http.createServer((req, res) => {
     });
   }
 
-  // Lets a spec swap in a different library state
+  // Lets a spec swap in a different library state. A spec may also name the
+  // title it wants, so it is unaffected by sets earlier specs left behind in
+  // the shared database.
   if (route === "/reset" && req.method === "POST") {
     let body = "";
     req.on("data", (chunk) => (body += chunk));
     return req.on("end", () => {
-      const mode = body ? JSON.parse(body).mode : "default";
-      items = mode === "empty" ? [] : mode === "no-duplicates"
-        ? [singleMovie("Fake Single (2024)", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")]
-        : defaultItems();
-      json(res, 200, { ok: true, items: items.length });
+      const { mode = "default", title } = body ? JSON.parse(body) : {};
+      const name = title ?? "Fake Duplicate (2024)";
+      const id = itemId(name);
+
+      if (mode === "empty") {
+        items = [];
+      } else if (mode === "no-duplicates") {
+        items = [singleMovie(name, id)];
+      } else {
+        items = [
+          duplicateMovie(name, id),
+          singleMovie("Fake Single (2024)", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+        ];
+      }
+      json(res, 200, { ok: true, items: items.length, title: name });
     });
   }
 

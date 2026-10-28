@@ -19,11 +19,12 @@ test.describe("setup wizard", () => {
     await expect(page.getByRole("button", { name: "Get Started" })).toBeVisible();
   });
 
-  test("Get Started advances to the Plex authentication step", async ({ page }) => {
+  test("Get Started asks which media server to use", async ({ page }) => {
     await gotoApp(page, "/setup");
     await page.getByRole("button", { name: "Get Started" }).click();
 
-    await expect(page.getByText("Authenticate with Plex")).toBeVisible();
+    // Plex is no longer assumed, so the first question is which server
+    await expect(page.getByRole("heading", { name: /choose your media server/i })).toBeVisible();
     // The welcome copy is gone, so the wizard actually changed step.
     await expect(page.getByText("Welcome to deduparr!")).toBeHidden();
   });

@@ -166,6 +166,9 @@ function DuplicateSetCard({
                 <Badge variant="outline" className="text-xs">
                   {dupSet.media_type}
                 </Badge>
+                <Badge variant="outline" className="text-xs" data-testid="set-media-server">
+                  {dupSet.media_server}
+                </Badge>
                 <Badge variant="outline" className="text-xs">
                   Versions: {dupSet.files.length}
                 </Badge>

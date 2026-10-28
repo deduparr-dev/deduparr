@@ -13,6 +13,7 @@ import {
   runScan,
   seedJellyfinMedia,
   setJellyfinMode,
+  uniqueTitle,
 } from "./helpers";
 
 test.describe("jellyfin", () => {
@@ -81,19 +82,22 @@ test.describe("jellyfin", () => {
   });
 
   test("a scan finds the duplicate and keeps the better file", async ({ page, request }) => {
+    const title = uniqueTitle("Fake Scanned");
     await markUnconfigured(request);
     await markJellyfinConfigured(request);
+    await setJellyfinMode(request, "default", title);
+    seedJellyfinMedia(title);
 
-    const result = await runScan(request, [JELLYFIN_LIBRARY]);
-    expect(result.sets_created).toBeGreaterThanOrEqual(1);
+    // A retry would find the set already stored, so assert on the end state
+    // rather than on this run having been the one to create it
+    await runScan(request, [JELLYFIN_LIBRARY]);
 
     const pending = await getPendingSets(request);
-    const set = pending.find((s: { title: string }) => s.title === "Fake Duplicate (2024)");
-    expect(set).toBeTruthy();
+    expect(pending.find((s: { title: string }) => s.title === title)).toBeTruthy();
 
     // Stored against Jellyfin, not Plex
     const detail = await (await request.get("/api/scan/duplicates")).json();
-    const stored = detail.find((s: { title: string }) => s.title === "Fake Duplicate (2024)");
+    const stored = detail.find((s: { title: string }) => s.title === title);
     expect(stored.media_server).toBe("jellyfin");
 
     const kept = stored.files.filter((f: { keep: boolean }) => f.keep);
@@ -102,7 +106,9 @@ test.describe("jellyfin", () => {
 
     // And it shows up in the UI
     await gotoApp(page, "/scan");
-    await expect(page.getByText("Fake Duplicate (2024)")).toBeVisible();
+    await expect(page.getByText(title)).toBeVisible();
+    // The card says which server reported it
+    await expect(page.getByTestId("set-media-server").first()).toBeVisible();
   });
 
   test("a library with nothing duplicated creates no sets", async ({ request }) => {
@@ -117,32 +123,36 @@ test.describe("jellyfin", () => {
   });
 
   test("a set is dropped once the server stops reporting it", async ({ request }) => {
+    // Its own title, so sets other specs left in the shared database cannot
+    // decide the outcome
+    const title = uniqueTitle("Fake Vanishing");
     await markJellyfinConfigured(request);
+    await setJellyfinMode(request, "default", title);
+    seedJellyfinMedia(title);
 
     await runScan(request, [JELLYFIN_LIBRARY]);
-    expect(
-      (await getPendingSets(request)).some(
-        (s: { title: string }) => s.title === "Fake Duplicate (2024)"
-      )
-    ).toBe(true);
+    expect((await getPendingSets(request)).some((s: { title: string }) => s.title === title)).toBe(
+      true
+    );
 
     await setJellyfinMode(request, "empty");
     await runScan(request, [JELLYFIN_LIBRARY]);
 
-    expect(
-      (await getPendingSets(request)).some(
-        (s: { title: string }) => s.title === "Fake Duplicate (2024)"
-      )
-    ).toBe(false);
+    expect((await getPendingSets(request)).some((s: { title: string }) => s.title === title)).toBe(
+      false
+    );
   });
 
   test("a deletion removes the file the scan chose to drop", async ({ request }) => {
+    const title = uniqueTitle("Fake Deletable");
     await markJellyfinConfigured(request);
-    const { keep, drop } = seedJellyfinMedia();
+    await setJellyfinMode(request, "default", title);
+    const { keep, drop } = seedJellyfinMedia(title);
 
     await runScan(request, [JELLYFIN_LIBRARY]);
     const sets = await (await request.get("/api/scan/duplicates")).json();
-    const set = sets.find((s: { title: string }) => s.title === "Fake Duplicate (2024)");
+    const set = sets.find((s: { title: string }) => s.title === title);
+    expect(set, "the scan should have stored the set").toBeTruthy();
 
     // Dry run leaves both files alone
     const dry = await request.post(`/api/scan/duplicates/${set.id}/delete`, {

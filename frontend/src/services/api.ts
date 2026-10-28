@@ -62,6 +62,8 @@ export interface DuplicateFile {
 
 export interface DuplicateSet {
   id: number;
+  /** Which media server reported this set: "plex", "jellyfin" or "disk" */
+  media_server: string;
   item_id: string;
   title: string;
   media_type: string;

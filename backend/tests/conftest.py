@@ -12,7 +12,7 @@ from app.models import DuplicateSet, DuplicateFile, DeletionHistory
 from app.models.duplicate import MediaType
 from app.main import app
 from app.api.deps import get_db
-from app.services.security import get_token_manager
+from app.services.shared.security import get_token_manager
 
 # Set a fixed encryption key for tests to ensure consistency
 os.environ["ENCRYPTION_KEY_FILE"] = "/tmp/deduparr_test_key"
@@ -75,7 +75,7 @@ def create_duplicate_set(test_db):
 
     async def _create(**kwargs):
         defaults = {
-            "plex_item_id": "12345",
+            "item_id": "12345",
             "title": "Test Movie",
             "media_type": MediaType.MOVIE,
         }
@@ -121,7 +121,7 @@ def create_deletion_history(test_db):
             "deleted_from_qbit": False,
             "deleted_from_arr": False,
             "deleted_from_disk": False,
-            "plex_refreshed": False,
+            "media_server_refreshed": False,
         }
         defaults.update(kwargs)
         history = DeletionHistory(**defaults)

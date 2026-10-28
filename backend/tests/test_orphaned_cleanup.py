@@ -5,7 +5,7 @@ Tests for orphaned database entry cleanup via *arr refresh commands
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.services.arr_helpers import refresh_media_item
+from app.services.arr.helpers import refresh_media_item
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ Tests for deletion pipeline
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from app.services.deletion_pipeline import DeletionPipeline
+from app.services.deletion.pipeline import DeletionPipeline
 from app.models import DuplicateSet, DuplicateFile, DeletionHistory
 from app.models.duplicate import MediaType, DuplicateStatus
 from app.models.config import Config
@@ -41,7 +41,7 @@ async def setup_configs(test_db):
 async def movie_duplicate_file(test_db):
     """Create a movie duplicate file for testing"""
     dup_set = DuplicateSet(
-        plex_item_id="movie123",
+        item_id="movie123",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.APPROVED,
@@ -76,7 +76,7 @@ async def movie_duplicate_file(test_db):
 async def episode_duplicate_file(test_db):
     """Create an episode duplicate file for testing"""
     dup_set = DuplicateSet(
-        plex_item_id="episode123",
+        item_id="episode123",
         title="Test Episode",
         media_type=MediaType.EPISODE,
         status=DuplicateStatus.APPROVED,
@@ -135,13 +135,16 @@ async def test_delete_movie_full_pipeline_success(
     file_path = movie_duplicate_file.file_path
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
         patch(
-            "app.services.radarr_service.RadarrService.rescan_movie",
+            "app.services.arr.radarr_service.RadarrService.rescan_movie",
             new_callable=AsyncMock,
         ) as mock_rescan_movie,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
         patch("os.walk") as mock_walk,
@@ -202,7 +205,7 @@ async def test_delete_movie_full_pipeline_success(
         ]
         mock_listdir.return_value = []  # No associated files
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         # New behavior: refresh_item targets the specific Plex item, fallback to refresh_library if it fails
         mock_plex_instance.refresh_item.return_value = True
@@ -212,7 +215,7 @@ async def test_delete_movie_full_pipeline_success(
         assert history.deleted_from_qbit is True
         assert history.deleted_from_arr is True
         assert history.deleted_from_disk is True
-        assert history.plex_refreshed is True
+        assert history.media_server_refreshed is True
         assert history.error is None
         assert history.is_complete is True
         assert history.arr_type == "radarr"
@@ -248,20 +251,23 @@ async def test_delete_episode_full_pipeline_success(
     file_path = episode_duplicate_file.file_path
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
         patch(
-            "app.services.sonarr_service.SonarrService.find_episode_by_file_path",
+            "app.services.arr.sonarr_service.SonarrService.find_episode_by_file_path",
             new_callable=AsyncMock,
         ) as mock_find_episode,
         patch(
-            "app.services.sonarr_service.SonarrService.delete_episode_file",
+            "app.services.arr.sonarr_service.SonarrService.delete_episode_file",
             new_callable=AsyncMock,
         ) as mock_delete_episode_file,
         patch(
-            "app.services.sonarr_service.SonarrService.rescan_series",
+            "app.services.arr.sonarr_service.SonarrService.rescan_series",
             new_callable=AsyncMock,
         ) as mock_rescan_series,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
         patch("os.walk") as mock_walk,
@@ -292,7 +298,7 @@ async def test_delete_episode_full_pipeline_success(
         ]
         mock_listdir.return_value = []  # No associated files
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_library.return_value = True
 
@@ -303,7 +309,7 @@ async def test_delete_episode_full_pipeline_success(
         assert history.deleted_from_qbit is True
         assert history.deleted_from_arr is True
         assert history.deleted_from_disk is True
-        assert history.plex_refreshed is True
+        assert history.media_server_refreshed is True
         assert history.error is None
         assert history.is_complete is True
         assert history.arr_type == "sonarr"
@@ -332,8 +338,11 @@ async def test_delete_file_skip_qbit(
     file_path = movie_duplicate_file.file_path
 
     with (
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
         patch("os.walk") as mock_walk,
@@ -358,7 +367,7 @@ async def test_delete_file_skip_qbit(
         ]
         mock_listdir.return_value = []  # No associated files
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -369,7 +378,7 @@ async def test_delete_file_skip_qbit(
         assert history.deleted_from_qbit is False
         assert history.deleted_from_arr is True
         assert history.deleted_from_disk is True
-        assert history.plex_refreshed is True
+        assert history.media_server_refreshed is True
 
 
 @pytest.mark.asyncio
@@ -380,9 +389,12 @@ async def test_delete_file_not_on_disk(
     file_path = movie_duplicate_file.file_path
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
     ):
         mock_qbit_instance = MagicMock()
@@ -404,7 +416,7 @@ async def test_delete_file_not_on_disk(
 
         mock_exists.return_value = False
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_library.return_value = True
 
@@ -423,18 +435,18 @@ async def test_delete_file_qbit_failure(
 
     with (
         patch(
-            "app.services.radarr_service.RadarrService.find_movie_by_file_path",
+            "app.services.arr.radarr_service.RadarrService.find_movie_by_file_path",
             new_callable=AsyncMock,
         ) as mock_find,
         patch(
-            "app.services.radarr_service.RadarrService.delete_movie_file",
+            "app.services.arr.radarr_service.RadarrService.delete_movie_file",
             new_callable=AsyncMock,
         ) as mock_delete,
         patch(
-            "app.services.radarr_service.RadarrService.rescan_movie",
+            "app.services.arr.radarr_service.RadarrService.rescan_movie",
             new_callable=AsyncMock,
         ),
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
     ):
         # Setup Radarr service mocks to allow pipeline to reach qBit stage
         mock_find.return_value = (1, 10)  # (movie_id, file_id)
@@ -468,8 +480,8 @@ async def test_delete_file_arr_failure(
     file_id = movie_duplicate_file.id
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
     ):
         mock_qbit_instance = MagicMock()
         mock_qbit.return_value = mock_qbit_instance
@@ -506,9 +518,12 @@ async def test_delete_file_disk_failure(
     file_path = movie_duplicate_file.file_path
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
         patch("os.walk") as mock_walk,
@@ -531,7 +546,7 @@ async def test_delete_file_disk_failure(
         )
         mock_radarr_instance.del_movie_file = AsyncMock()
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_item.return_value = True
 
@@ -564,9 +579,12 @@ async def test_delete_file_plex_failure(
     file_path = movie_duplicate_file.file_path
 
     with (
-        patch("app.services.qbittorrent_service.Client") as mock_qbit,
-        patch("app.services.radarr_service.RadarrClient") as mock_radarr,
-        patch("app.services.deletion_pipeline.PlexService") as mock_plex_class,
+        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
+        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
+        patch(
+            "app.services.deletion.pipeline.get_media_server",
+            new_callable=AsyncMock,
+        ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
         patch("os.walk") as mock_walk,
@@ -596,7 +614,7 @@ async def test_delete_file_plex_failure(
         ]
         mock_listdir.return_value = []  # No associated files
 
-        mock_plex_instance = MagicMock()
+        mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
         # Both targeted and library refresh fail by raising exception
         mock_plex_instance.refresh_item.side_effect = Exception(
@@ -617,7 +635,7 @@ async def test_delete_file_plex_failure(
         assert history.deleted_from_qbit is True
         assert history.deleted_from_arr is True
         assert history.deleted_from_disk is True
-        assert history.plex_refreshed is False
+        assert history.media_server_refreshed is False
 
 
 @pytest.mark.asyncio
@@ -634,7 +652,7 @@ async def test_protected_files_not_deleted(deletion_pipeline, test_db, setup_con
 
     # Create a duplicate set with real temp files
     dup_set = DuplicateSet(
-        plex_item_id="movie999",
+        item_id="movie999",
         title="Sonic the Hedgehog 2",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.APPROVED,
@@ -679,7 +697,7 @@ async def test_protected_files_not_deleted(deletion_pipeline, test_db, setup_con
 
         # Mock services to simulate orphaned file case (not found in qBit/Radarr)
         # Also mock Plex service creation
-        mock_plex = MagicMock()
+        mock_plex = AsyncMock()
         mock_plex.refresh_item.return_value = True
 
         with (
@@ -693,8 +711,10 @@ async def test_protected_files_not_deleted(deletion_pipeline, test_db, setup_con
                 "find_movie_by_file_path",
                 return_value=None,
             ),
-            patch.object(
-                deletion_pipeline, "_get_plex_service", return_value=mock_plex
+            patch(
+                "app.services.deletion.pipeline.get_media_server",
+                new_callable=AsyncMock,
+                return_value=mock_plex,
             ),
         ):
             # Execute deletion

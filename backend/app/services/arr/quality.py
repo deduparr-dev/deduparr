@@ -17,10 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Config
 from app.models.duplicate import MediaType
-from app.services.arr_client import ArrClientError, RadarrClient, SonarrClient
-from app.services.radarr_service import RadarrService
-from app.services.scoring_engine import MediaMetadata
-from app.services.sonarr_service import SonarrService
+from app.services.arr.client import ArrClientError, RadarrClient, SonarrClient
+from app.services.arr.radarr_service import RadarrService
+from app.services.scan.scoring_engine import MediaMetadata
+from app.services.arr.sonarr_service import SonarrService
 
 logger = logging.getLogger(__name__)
 

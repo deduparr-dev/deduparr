@@ -16,6 +16,12 @@ export const E2E_TMP = path.resolve(ROOT_DIR, "e2e/.tmp");
 
 const PYTHON_BIN = process.env.PYTHON_BIN ?? "python3";
 
+// A stand-in Jellyfin, so the suite can drive the Jellyfin adapter for real.
+const JELLYFIN_PORT = Number(process.env.E2E_JELLYFIN_PORT ?? 8097);
+export const JELLYFIN_URL = `http://127.0.0.1:${JELLYFIN_PORT}`;
+export const JELLYFIN_API_KEY = "fake-admin-key";
+export const JELLYFIN_LIBRARY = "Fake Movies";
+
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
@@ -41,6 +47,21 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 
   webServer: [
+    {
+      // Stand-in Jellyfin. Started first so the backend can reach it.
+      command: `node e2e/fake-jellyfin/server.mjs`,
+      cwd: ROOT_DIR,
+      url: `${JELLYFIN_URL}/system/info/public`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        PORT: String(JELLYFIN_PORT),
+        MEDIA_DIR: path.join(E2E_TMP, "media"),
+        ADMIN_API_KEY: JELLYFIN_API_KEY,
+      },
+    },
     {
       // Disposable backend: temp SQLite database and encryption key, so the
       // suite never touches a real install.

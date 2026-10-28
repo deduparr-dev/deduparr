@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models import Config
-from app.services.email_service import EmailService
-from app.services.security import get_token_manager
+from app.services.notifications.service import EmailService
+from app.services.shared.security import get_token_manager
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ Tests for scoring engine service
 
 import pytest
 
-from app.services.scoring_engine import ScoringEngine, MediaMetadata
+from app.services.scan.scoring_engine import ScoringEngine, MediaMetadata
 
 
 class TestScoringEngine:

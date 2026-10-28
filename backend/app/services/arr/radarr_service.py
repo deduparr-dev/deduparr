@@ -1,5 +1,5 @@
 """
-Sonarr service for TV show episode file management
+Radarr service for movie file management
 """
 
 import logging
@@ -7,74 +7,68 @@ from typing import Dict, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.arr_client import (
+from app.services.arr.client import (
     ArrAuthError,
     ArrClientError,
     ArrConnectionError,
-    SonarrClient,
+    RadarrClient,
 )
-from app.services.arr_helpers import (
+from app.services.arr.helpers import (
     find_media_by_file_path,
     manual_import_file,
     rescan_media_item,
     trigger_full_library_scan,
 )
-from app.services.base_service import BaseExternalService
+from app.services.shared.base_service import BaseExternalService
 
 logger = logging.getLogger(__name__)
 
 
-class SonarrService(BaseExternalService):
-    """Service for interacting with Sonarr"""
+class RadarrService(BaseExternalService):
+    """Service for interacting with Radarr"""
 
     def __init__(self, db: AsyncSession):
         super().__init__(db)
-        self._client: Optional[SonarrClient] = None
+        self._client: Optional[RadarrClient] = None
 
-    async def find_episode_by_file_path(self, file_path: str) -> Optional[dict]:
+    async def find_movie_by_file_path(self, file_path: str) -> Optional[dict]:
         """
-        Find episode by file path using the episodefile API endpoint
-
-        This is MUCH more efficient than iterating through all series and episodes.
-        Old approach: O(n) API calls where n = number of series (could be 100+)
-        New approach: O(1) API call to get all episode files directly
-
-        Uses filename matching (path-agnostic) to handle different mount points.
+        Find movie by file path using filename matching (path-agnostic)
 
         Args:
-            file_path: Full path to the episode file from Plex
+            file_path: Full path to the movie file from Plex
 
         Returns:
-            Episode data with episodeFile if found, None otherwise
+            Movie data if found, None otherwise
         """
         client = await self._get_client()
-        return await find_media_by_file_path(client, file_path, "series", logger)
+        return await find_media_by_file_path(client, file_path, "movie", logger)
 
-    async def _get_client(self) -> SonarrClient:
-        """Get Sonarr client instance"""
+    async def _get_client(self) -> RadarrClient:
+        """Get Radarr client instance"""
         if self._client is not None:
             return self._client
 
         config = await self._get_encrypted_config(
-            service_name="Sonarr",
-            config_keys={"url": "sonarr_url", "api_key": "sonarr_api_key"},
+            service_name="Radarr",
+            config_keys={"url": "radarr_url", "api_key": "radarr_api_key"},
         )
 
         try:
-            self._client = SonarrClient(
+            self._client = RadarrClient(
                 base_url=config["url"], api_key=config["api_key"]
             )
             return self._client
         except (ArrConnectionError, ArrAuthError) as e:
-            raise ValueError(f"Sonarr connection failed: {e}")
+            raise ValueError(f"Radarr connection failed: {e}")
 
-    async def delete_episode_file(self, series_id: int, episode_file_id: int) -> bool:
+    async def delete_movie_file(self, movie_id: int, movie_file_id: int) -> bool:
         """
-        Delete episode file from Sonarr
+        Delete movie file from Radarr
 
         Args:
-            series_id: ID of the series
-            episode_file_id: ID of the episode file to delete
+            movie_id: ID of the movie
+            movie_file_id: ID of the movie file to delete
 
         Returns:
             True if successful, False otherwise
@@ -82,26 +76,26 @@ class SonarrService(BaseExternalService):
         client = await self._get_client()
 
         try:
-            await client.del_episode_file(episode_file_id)
+            await client.del_movie_file(movie_file_id)
             logger.info(
-                f"Deleted episode file {episode_file_id} for series {series_id} from Sonarr"
+                f"Deleted movie file {movie_file_id} for movie {movie_id} from Radarr"
             )
             return True
         except ArrClientError as e:
             logger.error(
-                f"Error deleting episode file {episode_file_id} for series {series_id}: {e}"
+                f"Error deleting movie file {movie_file_id} for movie {movie_id}: {e}"
             )
             raise
 
     async def manual_import_file(
-        self, file_path: str, series_id: int, search_for_file: bool = True
+        self, file_path: str, movie_id: int, search_for_file: bool = True
     ) -> Optional[bool]:
         """
-        Manually import a specific file for a series using Sonarr's manual import API
+        Manually import a specific file for a movie using Radarr's manual import API
 
         Args:
             file_path: Full path to the file to import (may be outdated if file was moved)
-            series_id: ID of the series this file belongs to
+            movie_id: ID of the movie this file belongs to
             search_for_file: If True, search for actual file location if original path not found
 
         Returns:
@@ -111,27 +105,27 @@ class SonarrService(BaseExternalService):
         return await manual_import_file(
             client=client,
             file_path=file_path,
-            media_id=series_id,
-            media_type="series",
+            media_id=movie_id,
+            media_type="movie",
             logger_instance=logger,
             search_for_file=search_for_file,
         )
 
-    async def rescan_series(
-        self, series_id: int, kept_file_path: Optional[str] = None
+    async def rescan_movie(
+        self, movie_id: int, kept_file_path: Optional[str] = None
     ) -> bool:
         """
-        Trigger a scan to find and import files for a specific series
+        Trigger a scan to find and import files for a specific movie
 
-        This is used after deleting a duplicate file to make Sonarr find and import
-        the better quality file we kept. We use DownloadedEpisodesScan with the folder
-        containing the kept file to ensure Sonarr finds it.
+        This is used after deleting a duplicate file to make Radarr find and import
+        the better quality file we kept. We use DownloadedMoviesScan with the folder
+        containing the kept file to ensure Radarr finds it.
 
         Args:
-            series_id: ID of the series to scan for
+            movie_id: ID of the movie to scan for
             kept_file_path: Path to the file we kept (if known). If provided, we'll
                            scan the parent directory of this file. If not provided,
-                           we'll scan the series' configured path.
+                           we'll scan the movie's configured path.
 
         Returns:
             True if command was successfully queued, False otherwise
@@ -139,30 +133,30 @@ class SonarrService(BaseExternalService):
         client = await self._get_client()
         return await rescan_media_item(
             client=client,
-            media_id=series_id,
-            media_type="series",
+            media_id=movie_id,
+            media_type="movie",
             kept_file_path=kept_file_path,
             logger_instance=logger,
         )
 
     async def trigger_rescan_all(self) -> bool:
         """
-        Trigger a full library scan for all series
+        Trigger a full library scan for all movies
 
-        This is used when we have a file that isn't tracked in Sonarr yet
-        and we want Sonarr to find and import it.
+        This is used when we have a file that isn't tracked in Radarr yet
+        and we want Radarr to find and import it.
 
         Returns:
             True if command was successfully queued
         """
         client = await self._get_client()
         return await trigger_full_library_scan(
-            client=client, media_type="series", logger_instance=logger
+            client=client, media_type="movie", logger_instance=logger
         )
 
     async def test_connection(self) -> Dict[str, str | bool]:
         """
-        Test connection to Sonarr
+        Test connection to Radarr
 
         Returns:
             Dictionary with system status if successful, error info if failed
@@ -173,5 +167,5 @@ class SonarrService(BaseExternalService):
             status = await client.get_system_status()
             return {"success": True, "version": status.get("version", "unknown")}
         except ArrClientError as e:
-            logger.error(f"Sonarr connection test failed: {e}")
+            logger.error(f"Radarr connection test failed: {e}")
             return {"success": False, "error": str(e)}

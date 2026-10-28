@@ -9,11 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import Config
-from app.services.plex_service import PlexAuthService, PlexService
-from app.services.qbittorrent_service import QBittorrentService
-from app.services.radarr_service import RadarrService
-from app.services.sonarr_service import SonarrService
-from app.services.security import InvalidTokenError, get_token_manager
+from app.services.media_server import (
+    MediaServerType,
+    configured_types,
+    get_media_servers,
+)
+from app.services.media_server.jellyfin_adapter import JellyfinAdapter
+from app.services.media_server.plex_service import PlexAuthService, PlexService
+from app.services.download.qbittorrent_service import QBittorrentService
+from app.services.arr.radarr_service import RadarrService
+from app.services.arr.sonarr_service import SonarrService
+from app.services.shared.security import InvalidTokenError, get_token_manager
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +27,9 @@ logger = logging.getLogger(__name__)
 class SetupService:
     """Service for managing setup wizard and configuration validation"""
 
-    # Core required services - Only Plex is required as the data source
-    # Other services (qBittorrent, Radarr, Sonarr) are optional and enable automated deletion
-    REQUIRED_KEYS = [
-        "plex_auth_token",
-        "plex_server_name",
-    ]
+    # A media server is the one thing Deduparr cannot work without; which one,
+    # and whether both, is decided by the credentials that are present.
+    # qBittorrent, Radarr and Sonarr are optional and enable automated deletion.
 
     # Optional *arr services - at least one enables automated *arr integration
     # Both can be configured if user has both movies and TV shows
@@ -56,12 +59,9 @@ class SetupService:
         if not setup_config or setup_config.value != "true":
             return False
 
-        # Check all required keys
-        for key in self.REQUIRED_KEYS:
-            result = await self.db.execute(select(Config).where(Config.key == key))
-            config = result.scalar_one_or_none()
-            if not config or not config.value:
-                return False
+        # At least one media server has to be usable
+        if not await configured_types(self.db):
+            return False
 
         # All required keys present - setup is complete
         # Optional services (qBittorrent, *arr services) can be configured later
@@ -80,17 +80,17 @@ class SetupService:
         """
         is_complete = await self.is_setup_complete()
         missing_required = []
+        servers = await configured_types(self.db)
         configured_services = {
             "radarr": False,
             "sonarr": False,
+            **{server.value: True for server in MediaServerType},
         }
+        for server in MediaServerType:
+            configured_services[server.value] = server in servers
 
-        # Check core required keys
-        for key in self.REQUIRED_KEYS:
-            result = await self.db.execute(select(Config).where(Config.key == key))
-            config = result.scalar_one_or_none()
-            if not config or not config.value:
-                missing_required.append(key)
+        if not servers:
+            missing_required.append("media_server")
 
         # Check which *arr services are configured
         for service_name, service_keys in self.ARR_SERVICE_KEYS.items():
@@ -553,6 +553,7 @@ class SetupService:
         encrypted_keys = {
             "qbittorrent_password",
             "plex_auth_token",
+            "jellyfin_api_key",
             "radarr_api_key",
             "sonarr_api_key",
             "smtp_password",
@@ -622,3 +623,67 @@ class SetupService:
         if config:
             config.value = "false"
             await self.db.commit()
+
+    async def test_jellyfin_connection(
+        self, url: str, api_key: str
+    ) -> Dict[str, object]:
+        """
+        Check a Jellyfin server before its credentials are saved.
+
+        The key has to be an administrator one, so this reports that
+        explicitly rather than leaving the user with a bare 403 later.
+        """
+        config_data = {"jellyfin_url": url, "jellyfin_api_key": api_key}
+        adapter = JellyfinAdapter(self.db)
+        adapter._get_encrypted_config = _fixed_config(config_data)
+
+        result = await adapter.test_connection()
+        if not result.get("success"):
+            return {"success": False, "error": result.get("error", "unknown error")}
+
+        return {
+            "success": True,
+            "server_name": result.get("server_name", ""),
+            "version": result.get("version", ""),
+        }
+
+    async def get_jellyfin_libraries(self, url: str, api_key: str) -> List[Dict]:
+        """
+        Libraries of a Jellyfin server whose credentials are not stored yet.
+
+        The setup wizard needs this before it saves anything, the same way the
+        Plex step lists libraries straight from an unsaved token.
+        """
+        adapter = JellyfinAdapter(self.db)
+        adapter._get_encrypted_config = _fixed_config(
+            {"jellyfin_url": url, "jellyfin_api_key": api_key}
+        )
+        return [
+            {**library, "server": MediaServerType.JELLYFIN.value}
+            for library in await adapter.get_libraries()
+        ]
+
+    async def get_media_libraries(self) -> List[Dict]:
+        """
+        Libraries from every configured media server.
+
+        The server is included so the UI can show where a library came from
+        when both are set up and both have, say, a "Movies" library.
+        """
+        libraries: List[Dict] = []
+        for server in await get_media_servers(self.db):
+            try:
+                for library in await server.get_libraries():
+                    libraries.append({**library, "server": server.type.value})
+            except Exception as e:
+                logger.error(f"Could not list {server.type.value} libraries: {e}")
+        return libraries
+
+
+def _fixed_config(values: Dict[str, str]):
+    """Feed an adapter credentials that are not in the database yet."""
+
+    async def _get(service_name: str, config_keys: Dict[str, str]) -> Dict[str, str]:
+        return {internal: values[db_key] for internal, db_key in config_keys.items()}
+
+    return _get

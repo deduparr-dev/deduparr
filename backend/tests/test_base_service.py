@@ -6,8 +6,8 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.config import Config
-from app.services.base_service import BaseExternalService
-from app.services.security import get_token_manager
+from app.services.shared.base_service import BaseExternalService
+from app.services.shared.security import get_token_manager
 
 
 @pytest.mark.asyncio

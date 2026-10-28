@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.models import Config
 from app.models.scoring_rule import ScoringRule
-from app.services.arr_quality import PREFER_ARR_QUALITY_PROFILE_KEY
+from app.services.arr.quality import PREFER_ARR_QUALITY_PROFILE_KEY
 
 
 class ScoringRuleImportData(TypedDict, total=False):

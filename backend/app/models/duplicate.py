@@ -63,8 +63,13 @@ class DuplicateSet(Base):
     __tablename__ = "duplicate_sets"
 
     id = Column(Integer, primary_key=True, index=True)
-    # plex_item_id can be absent in some test fixtures and import flows; allow nullable
-    plex_item_id = Column(String(255), nullable=True, index=True)
+    # Which media server reported this set, and its id for the item there.
+    # The pair is what identifies a set, since Plex and Jellyfin can both be
+    # configured and number their items independently.
+    media_server = Column(
+        String(32), nullable=False, default="plex", server_default="plex", index=True
+    )
+    item_id = Column(String(255), nullable=True, index=True)
     title = Column(String(500), nullable=False)
     media_type = Column(SQLEnum(MediaType), nullable=False)
     found_at = Column(

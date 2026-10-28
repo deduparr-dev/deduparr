@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
-from app.services.arr_client import RadarrClient, SonarrClient
-from app.services.arr_helpers import (
+from app.services.arr.client import RadarrClient, SonarrClient
+from app.services.arr.helpers import (
     manual_import_file,
     rescan_media_item,
     trigger_full_library_scan,

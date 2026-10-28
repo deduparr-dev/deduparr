@@ -62,7 +62,7 @@ export interface DuplicateFile {
 
 export interface DuplicateSet {
   id: number;
-  plex_item_id: string;
+  item_id: string;
   title: string;
   media_type: string;
   found_at: string;
@@ -97,6 +97,20 @@ export interface DeleteAllResponse {
   sets_processed: number;
   files_deleted: number;
   errors: string[];
+}
+
+export interface MediaLibrary {
+  key: string;
+  title: string;
+  type: string;
+  count: number;
+  /** Which media server reported this library: "plex" or "jellyfin" */
+  server: string;
+}
+
+export interface JellyfinConfig {
+  url: string;
+  api_key: string;
 }
 
 export interface PlexLibrary {
@@ -173,7 +187,7 @@ export interface LogsResponse {
 export interface PlexConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
-  plex_libraries?: string;
+  media_libraries?: string;
   radarr_url?: string;
   radarr_api_key?: string;
   sonarr_url?: string;
@@ -183,6 +197,8 @@ export interface PlexConfig {
   qbittorrent_password?: string;
   enable_deep_scan?: string; // "true" or "false" string from backend
   prefer_arr_quality_profile?: string; // "true" or "false" string from backend
+  jellyfin_url?: string;
+  jellyfin_api_key?: string;
   email_notifications_enabled?: string; // "true" or "false" string from backend
   notification_email?: string;
   smtp_host?: string;
@@ -212,7 +228,13 @@ export interface PlexAuthCheckResponse {
 
 export interface ServiceTestResponse {
   success: boolean;
-  message: string;
+  /** Present on failure; the backend also fills `message` for some tests */
+  error?: string;
+  message?: string;
+  server_name?: string;
+  version?: string;
+  platform?: string;
+  available_servers?: string[];
 }
 
 export interface ServiceConfig {
@@ -391,6 +413,13 @@ export const setupAPI = {
 
   // Service testing
   testPlex: () => fetchAPI<ServiceTestResponse>("/api/setup/test/plex"),
+  testJellyfin: (config: JellyfinConfig) =>
+    postAPI<ServiceTestResponse, JellyfinConfig>("/api/setup/test/jellyfin", config),
+  // Libraries from every configured media server, each tagged with its origin
+  getMediaLibraries: () => fetchAPI<MediaLibrary[]>("/api/setup/libraries"),
+  // During setup the credentials are not stored yet, so they are passed in
+  getJellyfinLibraries: (config: JellyfinConfig) =>
+    postAPI<MediaLibrary[], JellyfinConfig>("/api/setup/jellyfin/libraries", config),
   testRadarr: (config: ServiceConfig) =>
     postAPI<ServiceTestResponse, ServiceConfig>("/api/setup/test/radarr", config),
   testSonarr: (config: ServiceConfig) =>

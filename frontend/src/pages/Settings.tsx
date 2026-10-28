@@ -879,7 +879,7 @@ function SettingsContent({
         const config: Record<string, string> = {
           plex_auth_token: initialConfig.plex_auth_token || "",
           plex_server_name: selectedServer,
-          plex_libraries: initialConfig.plex_libraries || "",
+          media_libraries: initialConfig.media_libraries || "",
         };
 
         // Add email notification settings

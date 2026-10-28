@@ -9,7 +9,10 @@ including the relay fallback, stays in PlexService.
 import logging
 from typing import List, Optional, Sequence
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Config
 
 from app.services.media_server.base import (
     ConnectionInfo,
@@ -35,10 +38,40 @@ class PlexAdapter:
     type = MediaServerType.PLEX
 
     def __init__(self, db: AsyncSession):
-        self._service = PlexService(db)
+        self._db = db
+        self._service: Optional[PlexService] = None
+
+    async def _plex(self) -> PlexService:
+        """
+        PlexService built from the stored credentials.
+
+        PlexService takes the token itself, not a session, so the credentials
+        are read here once per adapter.
+        """
+        if self._service is None:
+            result = await self._db.execute(
+                select(Config).where(
+                    Config.key.in_(("plex_auth_token", "plex_server_name"))
+                )
+            )
+            config = {row.key: row.value for row in result.scalars().all()}
+
+            token = config.get("plex_auth_token")
+            if not token:
+                raise MediaServerError("Plex is not configured. Complete setup first.")
+
+            self._service = PlexService(
+                encrypted_token=str(token),
+                server_name=(
+                    str(config["plex_server_name"])
+                    if config.get("plex_server_name")
+                    else None
+                ),
+            )
+        return self._service
 
     async def test_connection(self) -> ConnectionInfo:
-        result = self._service.test_connection()
+        result = (await self._plex()).test_connection()
         if not result.get("success"):
             return {"success": False, "error": str(result.get("error", "unknown"))}
         return {
@@ -50,7 +83,7 @@ class PlexAdapter:
     async def get_libraries(
         self, library_type: Optional[str] = None
     ) -> List[LibraryInfo]:
-        return self._service.get_libraries(library_type)
+        return (await self._plex()).get_libraries(library_type)
 
     async def find_duplicate_movies(self, library_name: str) -> List[DuplicateGroup]:
         """
@@ -60,7 +93,7 @@ class PlexAdapter:
         and separate entries it flags as duplicates of each other. Both land in
         the same group, keyed on title and year.
         """
-        library = self._library(library_name)
+        library = await self._library(library_name)
         grouped: dict[str, list] = {}
 
         for movie in library.all():
@@ -94,7 +127,7 @@ class PlexAdapter:
 
     async def find_duplicate_episodes(self, library_name: str) -> List[DuplicateGroup]:
         """Episodes stored as more than one file."""
-        library = self._library(library_name)
+        library = await self._library(library_name)
         groups = []
 
         for episode in library.search(libtype="episode"):
@@ -116,17 +149,17 @@ class PlexAdapter:
         return groups
 
     async def get_library_paths(self, library_name: str) -> List[str]:
-        return list(getattr(self._library(library_name), "locations", []))
+        return list(getattr(await self._library(library_name), "locations", []))
 
     async def refresh_item(self, item_id: str) -> bool:
-        return self._service.refresh_item(item_id)
+        return (await self._plex()).refresh_item(item_id)
 
     async def refresh_library(self, library_name: str) -> bool:
-        return self._service.refresh_library(library_name)
+        return (await self._plex()).refresh_library(library_name)
 
-    def _library(self, library_name: str):
+    async def _library(self, library_name: str):
         try:
-            return self._service.get_library(library_name)
+            return (await self._plex()).get_library(library_name)
         except ValueError as e:
             raise MediaServerError(str(e))
 

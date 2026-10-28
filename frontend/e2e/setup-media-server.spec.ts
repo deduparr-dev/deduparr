@@ -24,6 +24,16 @@ test.describe("setup wizard media server step", () => {
     await expect(page.getByRole("heading", { name: /choose your media server/i })).toBeVisible();
   }
 
+  test("the welcome screen does not assume Plex", async ({ page }) => {
+    await gotoApp(page, "/setup");
+
+    await expect(page.getByText("Welcome to deduparr!")).toBeVisible();
+    // Jellyfin-only users are not told they need a Plex account
+    await expect(page.getByText(/Plex or Jellyfin/i)).toBeVisible();
+    await expect(page.getByText("A Plex account (free or Plex Pass)")).toHaveCount(0);
+    await expect(page.getByText("Access to your Plex server")).toHaveCount(0);
+  });
+
   test("the wizard asks which media server to use", async ({ page }) => {
     await openServerChoice(page);
 

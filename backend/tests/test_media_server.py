@@ -305,3 +305,35 @@ async def test_selected_libraries_is_per_server(test_db):
         "TV Shows",
     ]
     assert await selected_libraries(test_db, MediaServerType.JELLYFIN) == ["Films"]
+
+
+@pytest.mark.asyncio
+async def test_plex_adapter_builds_the_service_from_stored_credentials(test_db):
+    """
+    The adapter must pass the stored token to PlexService, not its session.
+
+    PlexService takes (encrypted_token, server_name) positionally, so handing
+    it the database session put an AsyncSession in the X-Plex-Token header and
+    every real account failed to authenticate.
+    """
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="encrypted-token"),
+            Config(key="plex_server_name", value="Living Room"),
+        ]
+    )
+    await test_db.commit()
+
+    adapter = PlexAdapter(test_db)
+    service = await adapter._plex()
+
+    assert service.encrypted_token == "encrypted-token"
+    assert service.server_name == "Living Room"
+
+
+@pytest.mark.asyncio
+async def test_plex_adapter_says_when_plex_is_not_configured(test_db):
+    from app.services.media_server.base import MediaServerError
+
+    with pytest.raises(MediaServerError, match="not configured"):
+        await PlexAdapter(test_db)._plex()

@@ -647,6 +647,14 @@ function PlexSettings({
   );
 }
 
+// The port each service listens on out of the box, for the URL placeholder
+const DEFAULT_PORTS: Record<string, number> = {
+  jellyfin: 8096,
+  radarr: 7878,
+  sonarr: 8989,
+  qbittorrent: 8080,
+};
+
 interface ServiceSettingsProps {
   service: string;
   url: string;
@@ -657,6 +665,8 @@ interface ServiceSettingsProps {
   setUsername?: (value: string) => void;
   password?: string;
   setPassword?: (value: string) => void;
+  /** Whether a key is already saved, so the field can say so without showing it */
+  hasStoredApiKey?: boolean;
   setTestResults: React.Dispatch<React.SetStateAction<Record<string, TestResult>>>;
   testResults: Record<string, TestResult>;
 }
@@ -671,6 +681,7 @@ function ServiceSettings({
   setUsername,
   password,
   setPassword,
+  hasStoredApiKey,
   setTestResults,
   testResults,
 }: ServiceSettingsProps) {
@@ -688,11 +699,7 @@ function ServiceSettings({
         <Input
           id="url"
           type="url"
-          placeholder={
-            isQBittorrent
-              ? "http://localhost:8080"
-              : `http://localhost:${service === "radarr" ? "7878" : "8989"}`
-          }
+          placeholder={`http://localhost:${DEFAULT_PORTS[service] ?? 8080}`}
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           className="mt-2"
@@ -731,7 +738,7 @@ function ServiceSettings({
           <Input
             id="api-key"
             type="password"
-            placeholder="API Key"
+            placeholder={hasStoredApiKey ? "Saved - type a new key to replace it" : "API Key"}
             value={apiKey || ""}
             onChange={(e) => setApiKey?.(e.target.value)}
             className="mt-2"
@@ -831,7 +838,10 @@ function SettingsContent({
   const [isPending, startTransition] = useTransition();
   const [activeTab, setActiveTab] = useState("general");
   const [jellyfinUrl, setJellyfinUrl] = useState(initialConfig.jellyfin_url || "");
-  const [jellyfinApiKey, setJellyfinApiKey] = useState(initialConfig.jellyfin_api_key || "");
+  // The stored key is encrypted, so it is not a value to put in a field; only
+  // whether one exists matters here.
+  const jellyfinKeyStored = !!initialConfig.jellyfin_api_key;
+  const [jellyfinApiKey, setJellyfinApiKey] = useState("");
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
 
   const [deepScanEnabled, setDeepScanEnabled] = useState(initialConfig.enable_deep_scan === "true");
@@ -887,8 +897,11 @@ function SettingsContent({
           jellyfin_libraries: initialConfig.jellyfin_libraries || "",
         };
 
-        if (jellyfinUrl && jellyfinApiKey) {
+        if (jellyfinUrl) {
           config.jellyfin_url = jellyfinUrl;
+        }
+        // Blank means "leave the saved key alone", not "clear it"
+        if (jellyfinApiKey) {
           config.jellyfin_api_key = jellyfinApiKey;
         }
 
@@ -968,7 +981,7 @@ function SettingsContent({
     setDeepScanEnabled(initialConfig.enable_deep_scan === "true");
     setPreferArrQualityProfile(initialConfig.prefer_arr_quality_profile === "true");
     setJellyfinUrl(initialConfig.jellyfin_url || "");
-    setJellyfinApiKey(initialConfig.jellyfin_api_key || "");
+    setJellyfinApiKey("");
     setEmailNotificationsEnabled(initialConfig.email_notifications_enabled === "true");
     setNotificationEmail(initialConfig.notification_email || "");
     setSmtpHost(initialConfig.smtp_host || "");
@@ -1068,6 +1081,18 @@ function SettingsContent({
               initialConfig={initialConfig}
               selectedServer={selectedServer}
               setSelectedServer={setSelectedServer}
+              setTestResults={setTestResults}
+              testResults={testResults}
+            />
+          )}
+          {activeTab === "jellyfin" && (
+            <ServiceSettings
+              service="jellyfin"
+              url={jellyfinUrl}
+              setUrl={setJellyfinUrl}
+              apiKey={jellyfinApiKey}
+              setApiKey={setJellyfinApiKey}
+              hasStoredApiKey={jellyfinKeyStored}
               setTestResults={setTestResults}
               testResults={testResults}
             />

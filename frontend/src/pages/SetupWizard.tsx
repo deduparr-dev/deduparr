@@ -494,9 +494,8 @@ export default function SetupWizard() {
               </div>
               <h1 className="text-2xl md:text-3xl font-bold">Welcome to deduparr!</h1>
               <p className="text-sm md:text-lg text-muted-foreground">
-                Your media server lets you see duplicates, Radarr/Sonarr deletes them, and
-                qBittorrent is needed if you want to remove the corresponding items from your
-                library as well.
+                Your media server shows Deduparr what you have more than one copy of. Radarr and
+                Sonarr do the deleting, and qBittorrent removes the matching downloads as well.
               </p>
 
               <Card className="p-4 md:p-6 bg-card border-border text-left">
@@ -504,11 +503,11 @@ export default function SetupWizard() {
                 <div className="space-y-2 text-xs md:text-sm">
                   <div className="flex items-start gap-2">
                     <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
-                    <span>A Plex account (free or Plex Pass)</span>
+                    <span>Plex or Jellyfin - either one, or both</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
-                    <span>Access to your Plex server</span>
+                    <span>A Plex account, or a Jellyfin server URL and admin API key</span>
                   </div>
                   <div className="flex items-start gap-2 opacity-60">
                     <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />

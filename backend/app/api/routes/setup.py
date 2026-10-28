@@ -29,6 +29,13 @@ class PlexConnectionTest(BaseModel):
     server_name: str
 
 
+class JellyfinConnectionTest(BaseModel):
+    """Request model for testing Jellyfin connection"""
+
+    url: str
+    api_key: str
+
+
 class RadarrConnectionTest(BaseModel):
     """Request model for testing Radarr connection"""
 
@@ -94,6 +101,16 @@ class ConnectionTestResponse(BaseModel):
     available_servers: Optional[List[str]] = None
     # Optional free-form message returned by some test endpoints
     message: Optional[str] = None
+
+
+class MediaLibraryResponse(BaseModel):
+    """One library, and which media server reported it"""
+
+    key: str
+    title: str
+    type: str
+    count: int = 0
+    server: str
 
 
 class PlexLibraryResponse(BaseModel):
@@ -193,6 +210,35 @@ async def test_plex_connection(
         request.auth_token, request.server_name
     )
     return result
+
+
+@router.post("/test/jellyfin", response_model=ConnectionTestResponse)
+async def test_jellyfin_connection(
+    request: JellyfinConnectionTest, db: AsyncSession = Depends(get_db)
+):
+    """
+    Test a Jellyfin server before saving it.
+
+    Args:
+        request: Server URL and an administrator API key
+
+    Returns:
+        Connection test result
+    """
+    setup_service = SetupService(db)
+    return await setup_service.test_jellyfin_connection(request.url, request.api_key)
+
+
+@router.get("/libraries", response_model=List[MediaLibraryResponse])
+async def get_media_libraries(db: AsyncSession = Depends(get_db)):
+    """
+    Libraries from every configured media server.
+
+    Each entry names the server it came from, so both can be shown when Plex
+    and Jellyfin are set up together.
+    """
+    setup_service = SetupService(db)
+    return await setup_service.get_media_libraries()
 
 
 @router.post("/test/radarr", response_model=ConnectionTestResponse)

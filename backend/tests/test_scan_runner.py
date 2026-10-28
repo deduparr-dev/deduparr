@@ -109,12 +109,22 @@ async def test_run_scan_skips_library_types_it_cannot_handle(test_db):
     server.find_duplicate_episodes.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [MediaServerError("unreachable"), ValueError("Failed to decrypt token")],
+    ids=["media-server-error", "any-other-error"],
+)
 @pytest.mark.asyncio
-async def test_run_scan_carries_on_when_one_server_fails(test_db):
-    """An unreachable server does not stop the others being scanned."""
+async def test_run_scan_carries_on_when_one_server_fails(test_db, failure):
+    """
+    A broken server does not stop the others being scanned.
+
+    The failure is not always a MediaServerError: a stale Plex token surfaces
+    as a ValueError from the SDK layer, and that used to 500 the whole scan.
+    """
     broken = AsyncMock()
     broken.type = MediaServerType.JELLYFIN
-    broken.get_libraries.side_effect = MediaServerError("unreachable")
+    broken.get_libraries.side_effect = failure
 
     working = _server(
         MediaServerType.PLEX,
@@ -154,3 +164,29 @@ async def test_run_scan_drops_sets_the_server_no_longer_reports(test_db):
 
     assert not (await test_db.execute(select(DuplicateSet))).scalars().all()
     assert totals.sets_created == 0
+
+
+@pytest.mark.asyncio
+async def test_run_scan_persists_what_it_found(test_db):
+    """
+    The runner commits, so a caller cannot report sets it never saved.
+
+    Expiring the session proves the rows are in the database rather than just
+    pending in this session's identity map.
+    """
+    server = _server(
+        MediaServerType.PLEX,
+        [{"key": "1", "title": "Movies", "type": "movie", "count": 1}],
+        movie_groups=[_group("committed")],
+    )
+
+    with patch(
+        "app.services.scan.runner.get_media_servers",
+        new_callable=AsyncMock,
+        return_value=[server],
+    ):
+        await run_scan(test_db, ["Movies"])
+
+    test_db.expire_all()
+    result = await test_db.execute(select(DuplicateSet))
+    assert [s.item_id for s in result.scalars().all()] == ["committed"]

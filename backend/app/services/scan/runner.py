@@ -16,11 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.models import DuplicateSet, ScoringRule
 from app.models.duplicate import DuplicateStatus, MediaType
 from app.services.arr.quality import ArrQualityRanker
-from app.services.media_server import (
-    DuplicateGroup,
-    MediaServerError,
-    get_media_servers,
-)
+from app.services.media_server import DuplicateGroup, get_media_servers
 from app.services.scan.helpers import (
     cleanup_stale_set,
     create_duplicate_set,
@@ -74,7 +70,9 @@ async def run_scan(db: AsyncSession, library_names: List[str]) -> ScanTotals:
 
         try:
             libraries = await server.get_libraries()
-        except MediaServerError as e:
+        except Exception as e:
+            # Any failure here is specific to this server - unreachable, bad
+            # credentials, an SDK error - and must not abandon the others.
             logger.error(f"Skipping {server.type.value}: {e}")
             continue
 
@@ -117,6 +115,9 @@ async def run_scan(db: AsyncSession, library_names: List[str]) -> ScanTotals:
             totals.sets_updated += updated
             totals.sets_removed += removed
 
+    # Committed here so every caller persists what it found; leaving it to them
+    # meant an API scan could report sets it never saved.
+    await db.commit()
     return totals
 
 

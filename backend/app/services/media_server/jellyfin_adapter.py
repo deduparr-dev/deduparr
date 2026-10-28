@@ -53,7 +53,10 @@ class JellyfinAdapter(BaseExternalService):
     async def test_connection(self) -> ConnectionInfo:
         try:
             api = await self._connect()
-            info = await asyncio.to_thread(api.get_system_info) or {}
+            # get_system_info() is misnamed in the SDK: it reads
+            # System/Configuration, which carries no version. The _new variant
+            # is the one that reads System/Info.
+            info = await asyncio.to_thread(api.get_system_info_new) or {}
             # Proves the key is an admin one, which everything else relies on.
             await self._raw_libraries()
         except MediaServerError as e:

@@ -59,7 +59,6 @@ class ScanScheduler:
                     return
 
                 totals = await run_scan(db, libraries)
-                await db.commit()
 
                 logger.info(
                     f"Scheduled scan complete: {totals.sets_created} new sets, "

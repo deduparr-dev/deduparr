@@ -229,6 +229,23 @@ async def test_jellyfin_connection(
     return await setup_service.test_jellyfin_connection(request.url, request.api_key)
 
 
+@router.post("/jellyfin/libraries", response_model=List[MediaLibraryResponse])
+async def get_jellyfin_libraries(
+    request: JellyfinConnectionTest, db: AsyncSession = Depends(get_db)
+):
+    """
+    List a Jellyfin server's libraries from credentials that are not saved yet.
+
+    Args:
+        request: Server URL and an administrator API key
+    """
+    setup_service = SetupService(db)
+    try:
+        return await setup_service.get_jellyfin_libraries(request.url, request.api_key)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/libraries", response_model=List[MediaLibraryResponse])
 async def get_media_libraries(db: AsyncSession = Depends(get_db)):
     """

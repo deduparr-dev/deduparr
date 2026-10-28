@@ -647,6 +647,22 @@ class SetupService:
             "version": result.get("version", ""),
         }
 
+    async def get_jellyfin_libraries(self, url: str, api_key: str) -> List[Dict]:
+        """
+        Libraries of a Jellyfin server whose credentials are not stored yet.
+
+        The setup wizard needs this before it saves anything, the same way the
+        Plex step lists libraries straight from an unsaved token.
+        """
+        adapter = JellyfinAdapter(self.db)
+        adapter._get_encrypted_config = _fixed_config(
+            {"jellyfin_url": url, "jellyfin_api_key": api_key}
+        )
+        return [
+            {**library, "server": MediaServerType.JELLYFIN.value}
+            for library in await adapter.get_libraries()
+        ]
+
     async def get_media_libraries(self) -> List[Dict]:
         """
         Libraries from every configured media server.

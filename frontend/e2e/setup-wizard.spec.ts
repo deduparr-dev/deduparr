@@ -15,7 +15,8 @@ test.describe("setup wizard", () => {
     await gotoApp(page, "/setup");
 
     await expect(page.getByText("Welcome to deduparr!")).toBeVisible();
-    await expect(page.getByText("Access to your Plex server")).toBeVisible();
+    // Either media server will do, so the requirements name both
+    await expect(page.getByText(/Plex or Jellyfin/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Get Started" })).toBeVisible();
   });
 

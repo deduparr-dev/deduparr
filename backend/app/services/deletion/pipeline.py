@@ -271,6 +271,9 @@ class DeletionPipeline:
         arr_type = None
         item_hash = None
         arr_media_id = None
+        # Resolved before any stage removes the file, so the disk stage can
+        # still find its directory when the media server path is remapped.
+        located_path = self._find_file_in_media_root(file_path)
 
         try:
             # Stage 1: Remove from *arr and delete files
@@ -320,7 +323,9 @@ class DeletionPipeline:
                     if file.keep and file.id != duplicate_file.id:
                         protected_files.add(file.file_path)
 
-            await self._stage_disk_removal(file_path, history, protected_files)
+            await self._stage_disk_removal(
+                file_path, history, protected_files, located_path
+            )
             await self.db.commit()
 
             # Stage 5: Refresh only the specific media in Plex (targeted refresh)
@@ -567,7 +572,11 @@ class DeletionPipeline:
             raise
 
     async def _stage_disk_removal(
-        self, file_path: str, history: DeletionHistory, protected_files: set[str] = None
+        self,
+        file_path: str,
+        history: DeletionHistory,
+        protected_files: set[str] = None,
+        located_path: Optional[str] = None,
     ):
         """
         Stage 4: Fallback disk cleanup and associated files removal
@@ -594,7 +603,8 @@ class DeletionPipeline:
             # If qBittorrent already deleted the file, we just clean up remnants
             if history.deleted_from_disk:
                 logger.info(
-                    "Main file already deleted by qBittorrent. Checking for associated files cleanup..."
+                    "An earlier stage reported this file deleted; checking the "
+                    "filesystem and cleaning up associated files..."
                 )
 
             # Find the actual file location by searching media root
@@ -653,14 +663,15 @@ class DeletionPipeline:
                     history.deleted_from_disk = True
                 else:
                     try:
-                        # Delete the main file (if not already deleted by qBittorrent)
-                        if not history.deleted_from_disk:
-                            os.remove(actual_path)
-                            logger.info(f"Deleted file from disk: {actual_path}")
-                        else:
-                            logger.info(
-                                "Main file already deleted by qBittorrent, cleaning up associated files only"
+                        # An *arr or qBittorrent delete can report success and
+                        # leave the file behind; the filesystem decides.
+                        if history.deleted_from_disk:
+                            logger.warning(
+                                f"An earlier stage reported this file deleted but it is "
+                                f"still on disk, removing it here: {actual_path}"
                             )
+                        os.remove(actual_path)
+                        logger.info(f"Deleted file from disk: {actual_path}")
 
                         # Delete associated files using helper method
                         # Always exclude the main file to prevent double deletion
@@ -784,8 +795,9 @@ class DeletionPipeline:
                     # Skip cleanup - nothing to clean up if we can't find the file
                     return
 
-                # First, check if the original parent directory still exists with orphaned files
-                parent_dir = os.path.dirname(file_path)
+                # Where the file actually lived, if it was found before an
+                # earlier stage removed it, else the media server's path
+                parent_dir = os.path.dirname(located_path or file_path)
                 base_name = os.path.splitext(filename)[0]
 
                 if os.path.exists(parent_dir) and os.path.isdir(parent_dir):
@@ -806,126 +818,6 @@ class DeletionPipeline:
                                 logger.info(f"Removed empty directory: {parent_dir}")
                     except Exception as e:
                         logger.debug(f"Could not remove directory {parent_dir}: {e}")
-
-                # Try to find and clean up other copies in the library with orphaned files
-                # Search for instances of this file but be careful about hardlinks
-                # CRITICAL: DO NOT delete files we're keeping (protected_files)
-                path_parts = file_path.split("/")
-                if len(path_parts) >= 2:
-                    base_name = os.path.splitext(os.path.basename(file_path))[0]
-                    filename = os.path.basename(file_path)
-
-                    # Extract library path (e.g., /plexdownloads/Filmer) to limit search scope
-                    library_path = (
-                        "/".join(path_parts[:3])
-                        if len(path_parts) >= 3
-                        else self._get_media_root_from_path(file_path)
-                    )
-
-                    logger.info(
-                        f"Searching for remaining copies of '{filename}' in library: {library_path}"
-                    )
-
-                    # Track which inodes we've seen to avoid deleting all hardlinks
-                    processed_inodes = set()
-                    folders_cleaned = 0
-
-                    for root, dirs, files in os.walk(library_path):
-                        if filename in files:
-                            file_full_path = os.path.join(root, filename)
-
-                            # CRITICAL: Skip protected files (files we're keeping)
-                            if file_full_path in protected_files:
-                                logger.info(
-                                    f"Skipping protected file (marked to keep): {file_full_path}"
-                                )
-                                continue
-
-                            # Check if this is a hardlink we've already processed
-                            try:
-                                stat_info = os.stat(file_full_path)
-                                file_inode = stat_info.st_ino
-
-                                # If this inode was already processed, skip (avoid deleting all hardlinks)
-                                if file_inode in processed_inodes:
-                                    logger.info(
-                                        f"Skipping {file_full_path} - hardlink already processed (inode: {file_inode})"
-                                    )
-                                    continue
-
-                                # Track this inode
-                                processed_inodes.add(file_inode)
-
-                            except OSError as e:
-                                logger.debug(f"Could not stat {file_full_path}: {e}")
-                                # If we can't stat it, skip it to be safe
-                                continue
-
-                            logger.info(f"Found remaining copy at: {file_full_path}")
-
-                            # Delete the remaining file
-                            try:
-                                if self.dry_run:
-                                    logger.info(
-                                        f"[DRY-RUN] Would delete: {file_full_path}"
-                                    )
-                                else:
-                                    os.remove(file_full_path)
-                                    logger.info(
-                                        f"Deleted remaining file: {file_full_path}"
-                                    )
-                            except (PermissionError, OSError) as e:
-                                logger.debug(
-                                    f"No write permission for {file_full_path}: {e}"
-                                )
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to delete {file_full_path}: {e}"
-                                )
-
-                            # Clean up associated files using helper method
-                            self._cleanup_associated_files(
-                                root, base_name, exclude_filename=filename
-                            )
-
-                            # Remove the directory if it's now empty
-                            try:
-                                if not os.listdir(root):
-                                    if self.dry_run:
-                                        logger.info(
-                                            f"[DRY-RUN] Would remove empty directory: {root}"
-                                        )
-                                    else:
-                                        os.rmdir(root)
-                                        logger.info(f"Removed empty directory: {root}")
-                            except Exception as e:
-                                logger.debug(f"Could not remove directory {root}: {e}")
-
-                            folders_cleaned += 1
-
-                    if folders_cleaned > 0:
-                        logger.info(
-                            f"Cleaned up {folders_cleaned} location(s) for file: {filename}"
-                        )
-                else:
-                    # File truly not found anywhere - only mark as deleted if *arr or qBit confirmed deletion
-                    if history.deleted_from_arr or history.deleted_from_qbit:
-                        logger.info(
-                            f"File not found in filesystem and already deleted by "
-                            f"{'*arr' if history.deleted_from_arr else 'qBittorrent'}"
-                        )
-                        history.deleted_from_disk = True
-                    else:
-                        # File not found AND no service deleted it - this is an ERROR
-                        error_msg = f"File not found for deletion: {file_path}"
-                        logger.error(error_msg)
-                        history.error = (
-                            f"{history.error}; {error_msg}"
-                            if history.error
-                            else error_msg
-                        )
-                        history.deleted_from_disk = False
-
         except PermissionError:
             # Readonly filesystem at search level - mark as success since *arr handles deletion
             logger.info(

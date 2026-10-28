@@ -198,7 +198,10 @@ async def test_delete_movie_full_pipeline_success(
         # rescan_movie is patched directly on RadarrService class
         mock_rescan_movie.return_value = True
 
-        mock_exists.return_value = True
+        # qBittorrent deleted the file along with its data, so the path is
+        # gone. Returning True here would describe a file that was deleted and
+        # is still present, which is what the fallback stage exists to clean up.
+        mock_exists.side_effect = lambda path: "Test Movie.mkv" not in str(path)
         # Mock os.walk for _find_file_in_media_root
         mock_walk.return_value = [
             ("/media/movies", [], ["Test Movie.mkv"]),
@@ -291,7 +294,8 @@ async def test_delete_episode_full_pipeline_success(
         # Mock rescan
         mock_rescan_series.return_value = True
 
-        mock_exists.return_value = True
+        # As above: qBittorrent removed the file with its data
+        mock_exists.side_effect = lambda path: "S01E01.mkv" not in str(path)
         # Mock os.walk for _find_file_in_media_root
         mock_walk.return_value = [
             ("/media/tv/Test Series", [], ["S01E01.mkv"]),
@@ -728,3 +732,91 @@ async def test_protected_files_not_deleted(deletion_pipeline, test_db, setup_con
 
             # The deleted file should be gone
             assert not delete_file_path.exists(), "File to delete should be removed"
+
+
+@pytest.mark.asyncio
+async def test_disk_stage_removes_a_file_an_earlier_stage_only_claimed_to_delete(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path, monkeypatch
+):
+    """An earlier stage reporting the file deleted does not stop its removal."""
+    from app.services.deletion.pipeline import DeletionPipeline
+
+    monkeypatch.setattr(
+        DeletionPipeline,
+        "_get_plex_service",
+        AsyncMock(return_value=MagicMock()),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.services.deletion.pipeline.get_media_server",
+        AsyncMock(return_value=AsyncMock()),
+    )
+
+    leftover = tmp_path / "Still Here.mkv"
+    leftover.write_bytes(b"x" * 1024)
+
+    dup_set = await create_duplicate_set(title="Still Here")
+    dup_file = await create_duplicate_file(
+        dup_set.id, file_path=str(leftover), keep=False
+    )
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    history = DeletionHistory(duplicate_file_id=dup_file.id, deleted_from_disk=True)
+
+    await pipeline._stage_disk_removal(str(leftover), history)
+
+    assert not leftover.exists()
+    assert history.deleted_from_disk is True
+
+
+@pytest.mark.asyncio
+async def test_disk_stage_cleans_up_beside_a_remapped_file(test_db, tmp_path):
+    """
+    Associated files are found where the file actually lived.
+
+    The media server reports a path this container cannot see, and the *arr
+    has already removed the file, so only the location resolved beforehand
+    leads to the leftovers.
+    """
+    from app.services.deletion.pipeline import DeletionPipeline
+
+    movie_dir = tmp_path / "media" / "Movies" / "Avatar (2009)"
+    movie_dir.mkdir(parents=True)
+    leftovers = [movie_dir / "Avatar.nfo", movie_dir / "Avatar.srt"]
+    for path in leftovers:
+        path.write_text("x")
+    unrelated = movie_dir / "poster.jpg"
+    unrelated.write_text("x")
+
+    history = DeletionHistory(duplicate_file_id=1, deleted_from_arr=True)
+    await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
+        "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
+        history,
+        set(),
+        str(movie_dir / "Avatar.mkv"),
+    )
+
+    assert not any(path.exists() for path in leftovers)
+    assert unrelated.exists()
+    assert history.deleted_from_disk is True
+
+
+@pytest.mark.asyncio
+async def test_disk_stage_never_touches_a_same_named_file_elsewhere(test_db, tmp_path):
+    """Another show's S01E01.mkv is not a leftover of this one's."""
+    from app.services.deletion.pipeline import DeletionPipeline
+
+    show_a = tmp_path / "tv" / "Show A" / "Season 1"
+    show_b = tmp_path / "tv" / "Show B" / "Season 1"
+    show_a.mkdir(parents=True)
+    show_b.mkdir(parents=True)
+    other_show = show_b / "S01E01.mkv"
+    other_show.write_bytes(b"x" * 1024)
+
+    # Sonarr has already removed Show A's copy
+    history = DeletionHistory(duplicate_file_id=1, deleted_from_arr=True)
+    await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
+        str(show_a / "S01E01.mkv"), history, set(), None
+    )
+
+    assert other_show.exists()

@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.deletion.pipeline import DeletionPipeline
-from app.models import DuplicateSet, DuplicateFile
+from app.models import DeletionHistory, DuplicateFile, DuplicateSet
 from app.models.duplicate import MediaType, DuplicateStatus
 from app.models.config import Config
 from tests.conftest import encrypt_test_password
@@ -375,8 +375,8 @@ async def test_comprehensive_disk_cleanup_with_associated_files(
 
         # Setup file system - main file + associated files in same directory
         def exists_side_effect(path):
+            # Radarr removed Avatar.mkv; only the files beside it remain
             return path in [
-                "/media/Movies/Avatar (2009)/Avatar.mkv",
                 "/media/Movies/Avatar (2009)/Avatar.nfo",
                 "/media/Movies/Avatar (2009)/Avatar.srt",
                 "/media/Movies/Avatar (2009)/Avatar-fanart.jpg",
@@ -785,99 +785,27 @@ async def test_cache_persistence_across_multiple_deletions(
 
 
 @pytest.mark.asyncio
-async def test_special_characters_in_filenames(
-    deletion_pipeline, test_db, setup_configs
-):
-    """Test handling of special characters in filenames (spaces, unicode, etc.)"""
+async def test_special_characters_in_filenames(test_db, tmp_path):
+    """Spaces, brackets and non-ASCII characters do not break the disk stage."""
+    movie_dir = tmp_path / "The Matrix (1999) [4K]"
+    movie_dir.mkdir()
+    stem = "The Matrix (1999) [4K] – Ünïcødé"
+    main = movie_dir / f"{stem}.mkv"
+    associated = [movie_dir / f"{stem}.nfo", movie_dir / f"{stem}.en.srt"]
+    for path in [main, *associated]:
+        path.write_text("x")
+    unrelated = movie_dir / "folder.jpg"
+    unrelated.write_text("x")
 
-    dup_set = DuplicateSet(
-        item_id="movie_special",
-        title="Movie with Special Chars",
-        media_type=MediaType.MOVIE,
-        status=DuplicateStatus.APPROVED,
+    history = DeletionHistory(duplicate_file_id=1)
+    await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
+        str(main), history, set(), str(main)
     )
-    test_db.add(dup_set)
-    await test_db.flush()
 
-    # Filename with spaces, parentheses, and unicode
-    dup_file = DuplicateFile(
-        set_id=dup_set.id,
-        file_path="/plex/Movies/The Matrix (1999) [4K]/The Matrix (1999) [4K].mkv",
-        file_size=50000000000,
-        score=90,
-        keep=False,
-    )
-    test_db.add(dup_file)
-    await test_db.commit()
-
-    with (
-        patch(
-            "app.services.arr.radarr_service.RadarrService.find_movie_by_file_path",
-            new_callable=AsyncMock,
-        ) as mock_find,
-        patch(
-            "app.services.arr.radarr_service.RadarrService.delete_movie_file",
-            new_callable=AsyncMock,
-        ) as mock_delete,
-        patch(
-            "app.services.arr.radarr_service.RadarrService.rescan_movie",
-            new_callable=AsyncMock,
-        ),
-        patch("os.walk") as mock_walk,
-        patch("os.path.exists") as mock_exists,
-        patch("app.services.download.qbittorrent_service.Client") as mock_qbit,
-        patch(
-            "app.services.deletion.pipeline.get_media_server",
-            new_callable=AsyncMock,
-        ) as mock_plex_class,
-        patch("os.remove") as mock_remove,
-        patch("os.listdir", return_value=[]),
-        patch("os.path.isfile", return_value=True),
-        patch("os.stat") as mock_stat,  # Add os.stat mock for inode checking
-    ):
-        # Setup Radarr service mocks - Radarr doesn't find the file
-        # This forces the deletion pipeline to use orphan cleanup via os.walk
-        mock_find.return_value = None
-        mock_delete.return_value = True
-
-        # Setup qBittorrent
-        mock_qbit_instance = MagicMock()
-        mock_qbit.return_value = mock_qbit_instance
-        mock_qbit_instance.torrents_info.return_value = []
-
-        # Setup Plex
-        mock_plex_instance = AsyncMock()
-        mock_plex_class.return_value = mock_plex_instance
-        mock_plex_instance.refresh_item.return_value = True
-
-        # Setup os.walk for orphan cleanup
-        mock_walk.return_value = [
-            (
-                "/media/Movies/The Matrix (1999) [4K]",
-                [],
-                ["The Matrix (1999) [4K].mkv"],
-            ),
-        ]
-
-        # Setup os.stat to return inode info for orphan cleanup
-        mock_stat_result = MagicMock()
-        mock_stat_result.st_ino = 54321
-        mock_stat_result.st_nlink = 1
-        mock_stat.return_value = mock_stat_result
-
-        # Main file already deleted by *arr
-        mock_exists.return_value = False
-
-        # Execute deletion
-        history = await deletion_pipeline.delete_file(dup_file.id)
-
-        # Verify special characters were handled correctly and deletion completed
-        assert history.is_complete is True
-        # Main file already deleted by *arr, but orphaned files cleanup will find and delete it via os.walk
-        # Verify os.remove was called once for the orphaned file
-        mock_remove.assert_called_once_with(
-            "/media/Movies/The Matrix (1999) [4K]/The Matrix (1999) [4K].mkv"
-        )
+    assert not main.exists()
+    assert not any(path.exists() for path in associated)
+    assert unrelated.exists()
+    assert history.deleted_from_disk is True
 
 
 @pytest.mark.asyncio

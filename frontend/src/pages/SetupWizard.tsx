@@ -63,7 +63,7 @@ function ProgressIndicator({
   if (currentStep === "welcome" || currentStep === "complete") return null;
 
   return (
-    <div className="mb-8 flex items-center justify-center gap-2">
+    <div data-testid="wizard-progress" className="mb-8 flex items-center justify-center gap-2">
       {steps.map((step, index) => (
         <div key={step} className="flex items-center gap-2">
           <div

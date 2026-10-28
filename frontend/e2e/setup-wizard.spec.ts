@@ -31,8 +31,12 @@ test.describe("setup wizard", () => {
 
   test("the progress indicator appears once past the welcome step", async ({ page }) => {
     await gotoApp(page, "/setup");
+
+    // Nothing to show progress through while still on the welcome screen
+    await expect(page.getByTestId("wizard-progress")).toHaveCount(0);
+
     await page.getByRole("button", { name: "Get Started" }).click();
 
-    await expect(page.getByText("Authenticate with Plex")).toBeVisible();
+    await expect(page.getByTestId("wizard-progress")).toBeVisible();
   });
 });

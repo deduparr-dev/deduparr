@@ -47,13 +47,27 @@ updates:
           - "patch"
 
   - package-ecosystem: "docker"
-    directory: "/"
+    directories:
+      - "/"
+      - "/backend"
+      - "/frontend"
     schedule:
       interval: "weekly"
       day: "monday"
     target-branch: "develop"
     rebase-strategy: "auto"
     open-pull-requests-limit: 5
+    # The official images re-push their tags every few days, so the default
+    # three-day cooldown skipped every new Python and Node release
+    cooldown:
+      exclude:
+        - "*"
+    # One pull request per image, for the production and dev Dockerfiles alike
+    groups:
+      base-images:
+        group-by: dependency-name
+        patterns:
+          - "*"
 
   - package-ecosystem: "github-actions"
     directory: "/"

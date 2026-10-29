@@ -1,76 +1,30 @@
 name: Dependabot Auto-Merge
 
+# Merges a Dependabot pull request once CI has passed on it. develop requires
+# no checks, so merging when the pull request opened took updates in before
+# CI had finished.
 on:
-  pull_request_target:
-    branches: [develop]
-    types: [opened, synchronize, reopened]
-  pull_request:
-    branches: [develop]
-    types: [opened, synchronize, reopened]
+  workflow_run:
+    workflows: [CI/CD]
+    types: [completed]
 
 permissions:
-  pull-requests: write
   contents: write
+  pull-requests: write
 
 jobs:
-  dependabot:
+  merge:
     runs-on: ubuntu-latest
-    # Check if PR author is dependabot (works for both trigger types)
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
     steps:
-      - name: Fetch Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@v3
-        with:
-          github-token: "${{ secrets.GITHUB_TOKEN }}"
-          skip-commit-verification: true
-
-      - name: Check PR mergeable status
-        id: check-mergeable
-        run: |
-          # Wait a moment for GitHub to calculate mergeable status
-          sleep 5
-          
-          MERGEABLE=$(gh pr view "$PR_URL" --json mergeable,mergeStateStatus -q '.mergeable')
-          MERGE_STATE=$(gh pr view "$PR_URL" --json mergeable,mergeStateStatus -q '.mergeStateStatus')
-          
-          echo "mergeable=$MERGEABLE" >> $GITHUB_OUTPUT
-          echo "merge_state=$MERGE_STATE" >> $GITHUB_OUTPUT
-          echo "PR mergeable: $MERGEABLE, state: $MERGE_STATE"
+      # Only the commit CI passed on: a newer one waits for its own run
+      - name: Merge the pull request
+        run: gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Handle conflicts - ask Dependabot to recreate
-        if: steps.check-mergeable.outputs.mergeable == 'CONFLICTING'
-        run: |
-          echo "PR has conflicts. Asking Dependabot to recreate..."
-          gh pr comment "$PR_URL" --body "@dependabot recreate"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update branch if behind (no conflicts)
-        if: |
-          steps.check-mergeable.outputs.mergeable == 'MERGEABLE' &&
-          steps.check-mergeable.outputs.merge_state == 'BEHIND'
-        run: |
-          echo "PR is behind base branch. Asking Dependabot to rebase..."
-          gh pr comment "$PR_URL" --body "@dependabot rebase"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Auto-approve Dependabot PR
-        if: steps.check-mergeable.outputs.mergeable == 'MERGEABLE'
-        run: gh pr review --approve "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Enable auto-merge for Dependabot PRs
-        if: steps.check-mergeable.outputs.mergeable == 'MERGEABLE'
-        run: gh pr merge --auto --squash "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}

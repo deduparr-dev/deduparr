@@ -14,15 +14,16 @@ Images are automatically built and published to:
 |-----|-------------|----------|
 | `latest` | Latest stable release | Production |
 | `0.1.2`, `0.1` | Specific versions | Production (pinned) |
-| `dev` | Nightly from `develop` | Testing |
+| `dev` | Latest `develop` | Testing |
 | `sha-*` | Specific `develop` commit | Debug |
 
 ## 🔄 Build Triggers
 
 - **Version tag `v*.*.*`**: `latest` + semver tags (`0.1.2`, `0.1`)
+- **Push to `develop`**: `dev` + SHA
 - **Nightly (midnight UTC)**: `dev` + SHA from `develop`
 - **Manual dispatch**: `dev` + SHA from `develop` only
-- **Push to branches**: Build only (no publish)
+- **Push to `main`**: Build only (no publish)
 
 ## 🚀 Usage
 
@@ -134,7 +135,7 @@ Maintainers can manually trigger a build:
    - **main**: Build only for testing (no publish, no SHA tags)
 5. Click "Run workflow"
 
-This is useful for testing builds or creating dev snapshots without waiting for nightly builds.
+This is useful for testing a build, or for rebuilding `dev` without a new commit.
 
 ## 📝 Release Process
 

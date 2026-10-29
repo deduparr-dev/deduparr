@@ -1,9 +1,10 @@
 name: Build and Publish Docker Images
 
 # Build Strategy:
-# - Push to main/develop: Build only (test CI/CD, no publish) - saves GHCR resources
+# - Push to main: Build only (test CI/CD, no publish)
+# - Push to develop: Build and publish 'dev' + SHA tags
 # - Version tags (v*.*.*): Build and publish as 'latest' + semver tags (e.g., 0.1.2, 0.1)
-# - Nightly schedule: Build and publish 'dev' + SHA tags from develop branch
+# - Nightly schedule: Build and publish 'dev' + SHA tags from develop branch (also publishes Dependabot's merges, which start no push build)
 # - Manual dispatch: develop publishes 'dev' + SHA tags, main builds only
 
 on:
@@ -25,6 +26,10 @@ on:
         options:
           - develop
           - main
+
+# One build per branch or tag at a time, so 'dev' always ends on the newest commit
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.build_branch || (github.event_name == 'schedule' && 'develop') || github.ref_name }}
 
 env:
   REGISTRY: ghcr.io
@@ -76,7 +81,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        if: steps.check_tag.outputs.is_tagged != 'true' && ((github.event_name != 'push' && env.BUILD_REF == 'refs/heads/develop') || startsWith(env.BUILD_REF, 'refs/tags/'))
+        if: steps.check_tag.outputs.is_tagged != 'true' && (env.BUILD_REF == 'refs/heads/develop' || startsWith(env.BUILD_REF, 'refs/tags/'))
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -94,13 +99,13 @@ jobs:
           tags: |
             # Tag 'latest' only for version releases (v*.*.*)
             type=raw,value=latest,enable=${{ startsWith(env.BUILD_REF, 'refs/tags/v') }}
-            # Tag 'dev' only for develop branch (nightly builds and manual dispatch)
+            # Tag 'dev' only for develop branch (pushes, nightly builds and manual dispatch)
             type=raw,value=dev,enable=${{ env.BUILD_REF == 'refs/heads/develop' }}
             # Tag with semver for version tags (v1.0.0 -> 1.0.0, 0.1)
             # Note: {{major}} tag disabled until v1.0.0+ to avoid confusing '0' tag during pre-release
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # Tag with SHA only for develop branch (nightly builds and manual develop dispatch)
+            # Tag with SHA only for develop branch (pushes, nightly builds and manual develop dispatch)
             # Never enabled for main branch or version tag releases
             type=sha,enable=${{ env.BUILD_REF == 'refs/heads/develop' }}
           flavor: |
@@ -113,8 +118,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          # Only push for: version tags, and develop's nightly or manual builds (not branch pushes)
-          push: ${{ (github.event_name != 'push' && env.BUILD_REF == 'refs/heads/develop') || startsWith(env.BUILD_REF, 'refs/tags/') }}
+          # Only push for: version tags and develop (never main)
+          push: ${{ env.BUILD_REF == 'refs/heads/develop' || startsWith(env.BUILD_REF, 'refs/tags/') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -125,7 +130,7 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
 
       - name: Generate artifact attestation
-        if: steps.check_tag.outputs.is_tagged != 'true' && ((github.event_name != 'push' && env.BUILD_REF == 'refs/heads/develop') || startsWith(env.BUILD_REF, 'refs/tags/'))
+        if: steps.check_tag.outputs.is_tagged != 'true' && (env.BUILD_REF == 'refs/heads/develop' || startsWith(env.BUILD_REF, 'refs/tags/'))
         uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}

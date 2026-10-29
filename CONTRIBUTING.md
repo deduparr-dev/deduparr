@@ -10,8 +10,8 @@ Be respectful and constructive. We're all here to build something great together
 
 ### Prerequisites
 
-- Python 3.14+
-- Node.js 22+ (CI and the Docker images use Node 26)
+- Python 3.14+ (CI and the Docker images use the Dockerfile's version)
+- Node.js 22+ (CI and the Docker images use the Dockerfile's version)
 - Docker (optional, for testing)
 
 ### Development Setup
@@ -223,10 +223,9 @@ npm test
 
 ## Automated Dependency Updates
 
-Deduparr uses Dependabot to keep dependencies up to date. The workflow automatically:
-- **Auto-approves** patch and minor version updates
-- **Auto-merges** after CI passes
-- **Requires manual review** for major version updates
+Deduparr uses Dependabot to keep every dependency current, including the
+Python and Node versions in the Dockerfile. A Dependabot pull request is merged
+on its own once CI passes on it.
 
 See [docs/DEPENDABOT_AUTO_MERGE.md](docs/DEPENDABOT_AUTO_MERGE.md) for details.
 

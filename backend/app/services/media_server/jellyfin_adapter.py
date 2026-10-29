@@ -14,6 +14,7 @@ import logging
 from typing import Dict, List, Optional
 
 from jellyfin_apiclient_python import JellyfinClient
+from jellyfin_apiclient_python.connection_manager import CONNECTION_STATE
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.shared.base_service import BaseExternalService
@@ -141,9 +142,19 @@ class JellyfinAdapter(BaseExternalService):
         client = JellyfinClient()
         client.config.app("Deduparr", "1.0.0", "Deduparr", "deduparr")
         client.config.data["auth.ssl"] = url.startswith("https")
-        client.authenticate(
+        state = client.authenticate(
             {"Servers": [{"AccessToken": api_key, "address": url}]}, discover=False
         )
+        if state["State"] != CONNECTION_STATE.SignedIn:
+            # The SDK reports both failures the same way; a server that answered
+            # has an Id by now, and then it was the key it turned down.
+            server = (client.get_credentials().get("Servers") or [{}])[0]
+            if server.get("Id"):
+                raise MediaServerError(
+                    "Jellyfin rejected the API key. Create one under "
+                    "Dashboard → API Keys on an administrator account."
+                )
+            raise MediaServerError(f"No Jellyfin server answered at {url}.")
 
         users = client.jellyfin.get_users() or []
         admin = next(

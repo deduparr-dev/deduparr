@@ -254,6 +254,35 @@ async def test_jellyfin_adapter_requires_an_admin_key(test_db):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server, message",
+    [
+        ({"Id": "abc", "AccessToken": None}, "rejected the API key"),
+        ({"Id": None, "AccessToken": "key"}, "No Jellyfin server answered"),
+    ],
+)
+async def test_jellyfin_adapter_explains_a_failed_sign_in(test_db, server, message):
+    """
+    The SDK returns Unavailable for a bad key and a bad URL alike, and the next
+    call failed with a bare KeyError('auth.server').
+    """
+    from jellyfin_apiclient_python.connection_manager import CONNECTION_STATE
+
+    from app.services.media_server.base import MediaServerError
+
+    with patch(
+        "app.services.media_server.jellyfin_adapter.JellyfinClient"
+    ) as client_class:
+        client = client_class.return_value
+        client.authenticate.return_value = {"State": CONNECTION_STATE.Unavailable}
+        client.get_credentials.return_value = {"Servers": [server]}
+
+        with pytest.raises(MediaServerError, match=message):
+            JellyfinAdapter(test_db)._build_client("http://jellyfin:8096", "key")
+        client.jellyfin.get_users.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_jellyfin_adapter_reads_libraries_and_paths(test_db):
     adapter = JellyfinAdapter(test_db)
     adapter._libraries = [

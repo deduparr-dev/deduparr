@@ -11,12 +11,10 @@ from app.services.arr.client import (
     ArrAuthError,
     ArrClientError,
     ArrConnectionError,
+    Episode,
     SonarrClient,
 )
-from app.services.arr.helpers import (
-    find_media_by_file_path,
-    rescan_media_item,
-)
+from app.services.arr.helpers import find_episode_by_file_path, rescan_media_item
 from app.services.shared.base_service import BaseExternalService
 
 logger = logging.getLogger(__name__)
@@ -29,7 +27,7 @@ class SonarrService(BaseExternalService):
         super().__init__(db)
         self._client: Optional[SonarrClient] = None
 
-    async def find_episode_by_file_path(self, file_path: str) -> Optional[dict]:
+    async def find_episode_by_file_path(self, file_path: str) -> Optional[Episode]:
         """
         Find episode by file path using the episodefile API endpoint
 
@@ -46,7 +44,7 @@ class SonarrService(BaseExternalService):
             Episode data with episodeFile if found, None otherwise
         """
         client = await self._get_client()
-        return await find_media_by_file_path(client, file_path, "series", logger)
+        return await find_episode_by_file_path(client, file_path, logger)
 
     async def _get_client(self) -> SonarrClient:
         """Get Sonarr client instance"""
@@ -80,7 +78,7 @@ class SonarrService(BaseExternalService):
         client = await self._get_client()
 
         try:
-            await client.del_episode_file(episode_file_id)
+            await client.delete_episode_file(episode_file_id)
             logger.info(
                 f"Deleted episode file {episode_file_id} for series {series_id} from Sonarr"
             )

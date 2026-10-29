@@ -410,13 +410,15 @@ async def test_function(test_db):
 - Both use `httpx.AsyncClient` for async HTTP requests
 - Error handling via `ArrConnectionError` exception
 - API keys stored in `Config` model (encrypted)
+- Responses are typed with the TypedDicts in `client.py` (`MediaItem`,
+  `ArrFile`, `Episode`, `QualityProfile`, ...) for the fields Deduparr reads
 - Key methods:
   - `get_system_status()`: Get version/status info
-  - `get_movie()` / `get_series()`: Retrieve media items
+  - `get_movie()` / `get_series()`: One item by ID, or all of them
   - `get_root_folder()`: Get configured root folders
-  - `del_movie_file()` / `del_episode_file()`: Delete files
-  - `post_command()`: Execute commands (RescanMovie, RefreshSeries, etc.)
-  - `update_movie()` / `update_series()`: Update media item metadata
+  - `delete_movie_file()` / `delete_episode_file()`: Delete files
+  - `post_command()`: Execute commands (RescanMovie, RescanSeries)
+  - `update_movie()` / `update_series()`: Send an item back changed, e.g. a new path
 
 **Usage Pattern:**
 ```python

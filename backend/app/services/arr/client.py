@@ -7,16 +7,101 @@ API Version Strategy:
 - SonarrClient: Uses v5 API (current standard, v3 is deprecated)
 
 Both clients inherit from ArrClient base class and share common HTTP logic.
+The TypedDicts below describe the parts of each resource Deduparr reads; the
+*arr sends more, and a resource sent back on update keeps all of it.
 """
 
 import logging
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import List, Mapping, Optional, TypedDict, Union, cast, overload
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-MediaType = Literal["movie", "series"]
+JsonObject = dict[str, object]
+QueryParams = Mapping[str, Union[str, int, bool]]
+
+
+class QualityRef(TypedDict, total=False):
+    id: int
+    name: str
+
+
+class Revision(TypedDict, total=False):
+    version: int
+    real: int
+
+
+class QualityModel(TypedDict, total=False):
+    quality: QualityRef
+    revision: Revision
+
+
+class CustomFormatRef(TypedDict, total=False):
+    id: int
+
+
+class ArrFile(TypedDict, total=False):
+    """A movie or episode file, tracked or offered for manual import"""
+
+    id: int
+    path: str
+    quality: QualityModel
+    customFormatScore: int
+    customFormats: List[CustomFormatRef]
+    seriesId: int
+    seasonNumber: int
+    episodeIds: List[int]
+
+
+class MediaItem(TypedDict, total=False):
+    """A Radarr movie or a Sonarr series; only a movie has a movieFile"""
+
+    id: int
+    title: str
+    path: str
+    qualityProfileId: int
+    movieFile: ArrFile
+
+
+class Episode(TypedDict, total=False):
+    id: int
+    seriesId: int
+    seasonNumber: int
+    episodeNumber: int
+    title: str
+    episodeFile: ArrFile
+
+
+class ProfileItem(TypedDict, total=False):
+    """A quality of a profile, or a group of qualities sharing one rank"""
+
+    quality: QualityRef
+    items: List["ProfileItem"]
+
+
+class FormatItem(TypedDict, total=False):
+    format: int
+    score: int
+
+
+class QualityProfile(TypedDict, total=False):
+    items: List[ProfileItem]
+    formatItems: List[FormatItem]
+
+
+class RootFolder(TypedDict, total=False):
+    path: str
+
+
+class Command(TypedDict, total=False):
+    id: int
+    name: str
+    status: str
+
+
+class SystemStatus(TypedDict, total=False):
+    version: str
 
 
 class ArrClientError(Exception):
@@ -43,6 +128,22 @@ class ArrNotFoundError(ArrClientError):
     pass
 
 
+def _as_object(result: object, endpoint: str) -> JsonObject:
+    """A response that has to be one JSON object."""
+    if not isinstance(result, dict):
+        raise ArrClientError(f"Expected an object from {endpoint}")
+    return result
+
+
+def _as_list(result: object, endpoint: str) -> List[JsonObject]:
+    """A response that has to be a list; a lone object counts as one item."""
+    if isinstance(result, dict):
+        return [result]
+    if not isinstance(result, list):
+        raise ArrClientError(f"Expected a list from {endpoint}")
+    return result
+
+
 class ArrClient:
     """
     Base HTTP client for Radarr/Sonarr APIs (v3/v5).
@@ -50,8 +151,8 @@ class ArrClient:
     Implements the minimal API endpoints needed for Deduparr:
     - Movie/Series listing and retrieval
     - File deletion
-    - Manual import
-    - Command execution (scans, refreshes)
+    - Manual import candidates
+    - Command execution (rescans)
     - System status
 
     Subclasses specify their API version (RadarrClient uses v3, SonarrClient uses v5).
@@ -116,9 +217,9 @@ class ArrClient:
         self,
         method: str,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        json_data: Optional[Dict[str, Any]] = None,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        params: Optional[QueryParams] = None,
+        json_data: Optional[Mapping[str, object]] = None,
+    ) -> object:
         """
         Make HTTP request to *arr API
 
@@ -129,7 +230,7 @@ class ArrClient:
             json_data: JSON body data
 
         Returns:
-            JSON response data
+            The decoded JSON response, {} for 204 No Content
 
         Raises:
             ArrConnectionError: Connection failed
@@ -170,46 +271,40 @@ class ArrClient:
         except httpx.HTTPError as e:
             raise ArrClientError(f"HTTP error: {e}")
 
-    async def get_system_status(self) -> Dict[str, Any]:
+    async def get_system_status(self) -> SystemStatus:
         """Get system status"""
-        result = await self._request("GET", "/system/status")
-        if isinstance(result, list):
-            raise ArrClientError("Expected dict but got list from system/status")
-        return result
+        endpoint = "/system/status"
+        return cast(
+            SystemStatus, _as_object(await self._request("GET", endpoint), endpoint)
+        )
 
-    async def get_root_folder(self) -> list[dict[str, object]]:
+    async def get_root_folder(self) -> List[RootFolder]:
         """Get root folders"""
-        result = await self._request("GET", "/rootfolder")
-        if isinstance(result, dict):
-            return [result]
-        return result
+        endpoint = "/rootfolder"
+        return cast(
+            List[RootFolder], _as_list(await self._request("GET", endpoint), endpoint)
+        )
 
-    async def post_command(self, name: str, **kwargs: object) -> dict[str, object]:
+    async def post_command(self, name: str, **kwargs: object) -> Command:
         """
         Execute a command on the *arr server.
 
-        This method accepts arbitrary keyword arguments because different commands
-        require different parameters. The kwargs are passed directly to the API
-        as command parameters.
-
         Args:
-            name: Command name (e.g., "DownloadedMoviesScan", "RefreshMovie")
-            **kwargs: Command-specific parameters (varies by command type)
+            name: Command name (e.g., "RescanMovie", "RescanSeries")
+            **kwargs: Command-specific parameters, sent as the command's body
 
         Returns:
-            Command result dict containing the command ID and status
+            The queued command with its ID and status
 
         Example:
             await client.post_command("RescanMovie", movieId=123)
-            await client.post_command("DownloadedMoviesScan", path="/movies")
         """
-        data = {"name": name, **kwargs}
-        result = await self._request("POST", "/command", json_data=data)
-        if isinstance(result, list):
-            raise ArrClientError("Expected dict but got list from command")
-        return result
+        data: JsonObject = {"name": name, **kwargs}
+        endpoint = "/command"
+        result = await self._request("POST", endpoint, json_data=data)
+        return cast(Command, _as_object(result, endpoint))
 
-    async def get_quality_profile(self, profile_id: int) -> dict[str, object]:
+    async def get_quality_profile(self, profile_id: int) -> QualityProfile:
         """
         Get a quality profile
 
@@ -219,10 +314,16 @@ class ArrClient:
         Returns:
             Quality profile with its ordered quality items and custom format scores
         """
-        result = await self._request("GET", f"/qualityprofile/{profile_id}")
-        if isinstance(result, list):
-            raise ArrClientError("Expected dict but got list from qualityprofile")
-        return result
+        endpoint = f"/qualityprofile/{profile_id}"
+        return cast(
+            QualityProfile, _as_object(await self._request("GET", endpoint), endpoint)
+        )
+
+    async def _get_manual_import(self, params: QueryParams) -> List[ArrFile]:
+        """Manual import candidates, as Radarr or Sonarr narrows them"""
+        endpoint = "/manualimport"
+        result = await self._request("GET", endpoint, params=params)
+        return cast(List[ArrFile], _as_list(result, endpoint))
 
 
 class RadarrClient(ArrClient):
@@ -244,40 +345,31 @@ class RadarrClient(ArrClient):
         )
         self.api_version = "v3"
 
+    @overload
+    async def get_movie(self, movie_id: None = None) -> List[MediaItem]: ...
+
+    @overload
+    async def get_movie(self, movie_id: int) -> MediaItem: ...
+
     async def get_movie(
         self, movie_id: Optional[int] = None
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """
-        Get movie(s)
-
-        Args:
-            movie_id: Optional movie ID. If None, returns all movies.
-
-        Returns:
-            Single movie dict if movie_id provided, list of movies otherwise
-        """
+    ) -> Union[MediaItem, List[MediaItem]]:
+        """One movie by ID, or every movie without one"""
         if movie_id is not None:
-            return await self._request("GET", f"/movie/{movie_id}")
-        return await self._request("GET", "/movie")
+            endpoint = f"/movie/{movie_id}"
+            result = await self._request("GET", endpoint)
+            return cast(MediaItem, _as_object(result, endpoint))
+        endpoint = "/movie"
+        return cast(
+            List[MediaItem], _as_list(await self._request("GET", endpoint), endpoint)
+        )
 
-    async def upd_movie(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update movie (legacy method name for backward compatibility)
-
-        Args:
-            data: Movie data dictionary (must include 'id')
-
-        Returns:
-            Updated movie data
-        """
-        return await self.update_movie(data)
-
-    async def update_movie(self, movie_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_movie(self, movie_data: MediaItem) -> MediaItem:
         """
         Update movie
 
         Args:
-            movie_data: Movie data dictionary (must include 'id')
+            movie_data: The movie as Radarr returned it, with the changes made
 
         Returns:
             Updated movie data
@@ -285,39 +377,20 @@ class RadarrClient(ArrClient):
         movie_id = movie_data.get("id")
         if not movie_id:
             raise ValueError("Movie data must include 'id' field")
-        result = await self._request("PUT", f"/movie/{movie_id}", json_data=movie_data)
-        if isinstance(result, list):
-            raise ArrClientError("Expected dict but got list from movie update")
-        return result
+        endpoint = f"/movie/{movie_id}"
+        result = await self._request("PUT", endpoint, json_data=movie_data)
+        return cast(MediaItem, _as_object(result, endpoint))
 
-    async def del_movie_file(self, movie_file_id: int) -> Dict[str, Any]:
-        """
-        Delete movie file (legacy method name for backward compatibility)
-
-        Args:
-            movie_file_id: Movie file ID to delete
-
-        Returns:
-            Empty dict on success
-        """
-        return await self.delete_movie_file(movie_file_id)
-
-    async def delete_movie_file(self, movie_file_id: int) -> Dict[str, Any]:
+    async def delete_movie_file(self, movie_file_id: int) -> None:
         """
         Delete movie file
 
         Args:
             movie_file_id: Movie file ID to delete
-
-        Returns:
-            Empty dict on success
         """
-        result = await self._request("DELETE", f"/moviefile/{movie_file_id}")
-        if isinstance(result, list):
-            return {}
-        return result
+        await self._request("DELETE", f"/moviefile/{movie_file_id}")
 
-    async def get_movie_files(self, movie_id: int) -> list[dict[str, object]]:
+    async def get_movie_files(self, movie_id: int) -> List[ArrFile]:
         """
         Get movie files tracked for a movie
 
@@ -327,10 +400,9 @@ class RadarrClient(ArrClient):
         Returns:
             List of movie files
         """
-        result = await self._request("GET", "/moviefile", params={"movieId": movie_id})
-        if isinstance(result, dict):
-            return [result]
-        return result
+        endpoint = "/moviefile"
+        result = await self._request("GET", endpoint, params={"movieId": movie_id})
+        return cast(List[ArrFile], _as_list(result, endpoint))
 
     async def get_manual_import(
         self,
@@ -338,7 +410,7 @@ class RadarrClient(ArrClient):
         download_id: str = "",
         movie_id: Optional[int] = None,
         filter_existing_files: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[ArrFile]:
         """
         Get manual import candidates
 
@@ -351,7 +423,7 @@ class RadarrClient(ArrClient):
         Returns:
             List of importable files
         """
-        params: Dict[str, Any] = {
+        params: dict[str, Union[str, int, bool]] = {
             "folder": folder,
             "filterExistingFiles": filter_existing_files,
         }
@@ -359,11 +431,7 @@ class RadarrClient(ArrClient):
             params["downloadId"] = download_id
         if movie_id is not None:
             params["movieId"] = movie_id
-
-        result = await self._request("GET", "/manualimport", params=params)
-        if isinstance(result, dict):
-            return [result]
-        return result
+        return await self._get_manual_import(params)
 
 
 class SonarrClient(ArrClient):
@@ -392,9 +460,9 @@ class SonarrClient(ArrClient):
         self,
         method: str,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        json_data: Optional[Dict[str, Any]] = None,
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        params: Optional[QueryParams] = None,
+        json_data: Optional[Mapping[str, object]] = None,
+    ) -> object:
         """
         Make HTTP request with automatic API version detection.
 
@@ -417,40 +485,31 @@ class SonarrClient(ArrClient):
             # If already using v3 or version already detected, re-raise
             raise
 
+    @overload
+    async def get_series(self, series_id: None = None) -> List[MediaItem]: ...
+
+    @overload
+    async def get_series(self, series_id: int) -> MediaItem: ...
+
     async def get_series(
         self, series_id: Optional[int] = None
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
-        """
-        Get series
-
-        Args:
-            series_id: Optional series ID. If None, returns all series.
-
-        Returns:
-            Single series dict if series_id provided, list of series otherwise
-        """
+    ) -> Union[MediaItem, List[MediaItem]]:
+        """One series by ID, or every series without one"""
         if series_id is not None:
-            return await self._request("GET", f"/series/{series_id}")
-        return await self._request("GET", "/series")
+            endpoint = f"/series/{series_id}"
+            result = await self._request("GET", endpoint)
+            return cast(MediaItem, _as_object(result, endpoint))
+        endpoint = "/series"
+        return cast(
+            List[MediaItem], _as_list(await self._request("GET", endpoint), endpoint)
+        )
 
-    async def upd_series(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Update series (legacy method name for backward compatibility)
-
-        Args:
-            data: Series data dictionary (must include 'id')
-
-        Returns:
-            Updated series data
-        """
-        return await self.update_series(data)
-
-    async def update_series(self, series_data: Dict[str, Any]) -> Dict[str, Any]:
+    async def update_series(self, series_data: MediaItem) -> MediaItem:
         """
         Update series
 
         Args:
-            series_data: Series data dictionary (must include 'id')
+            series_data: The series as Sonarr returned it, with the changes made
 
         Returns:
             Updated series data
@@ -458,16 +517,11 @@ class SonarrClient(ArrClient):
         series_id = series_data.get("id")
         if not series_id:
             raise ValueError("Series data must include 'id' field")
-        result = await self._request(
-            "PUT", f"/series/{series_id}", json_data=series_data
-        )
-        if isinstance(result, list):
-            raise ArrClientError("Expected dict but got list from series update")
-        return result
+        endpoint = f"/series/{series_id}"
+        result = await self._request("PUT", endpoint, json_data=series_data)
+        return cast(MediaItem, _as_object(result, endpoint))
 
-    async def get_episode_files_by_series_id(
-        self, series_id: int
-    ) -> List[Dict[str, Any]]:
+    async def get_episode_files_by_series_id(self, series_id: int) -> List[ArrFile]:
         """
         Get episode files for a series
 
@@ -477,52 +531,30 @@ class SonarrClient(ArrClient):
         Returns:
             List of episode files
         """
-        params = {"seriesId": series_id}
-        result = await self._request("GET", "/episodefile", params=params)
-        if isinstance(result, dict):
-            return [result]
-        return result
+        endpoint = "/episodefile"
+        result = await self._request("GET", endpoint, params={"seriesId": series_id})
+        return cast(List[ArrFile], _as_list(result, endpoint))
 
-    async def get_episode(
-        self, episode_id: int
-    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+    async def get_episode(self, episode_id: int) -> Episode:
         """
         Get episode by ID
 
-        Args:
-            episode_id: Episode ID
-
-        Returns:
-            Episode data (may be dict or list depending on Sonarr version)
+        Some Sonarr versions answer with a list holding the one episode.
         """
-        return await self._request("GET", f"/episode/{episode_id}")
+        endpoint = f"/episode/{episode_id}"
+        episodes = _as_list(await self._request("GET", endpoint), endpoint)
+        if not episodes:
+            raise ArrNotFoundError(f"Resource not found: {endpoint}")
+        return cast(Episode, episodes[0])
 
-    async def del_episode_file(self, episode_file_id: int) -> Dict[str, Any]:
-        """
-        Delete episode file (legacy method name for backward compatibility)
-
-        Args:
-            episode_file_id: Episode file ID to delete
-
-        Returns:
-            Empty dict on success
-        """
-        return await self.delete_episode_file(episode_file_id)
-
-    async def delete_episode_file(self, episode_file_id: int) -> Dict[str, Any]:
+    async def delete_episode_file(self, episode_file_id: int) -> None:
         """
         Delete episode file
 
         Args:
             episode_file_id: Episode file ID to delete
-
-        Returns:
-            Empty dict on success
         """
-        result = await self._request("DELETE", f"/episodefile/{episode_file_id}")
-        if isinstance(result, list):
-            return {}
-        return result
+        await self._request("DELETE", f"/episodefile/{episode_file_id}")
 
     async def get_manual_import(
         self,
@@ -530,7 +562,7 @@ class SonarrClient(ArrClient):
         download_id: str = "",
         series_id: Optional[int] = None,
         filter_existing_files: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[ArrFile]:
         """
         Get manual import candidates
 
@@ -543,7 +575,7 @@ class SonarrClient(ArrClient):
         Returns:
             List of importable files
         """
-        params: Dict[str, Any] = {
+        params: dict[str, Union[str, int, bool]] = {
             "folder": folder,
             "filterExistingFiles": filter_existing_files,
         }
@@ -551,8 +583,4 @@ class SonarrClient(ArrClient):
             params["downloadId"] = download_id
         if series_id is not None:
             params["seriesId"] = series_id
-
-        result = await self._request("GET", "/manualimport", params=params)
-        if isinstance(result, dict):
-            return [result]
-        return result
+        return await self._get_manual_import(params)

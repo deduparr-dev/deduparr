@@ -201,7 +201,7 @@ async def test_delete_movie_full_pipeline_success(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
         mock_radarr_instance.post_command = AsyncMock(
             return_value={"id": 1, "status": "queued"}
         )
@@ -232,7 +232,7 @@ async def test_delete_movie_full_pipeline_success(
 
         # Verify deletion pipeline stages executed in correct order
         # Stage 1: *arr deletion (deletes file from disk)
-        mock_radarr_instance.del_movie_file.assert_called_once_with(10)
+        mock_radarr_instance.delete_movie_file.assert_called_once_with(10)
 
         # Stage 2: qBittorrent removal (deletes any remaining files)
         mock_qbit_instance.torrents_delete.assert_called_once_with(
@@ -359,7 +359,7 @@ async def test_delete_file_skip_qbit(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         mock_exists.return_value = True
         mock_listdir.return_value = []  # No associated files
@@ -409,7 +409,7 @@ async def test_delete_file_not_on_disk(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         mock_exists.return_value = False
 
@@ -540,7 +540,7 @@ async def test_delete_file_disk_failure(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
@@ -596,7 +596,7 @@ async def test_delete_file_plex_failure(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         mock_exists.return_value = True
         mock_listdir.return_value = []  # No associated files
@@ -1188,12 +1188,10 @@ async def test_arr_stage_deletes_an_orphaned_sonarr_file(
     pipeline = DeletionPipeline(test_db, dry_run=False)
     pipeline.sonarr_service = AsyncMock()
     pipeline.sonarr_service.find_episode_by_file_path.return_value = {
-        "id": None,
         "seriesId": 7,
         "seasonNumber": 1,
         "episodeFile": {"id": 70, "path": unwanted.file_path},
         "title": "Orphaned S01 file",
-        "_orphaned": True,
     }
     history = DeletionHistory(duplicate_file_id=unwanted.id)
 

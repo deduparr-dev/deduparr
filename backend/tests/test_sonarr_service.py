@@ -5,6 +5,7 @@ Tests for Sonarr service
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from app.services.arr.client import SonarrClient
 from app.services.arr.sonarr_service import SonarrService
 from app.models.config import Config
 
@@ -78,7 +79,7 @@ async def test_find_episode_by_file_path_found(test_db):
         mock_client.get_episode_files_by_series_id = AsyncMock(
             return_value=[mock_episode_file]
         )
-        mock_client.get_episode = AsyncMock(return_value=[mock_episode])
+        mock_client.get_episode = AsyncMock(return_value=mock_episode)
 
         result = await service.find_episode_by_file_path(file_path)
 
@@ -163,12 +164,12 @@ async def test_delete_episode_file_success(test_db):
     with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.del_episode_file = AsyncMock()
+        mock_client.delete_episode_file = AsyncMock()
 
         result = await service.delete_episode_file(series_id=1, episode_file_id=100)
 
         assert result is True
-        mock_client.del_episode_file.assert_called_once_with(100)
+        mock_client.delete_episode_file.assert_called_once_with(100)
 
 
 @pytest.mark.asyncio
@@ -185,7 +186,9 @@ async def test_delete_episode_file_failure(test_db):
     with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.del_episode_file = AsyncMock(side_effect=Exception("Delete failed"))
+        mock_client.delete_episode_file = AsyncMock(
+            side_effect=Exception("Delete failed")
+        )
 
         with pytest.raises(Exception, match="Delete failed"):
             await service.delete_episode_file(series_id=1, episode_file_id=100)
@@ -238,3 +241,13 @@ async def test_test_connection_failure(test_db):
 
         assert result["success"] is False
         assert "error" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", [{"id": 10}, [{"id": 10}]])
+async def test_sonarr_client_get_episode_reads_either_answer(response):
+    """Some Sonarr versions answer an episode lookup with a list holding it."""
+    client = SonarrClient(base_url="http://sonarr:8989", api_key="key")
+    with patch.object(client, "_request", AsyncMock(return_value=response)) as req:
+        assert await client.get_episode(10) == {"id": 10}
+    req.assert_awaited_once_with("GET", "/episode/10")

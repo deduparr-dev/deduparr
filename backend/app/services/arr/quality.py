@@ -17,7 +17,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Config
 from app.models.duplicate import MediaType
-from app.services.arr.client import ArrClientError, RadarrClient, SonarrClient
+from app.services.arr.client import (
+    ArrClientError,
+    ArrFile,
+    MediaItem,
+    QualityModel,
+    QualityProfile,
+    QualityRef,
+    RadarrClient,
+    Revision,
+    SonarrClient,
+)
 from app.services.arr.radarr_service import RadarrService
 from app.services.scan.scoring_engine import MediaMetadata
 from app.services.arr.sonarr_service import SonarrService
@@ -49,7 +59,7 @@ class ArrQuality:
         return (self.quality_rank, self.revision, self.custom_format_score)
 
 
-def get_quality_rank(profile: dict, quality_id: int) -> int:
+def get_quality_rank(profile: QualityProfile, quality_id: int) -> int:
     """
     Get the rank of a quality in a quality profile (higher is better).
 
@@ -68,20 +78,22 @@ def get_quality_rank(profile: dict, quality_id: int) -> int:
     return -1
 
 
-def build_arr_quality(resource: dict, profile: dict) -> Optional[ArrQuality]:
+def build_arr_quality(
+    resource: ArrFile, profile: QualityProfile
+) -> Optional[ArrQuality]:
     """
     Build an ArrQuality from a moviefile, episodefile or manualimport resource.
 
     Returns None if the *arr could not determine the file's quality.
     """
-    quality_model = resource.get("quality") or {}
-    quality = quality_model.get("quality") or {}
+    quality_model = resource.get("quality") or QualityModel()
+    quality = quality_model.get("quality") or QualityRef()
     quality_id = quality.get("id")
     # Quality id 0 is "Unknown": the *arr could not parse the file
     if not quality_id:
         return None
 
-    revision = quality_model.get("revision") or {}
+    revision = quality_model.get("revision") or Revision()
 
     score = resource.get("customFormatScore")
     if score is None:
@@ -137,8 +149,8 @@ class ArrQualityRanker:
     def __init__(self, db: AsyncSession):
         self.radarr_service = RadarrService(db)
         self.sonarr_service = SonarrService(db)
-        self._media_items: Dict[MediaType, List[dict]] = {}
-        self._profiles: Dict[Tuple[MediaType, int], dict] = {}
+        self._media_items: Dict[MediaType, List[MediaItem]] = {}
+        self._profiles: Dict[Tuple[MediaType, int], QualityProfile] = {}
 
     @classmethod
     async def from_config(cls, db: AsyncSession) -> Optional["ArrQualityRanker"]:
@@ -164,14 +176,12 @@ class ArrQualityRanker:
 
     async def _get_media_items(
         self, client: RadarrClient | SonarrClient, media_type: MediaType
-    ) -> List[dict]:
+    ) -> List[MediaItem]:
         if media_type not in self._media_items:
-            if media_type == MediaType.MOVIE:
-                items = await client.get_movie()
-            else:
-                items = await client.get_series()
-            self._media_items[media_type] = (
-                items if isinstance(items, list) else [items]
+            self._media_items[media_type] = await (
+                client.get_movie()
+                if isinstance(client, RadarrClient)
+                else client.get_series()
             )
         return self._media_items[media_type]
 
@@ -180,18 +190,18 @@ class ArrQualityRanker:
         client: RadarrClient | SonarrClient,
         media_type: MediaType,
         profile_id: int,
-    ) -> dict:
+    ) -> QualityProfile:
         key = (media_type, profile_id)
         if key not in self._profiles:
             self._profiles[key] = await client.get_quality_profile(profile_id)
         return self._profiles[key]
 
     def _find_media_item(
-        self, media_items: List[dict], file_paths: List[str]
-    ) -> Optional[dict]:
+        self, media_items: List[MediaItem], file_paths: List[str]
+    ) -> Optional[MediaItem]:
         paths = set(file_paths)
         for item in media_items:
-            movie_file = item.get("movieFile") or {}
+            movie_file = item.get("movieFile") or ArrFile()
             if movie_file.get("path") in paths:
                 return item
         for item in media_items:
@@ -222,24 +232,22 @@ class ArrQualityRanker:
                 client, media_type, media_item["qualityProfileId"]
             )
 
-            if media_type == MediaType.MOVIE:
-                tracked_files = await client.get_movie_files(media_id)
-            else:
-                tracked_files = await client.get_episode_files_by_series_id(media_id)
+            tracked_files = await (
+                client.get_movie_files(media_id)
+                if isinstance(client, RadarrClient)
+                else client.get_episode_files_by_series_id(media_id)
+            )
             resources = {f.get("path"): f for f in tracked_files}
 
             untracked_folders = {
                 os.path.dirname(path) for path in file_paths if path not in resources
             }
             for folder in sorted(untracked_folders):
-                if media_type == MediaType.MOVIE:
-                    items = await client.get_manual_import(
-                        folder=folder, movie_id=media_id
-                    )
-                else:
-                    items = await client.get_manual_import(
-                        folder=folder, series_id=media_id
-                    )
+                items = await (
+                    client.get_manual_import(folder=folder, movie_id=media_id)
+                    if isinstance(client, RadarrClient)
+                    else client.get_manual_import(folder=folder, series_id=media_id)
+                )
                 for item in items:
                     resources.setdefault(item.get("path"), item)
         except ArrClientError as e:

@@ -5,13 +5,17 @@ Extracts common rescan and path management logic
 
 import logging
 import os
-from typing import Literal, Optional, Union
+from typing import Optional, Union
 
-from app.services.arr.client import RadarrClient, SonarrClient
+from app.services.arr.client import (
+    ArrFile,
+    Episode,
+    MediaItem,
+    RadarrClient,
+    SonarrClient,
+)
 
 logger = logging.getLogger(__name__)
-
-MediaType = Literal["movie", "series"]
 
 
 async def rescan_media_item(
@@ -81,109 +85,70 @@ def _within(folder: str, path: str) -> bool:
     return path == folder or path.startswith(folder + "/")
 
 
-async def find_media_by_file_path(
-    client: Union[RadarrClient, SonarrClient],
-    file_path: str,
-    media_type: MediaType,
-    logger_instance: logging.Logger,
-) -> Optional[dict]:
+async def find_movie_by_file_path(
+    client: RadarrClient, file_path: str, logger_instance: logging.Logger
+) -> Optional[MediaItem]:
+    """The movie whose file Radarr keeps at exactly this path, if any"""
+    try:
+        for movie in await client.get_movie():
+            if (movie.get("movieFile") or ArrFile()).get("path") == file_path:
+                logger_instance.info(
+                    f"Found movie '{movie.get('title')}' for file {file_path}"
+                )
+                return movie
+
+        logger_instance.warning(f"Movie not found in Radarr for file path: {file_path}")
+        return None
+    except Exception as e:
+        logger_instance.error(f"Error finding movie for {file_path}: {e}")
+        raise
+
+
+async def find_episode_by_file_path(
+    client: SonarrClient, file_path: str, logger_instance: logging.Logger
+) -> Optional[Episode]:
     """
-    Find movie or episode by file path with support for orphaned files
+    The episode whose file Sonarr keeps at exactly this path, if any.
 
-    Handles cases where *arr has the file tracked but no proper episode/movie linkage
-    (orphaned files). This commonly happens with manual imports or after deletions.
-
-    Args:
-        client: Radarr or Sonarr API client instance
-        file_path: Full path to the media file from Plex
-        media_type: Type of media ("movie" or "series")
-        logger_instance: Logger instance to use
-
-    Returns:
-        Media data dict if found, None otherwise. For orphaned files, returns minimal
-        data with "_orphaned": True flag.
+    Sonarr can hold a file no episode points at, after a manual import or an
+    episode's deletion. That file comes back as an episode without an ID, so
+    the deletion pipeline can still delete it.
     """
     try:
-        if media_type == "movie":
-            # Radarr: Search through all movies
-            movies = await client.get_movie()
+        for series in await client.get_series():
+            series_id = series.get("id")
+            if not series_id:
+                continue
+            for episode_file in await client.get_episode_files_by_series_id(series_id):
+                if episode_file.get("path") != file_path:
+                    continue
 
-            for movie in movies:
-                if "movieFile" in movie and movie["movieFile"]:
-                    radarr_path = movie["movieFile"].get("path")
-                    if radarr_path and radarr_path == file_path:
-                        logger_instance.info(
-                            f"Found movie '{movie['title']}' for file {file_path}"
-                        )
-                        return movie
+                episode_ids = episode_file.get("episodeIds") or []
+                if episode_ids:
+                    episode = await client.get_episode(episode_ids[0])
+                    episode["episodeFile"] = episode_file
+                    logger_instance.info(
+                        f"Found episode '{episode.get('title', 'Unknown Episode')}' "
+                        f"for file {file_path}"
+                    )
+                    return episode
 
-            logger_instance.warning(
-                f"Movie not found in Radarr for file path: {file_path}"
-            )
-            return None
+                season = episode_file.get("seasonNumber", 0)
+                logger_instance.warning(
+                    f"Found orphaned episode file {episode_file.get('id')} in Sonarr "
+                    f"(series {series_id}, season {season}, no episodes): {file_path}"
+                )
+                return Episode(
+                    seriesId=series_id,
+                    seasonNumber=season,
+                    episodeFile=episode_file,
+                    title=f"Orphaned S{season:02d} file",
+                )
 
-        elif media_type == "series":
-            # Sonarr: Search through all episode files
-            episode_files = []
-            all_series = await client.get_series()
-
-            for series in all_series:
-                series_id = series.get("id")
-                if series_id:
-                    files = await client.get_episode_files_by_series_id(series_id)
-                    if files:
-                        episode_files.extend(files)
-
-            for episode_file in episode_files:
-                sonarr_path = episode_file.get("path")
-                if sonarr_path and sonarr_path == file_path:
-                    # Found matching file - check if it has episode linkage
-                    episode_ids = episode_file.get("episodeIds", [])
-
-                    if episode_ids:
-                        # Normal case: file is properly linked to episode(s)
-                        episodes = await client.get_episode(episode_ids[0])
-                        if isinstance(episodes, list) and episodes:
-                            episode = episodes[0]
-                        else:
-                            episode = episodes
-
-                        episode["episodeFile"] = episode_file
-                        episode_title = episode.get("title", "Unknown Episode")
-                        logger_instance.info(
-                            f"Found episode '{episode_title}' for file {file_path}"
-                        )
-                        return episode
-                    else:
-                        # Orphaned file: Sonarr has the file but no episode linkage
-                        # This happens with manual imports or after episode deletion
-                        logger_instance.warning(
-                            f"Found orphaned episode file in Sonarr (no episodeIds): {file_path}"
-                        )
-                        logger_instance.info(
-                            f"Episode file ID: {episode_file.get('id')}, "
-                            f"Series ID: {episode_file.get('seriesId')}, "
-                            f"Season: {episode_file.get('seasonNumber')}"
-                        )
-                        # Return minimal episode object with file data
-                        # This allows deletion pipeline to still work
-                        return {
-                            "id": None,  # No episode ID available
-                            "seriesId": episode_file.get("seriesId"),
-                            "seasonNumber": episode_file.get("seasonNumber"),
-                            "episodeFile": episode_file,
-                            "title": f"Orphaned S{episode_file.get('seasonNumber', 0):02d} file",
-                            "_orphaned": True,  # Flag for pipeline to handle specially
-                        }
-
-            logger_instance.warning(
-                f"Episode not found in Sonarr for file path: {file_path}"
-            )
-            return None
-
-        else:
-            raise ValueError(f"Unknown media type: {media_type}")
-
+        logger_instance.warning(
+            f"Episode not found in Sonarr for file path: {file_path}"
+        )
+        return None
     except Exception as e:
-        logger_instance.error(f"Error finding {media_type} for {file_path}: {e}")
+        logger_instance.error(f"Error finding episode for {file_path}: {e}")
         raise

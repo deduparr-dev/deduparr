@@ -11,12 +11,10 @@ from app.services.arr.client import (
     ArrAuthError,
     ArrClientError,
     ArrConnectionError,
+    MediaItem,
     RadarrClient,
 )
-from app.services.arr.helpers import (
-    find_media_by_file_path,
-    rescan_media_item,
-)
+from app.services.arr.helpers import find_movie_by_file_path, rescan_media_item
 from app.services.shared.base_service import BaseExternalService
 
 logger = logging.getLogger(__name__)
@@ -29,7 +27,7 @@ class RadarrService(BaseExternalService):
         super().__init__(db)
         self._client: Optional[RadarrClient] = None
 
-    async def find_movie_by_file_path(self, file_path: str) -> Optional[dict]:
+    async def find_movie_by_file_path(self, file_path: str) -> Optional[MediaItem]:
         """
         Find movie by file path using filename matching (path-agnostic)
 
@@ -40,7 +38,7 @@ class RadarrService(BaseExternalService):
             Movie data if found, None otherwise
         """
         client = await self._get_client()
-        return await find_media_by_file_path(client, file_path, "movie", logger)
+        return await find_movie_by_file_path(client, file_path, logger)
 
     async def _get_client(self) -> RadarrClient:
         """Get Radarr client instance"""
@@ -74,7 +72,7 @@ class RadarrService(BaseExternalService):
         client = await self._get_client()
 
         try:
-            await client.del_movie_file(movie_file_id)
+            await client.delete_movie_file(movie_file_id)
             logger.info(
                 f"Deleted movie file {movie_file_id} for movie {movie_id} from Radarr"
             )

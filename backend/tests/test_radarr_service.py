@@ -135,12 +135,12 @@ async def test_delete_movie_file_success(test_db):
     with patch("app.services.arr.radarr_service.RadarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.del_movie_file = AsyncMock()
+        mock_client.delete_movie_file = AsyncMock()
 
         result = await service.delete_movie_file(movie_id=1, movie_file_id=10)
 
         assert result is True
-        mock_client.del_movie_file.assert_called_once_with(10)
+        mock_client.delete_movie_file.assert_called_once_with(10)
 
 
 @pytest.mark.asyncio
@@ -157,7 +157,9 @@ async def test_delete_movie_file_failure(test_db):
     with patch("app.services.arr.radarr_service.RadarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
-        mock_client.del_movie_file = AsyncMock(side_effect=Exception("Delete failed"))
+        mock_client.delete_movie_file = AsyncMock(
+            side_effect=Exception("Delete failed")
+        )
 
         with pytest.raises(Exception, match="Delete failed"):
             await service.delete_movie_file(movie_id=1, movie_file_id=10)

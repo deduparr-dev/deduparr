@@ -157,7 +157,7 @@ async def test_path_agnostic_radarr_matching(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         # Setup file system - file exists in /media
         mock_exists.return_value = True
@@ -174,7 +174,7 @@ async def test_path_agnostic_radarr_matching(
 
         # Verify Radarr deletion succeeded despite path mismatch
         assert history.deleted_from_arr is True
-        mock_radarr_instance.del_movie_file.assert_called_once_with(10)
+        mock_radarr_instance.delete_movie_file.assert_called_once_with(10)
 
         # Verify the file was found and deleted from disk
         assert history.deleted_from_disk is True
@@ -307,14 +307,14 @@ async def test_remapped_movie_deletion_cleans_up_and_spares_the_kept_file(
                 "movieFile": {"id": 10, "path": dup_file.file_path},
             }
         ]
-        radarr.del_movie_file.side_effect = lambda file_id: unwanted.unlink()
+        radarr.delete_movie_file.side_effect = lambda file_id: unwanted.unlink()
         mock_server.return_value.refresh_item.return_value = True
 
         history = await DeletionPipeline(test_db, dry_run=False).delete_file(
             dup_file.id
         )
 
-    radarr.del_movie_file.assert_awaited_once_with(10)
+    radarr.delete_movie_file.assert_awaited_once_with(10)
     assert not unwanted.exists()
     assert not any(path.exists() for path in leftovers)
     assert kept.exists()
@@ -358,7 +358,7 @@ async def test_targeted_plex_refresh_with_library_id(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         # Setup Plex with refresh_item method
         mock_plex_instance = AsyncMock()
@@ -422,7 +422,7 @@ async def test_plex_refresh_fallback_to_full_scan(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         # Setup Plex - refresh_item fails, refresh_library succeeds
         mock_plex_instance = AsyncMock()
@@ -477,7 +477,7 @@ async def test_file_already_gone_counts_as_deleted(
                 }
             ]
         )
-        mock_radarr_instance.del_movie_file = AsyncMock()
+        mock_radarr_instance.delete_movie_file = AsyncMock()
 
         mock_plex_instance = AsyncMock()
         mock_plex_class.return_value = mock_plex_instance
@@ -553,7 +553,7 @@ async def test_dry_run_mode_no_actual_changes(
 
         # Verify no actual deletion methods were called
         mock_qbit_instance.torrents_delete.assert_not_called()
-        mock_radarr_instance.del_movie_file.assert_not_called()
+        mock_radarr_instance.delete_movie_file.assert_not_called()
         mock_remove.assert_not_called()
         mock_plex_instance.refresh_item.assert_not_called()
         mock_plex_instance.refresh_library.assert_not_called()

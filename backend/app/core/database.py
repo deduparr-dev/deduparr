@@ -11,11 +11,19 @@ from sqlalchemy.orm import declarative_base
 
 from app.core.config import settings
 
+
+def async_database_url() -> str:
+    """The configured database URL with the async driver the app connects through"""
+    if settings.database_type == "sqlite":
+        return settings.database_url.replace("sqlite://", "sqlite+aiosqlite://")
+    return settings.database_url.replace("postgresql://", "postgresql+asyncpg://")
+
+
 # Create async engine
 if settings.database_type == "sqlite":
     # SQLite async engine
     engine = create_async_engine(
-        settings.database_url.replace("sqlite://", "sqlite+aiosqlite://"),
+        async_database_url(),
         echo=settings.debug,
         future=True,
         connect_args={"check_same_thread": False},
@@ -23,7 +31,7 @@ if settings.database_type == "sqlite":
 else:
     # PostgreSQL async engine
     engine = create_async_engine(
-        settings.database_url.replace("postgresql://", "postgresql+asyncpg://"),
+        async_database_url(),
         echo=settings.debug,
         future=True,
         pool_pre_ping=True,

@@ -8,6 +8,7 @@ from typing import Dict, List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.config import Config
 from app.services.media_server import (
     MediaServerType,
@@ -129,7 +130,7 @@ class SetupService:
             "is_complete": is_complete,
             "missing_required": missing_required,
             "configured_services": configured_services,
-            "database_type": "sqlite",
+            "database_type": settings.database_type,
         }
 
     async def test_plex_connection(

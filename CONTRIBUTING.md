@@ -63,17 +63,18 @@ npm run dev
 
 ### Branching Strategy
 
-- `main` - Stable production code (all PRs merge here)
+- `develop` - Where work comes together: every pull request targets it
+- `main` - Releases only: `develop` is merged into it when a version is cut
 - `feature/your-feature-name` - Feature branches
 - `fix/bug-description` - Bug fix branches
 
 ### Making Changes
 
-1. Create a new branch from `main`
+1. Create a new branch from `develop`
 
 ```bash
-git checkout main
-git pull origin main
+git checkout develop
+git pull origin develop
 git checkout -b feature/awesome-feature
 ```
 
@@ -84,7 +85,7 @@ git add .
 git commit -m "feat: add awesome feature"
 ```
 
-3. Push and create a pull request to `main`
+3. Push and create a pull request to `develop`
 
 ```bash
 git push origin feature/awesome-feature
@@ -166,6 +167,20 @@ const data: Record<string, string> = {}
 - Type hints are required
 - Follow PEP 8
 
+### Database Migrations
+
+Never write or edit a migration by hand. After changing a model in
+`backend/app/models`, generate one and commit it with the change:
+
+```bash
+bash scripts/new-migration.sh "Short description"
+```
+
+To rename a column, rename only the attribute and keep the column's name
+(`item_id = Column("plex_item_id", ...)`): autogenerate would otherwise drop
+the column and its data. The full rules are in
+[.github/copilot-instructions.md](.github/copilot-instructions.md#database-migrations).
+
 ### TypeScript (Frontend)
 
 - Use **ESLint**: `npm run lint`
@@ -203,7 +218,8 @@ npm test
 - [ ] Tests added/updated and passing
 - [ ] Documentation updated
 - [ ] Commit messages follow convention
-- [ ] Branch is up-to-date with `main`
+- [ ] Model changes come with a migration from `scripts/new-migration.sh`
+- [ ] Branch is up-to-date with `develop`
 
 ## Automated Dependency Updates
 

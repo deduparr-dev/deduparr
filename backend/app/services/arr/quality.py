@@ -250,21 +250,24 @@ class ArrQualityRanker:
                 )
                 for item in items:
                     resources.setdefault(item.get("path"), item)
+
+            qualities: Dict[str, ArrQuality] = {}
+            for path in file_paths:
+                resource = resources.get(path)
+                if resource is None:
+                    raise ArrQualityUnavailable(f"{arr_name} does not know file {path}")
+                quality = build_arr_quality(resource, profile)
+                if quality is None:
+                    raise ArrQualityUnavailable(
+                        f"{arr_name} could not parse the quality of {path}"
+                    )
+                qualities[path] = quality
         except ArrClientError as e:
             raise ArrQualityUnavailable(f"{arr_name} request failed: {e}")
+        except (KeyError, TypeError, AttributeError) as e:
+            # A field missing or null where the *arr API normally has one
+            raise ArrQualityUnavailable(f"{arr_name} gave an unexpected answer: {e!r}")
         finally:
             await client.close()
-
-        qualities: Dict[str, ArrQuality] = {}
-        for path in file_paths:
-            resource = resources.get(path)
-            if resource is None:
-                raise ArrQualityUnavailable(f"{arr_name} does not know file {path}")
-            quality = build_arr_quality(resource, profile)
-            if quality is None:
-                raise ArrQualityUnavailable(
-                    f"{arr_name} could not parse the quality of {path}"
-                )
-            qualities[path] = quality
 
         return qualities

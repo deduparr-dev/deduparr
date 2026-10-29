@@ -28,7 +28,10 @@ class DeletionHistory(Base):
     deleted_from_qbit = Column(Boolean, default=False, nullable=False)
     deleted_from_arr = Column(Boolean, default=False, nullable=False)
     deleted_from_disk = Column(Boolean, default=False, nullable=False)
-    media_server_refreshed = Column(Boolean, default=False, nullable=False)
+    # The column keeps its 0.5.7 name, so no migration has to rename it
+    media_server_refreshed = Column(
+        "plex_refreshed", Boolean, default=False, nullable=False
+    )
 
     # Error tracking
     error = Column(Text, nullable=True)

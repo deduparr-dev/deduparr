@@ -72,6 +72,14 @@ async def test_get_setup_status_empty(test_db):
 
 
 @pytest.mark.asyncio
+async def test_get_setup_status_reports_the_database_in_use(test_db):
+    with patch("app.services.setup_service.settings.database_type", "postgres"):
+        status = await SetupService(test_db).get_setup_status()
+
+    assert status["database_type"] == "postgres"
+
+
+@pytest.mark.asyncio
 async def test_get_setup_status_partial_config(test_db):
     """Test getting setup status with partial configuration"""
     configs = [

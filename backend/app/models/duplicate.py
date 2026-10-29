@@ -69,7 +69,8 @@ class DuplicateSet(Base):
     media_server = Column(
         String(32), nullable=False, default="plex", server_default="plex", index=True
     )
-    item_id = Column(String(255), nullable=True, index=True)
+    # The column keeps its 0.5.7 name, so no migration has to rename it
+    item_id = Column("plex_item_id", String(255), nullable=True, index=True)
     title = Column(String(500), nullable=False)
     media_type = Column(SQLEnum(MediaType), nullable=False)
     found_at = Column(

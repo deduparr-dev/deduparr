@@ -19,7 +19,7 @@ from app.services.media_server.plex_service import PlexAuthService, PlexService
 from app.services.download.qbittorrent_service import QBittorrentService
 from app.services.arr.radarr_service import RadarrService
 from app.services.arr.sonarr_service import SonarrService
-from app.services.shared.security import encrypt_if_sensitive, get_token_manager
+from app.services.shared.security import decrypt_if_encrypted, encrypt_if_sensitive
 
 logger = logging.getLogger(__name__)
 
@@ -394,9 +394,8 @@ class SetupService:
             Dictionary with connection test results
             Keys: success (bool), version (str) if success, error (str) if failed
         """
-        # Encrypt password before testing
-        token_manager = get_token_manager()
-        encrypted_password = token_manager.encrypt(password)
+        # Settings sends a saved password back already encrypted
+        encrypted_password = encrypt_if_sensitive("qbittorrent_password", password)
 
         try:
             temp_config_url = Config(key="temp_qbittorrent_url", value=url)
@@ -655,9 +654,21 @@ class SetupService:
 
 
 def _fixed_config(values: Dict[str, str]):
-    """Feed an adapter credentials that are not in the database yet."""
+    """
+    Feed an adapter credentials that are not in the database yet.
+
+    As with stored ones, the secret may be encrypted: Settings tests with a
+    saved key by sending it back as it loaded it.
+    """
 
     async def _get(service_name: str, config_keys: Dict[str, str]) -> Dict[str, str]:
-        return {internal: values[db_key] for internal, db_key in config_keys.items()}
+        return {
+            internal: (
+                decrypt_if_encrypted(values[db_key])
+                if internal in ("api_key", "password")
+                else values[db_key]
+            )
+            for internal, db_key in config_keys.items()
+        }
 
     return _get

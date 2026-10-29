@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 import {
   ARR_API_KEY,
@@ -170,5 +170,105 @@ test.describe("setup wizard media server step", () => {
     // user straight back to the wizard
     await expect(page.getByRole("heading", { name: /dashboard/i })).toBeVisible();
     await expect(page).not.toHaveURL(/\/setup/);
+  });
+
+  test("going back from the libraries returns to the server set up last", async ({ page }) => {
+    await openServerChoice(page);
+    await page.locator("#choose-jellyfin").check();
+    await page.getByTestId("server-choice-continue").click();
+    await page.locator("#jellyfin-url").fill(JELLYFIN_URL);
+    await page.locator("#jellyfin-api-key").fill(JELLYFIN_API_KEY);
+    await page.getByTestId("jellyfin-test").click();
+    await page.getByTestId("jellyfin-continue").click();
+    await expect(page.getByText(JELLYFIN_LIBRARY)).toBeVisible();
+
+    // It went to the Plex step, which a Jellyfin-only setup never had
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(page.getByRole("heading", { name: /connect jellyfin/i })).toBeVisible();
+  });
+});
+
+/**
+ * Stand in for a signed-in plex.tv account with one server and one movie
+ * library, answering the wizard's Plex calls in the browser.
+ */
+async function signInToPlex(page: Page) {
+  const reply = (body: unknown) => (route: Route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/setup/plex/auth/initiate", reply({ pin_id: "1", auth_url: "" }));
+  await page.route(
+    "**/api/setup/plex/auth/check/1",
+    reply({ success: true, encrypted_token: "plex-token" })
+  );
+  await page.route(
+    "**/api/setup/plex/servers",
+    reply({
+      servers: [
+        {
+          name: "Home",
+          client_identifier: "home",
+          product: "Plex Media Server",
+          platform: "Linux",
+          owned: true,
+        },
+      ],
+    })
+  );
+  await page.route(
+    "**/api/setup/plex/libraries",
+    reply([{ key: "1", title: "Plex Movies", type: "movie" }])
+  );
+}
+
+test.describe("setup wizard Plex steps", () => {
+  test.beforeEach(async ({ page, request }) => {
+    await markUnconfigured(request);
+    await markJellyfinUnconfigured(request);
+    await setJellyfinMode(request, "default");
+    await signInToPlex(page);
+    await gotoApp(page, "/setup");
+    await page.getByRole("button", { name: "Get Started" }).click();
+  });
+
+  test("with Jellyfin chosen too, it is set up after signing in to Plex", async ({ page }) => {
+    await page.locator("#choose-plex").check();
+    await page.locator("#choose-jellyfin").check();
+    await page.getByTestId("server-choice-continue").click();
+
+    // It went straight to the libraries, and Jellyfin was never saved
+    await expect(page.getByRole("heading", { name: /connect jellyfin/i })).toBeVisible();
+    await page.locator("#jellyfin-url").fill(JELLYFIN_URL);
+    await page.locator("#jellyfin-api-key").fill(JELLYFIN_API_KEY);
+    await page.getByTestId("jellyfin-test").click();
+    await page.getByTestId("jellyfin-continue").click();
+
+    await expect(page.getByText("Plex Movies")).toBeVisible();
+    await expect(page.getByText(JELLYFIN_LIBRARY)).toBeVisible();
+  });
+
+  test("the Plex step's test signs in with the token and server", async ({ page }) => {
+    let sent: unknown;
+    await page.route("**/api/setup/test/plex", async (route) => {
+      sent = { method: route.request().method(), body: route.request().postDataJSON() };
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ success: true, server_name: "Home", version: "1.42.1" }),
+      });
+    });
+    await page.locator("#choose-plex").check();
+    await page.getByTestId("server-choice-continue").click();
+    await expect(page.getByText("Plex Movies")).toBeVisible();
+    await page.getByRole("button", { name: "Back" }).click();
+    await expect(page.getByRole("heading", { name: "Connect to Plex" })).toBeVisible();
+
+    // A GET this route does not take, so the test always failed and Next never came
+    await page.getByRole("button", { name: "Test Connection" }).click();
+    await expect(page.getByText("Connection successful")).toBeVisible();
+    expect(sent).toEqual({
+      method: "POST",
+      body: { auth_token: "plex-token", server_name: "Home" },
+    });
+    await page.getByRole("button", { name: "Next: Libraries" }).click();
+    await expect(page.getByText("Plex Movies")).toBeVisible();
   });
 });

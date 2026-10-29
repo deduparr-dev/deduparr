@@ -8,20 +8,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Check, X, Film, Tv, Download, AlertCircle, Server } from "lucide-react";
 import {
   MEDIA_SERVER_NAMES,
+  runConnectionTest,
   setupAPI,
+  type ConnectionTestResult,
   type MediaLibrary,
   type ServiceTestResponse,
 } from "@/services/api";
 import { useQueryClient } from "@tanstack/react-query";
-
-interface ConnectionTestResult {
-  success: boolean;
-  error?: string;
-  version?: string;
-  server_name?: string;
-  username?: string;
-  email?: string;
-}
 
 interface SelectedLibrary {
   /** "plex" or "jellyfin": the selection is per server, not a shared name */
@@ -103,12 +96,6 @@ function TestResultDisplay({ result }: { result?: ConnectionTestResult }) {
           {result.success ? "Connection successful" : "Connection failed"}
         </p>
         {result.error && <p className="text-xs text-muted-foreground mt-1">{result.error}</p>}
-        {result.username && (
-          <p className="text-xs text-muted-foreground mt-1">User: {result.username}</p>
-        )}
-        {result.email && (
-          <p className="text-xs text-muted-foreground mt-1">Email: {result.email}</p>
-        )}
         {result.server_name && (
           <p className="text-xs text-muted-foreground mt-1">Server: {result.server_name}</p>
         )}
@@ -249,20 +236,15 @@ export default function SetupWizard() {
 
           // Fetch available servers
           try {
-            const response = await fetch(`/api/setup/plex/servers`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ auth_token: result.encrypted_token }),
-            });
-            const data = await response.json();
+            const { servers } = await setupAPI.getPlexServers(result.encrypted_token);
 
-            if (data.servers && data.servers.length > 0) {
+            if (servers.length > 0) {
               // Auto-select first server (or only server)
-              const firstServer = data.servers[0];
+              const firstServer = servers[0];
               setPlexServerName(firstServer.name);
 
-              // Move to libraries step and load them
-              setCurrentStep("libraries");
+              // Jellyfin, when chosen too, is set up before the libraries of both
+              setCurrentStep(choice.jellyfin ? "jellyfin" : "libraries");
               loadPlexLibraries(result.encrypted_token, firstServer.name);
             } else {
               setError("No Plex servers found for your account");
@@ -302,59 +284,15 @@ export default function SetupWizard() {
     });
   }
 
-  async function testPlexConnection() {
-    if (selectedLibraries.length === 0) {
-      setError("Please select at least one library");
-      return;
-    }
-
-    setTestResults((prev) => ({
-      ...prev,
-      plex: { success: false, loading: true },
-    }));
-
-    try {
-      const result = await setupAPI.testPlex();
-      setTestResults((prev) => ({
-        ...prev,
-        plex: {
-          success: result.success,
-          error: result.success ? undefined : result.message,
-        },
-      }));
-      if (result.success) {
-        setCurrentStep("required-services");
-      }
-    } catch {
-      setTestResults((prev) => ({
-        ...prev,
-        plex: {
-          success: false,
-          error: "Connection failed",
-        },
-      }));
-    }
+  function testPlexConnection() {
+    runTest("plex", () => setupAPI.testPlex(plexAuthToken, plexServerName));
   }
 
   /** Run a connection test and keep its outcome under the service's name. */
   function runTest(service: string, test: () => Promise<ServiceTestResponse>) {
     setError("");
     startTransition(async () => {
-      let result: ConnectionTestResult;
-      try {
-        const response = await test();
-        result = {
-          success: response.success,
-          error: response.success ? undefined : (response.error ?? response.message),
-          server_name: response.server_name,
-          version: response.version,
-        };
-      } catch (err) {
-        result = {
-          success: false,
-          error: err instanceof Error ? err.message : "Connection failed",
-        };
-      }
+      const result = await runConnectionTest(test);
       setTestResults((prev) => ({ ...prev, [service]: result }));
     });
   }
@@ -451,22 +389,8 @@ export default function SetupWizard() {
           config.qbittorrent_password = qbitPassword;
         }
 
-        // Save configuration to database
-        const response = await fetch("/api/setup/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config }),
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.detail || "Failed to save configuration");
-        }
-
-        // Mark setup as complete
-        await fetch("/api/setup/complete", {
-          method: "POST",
-        });
+        await setupAPI.saveConfig(config);
+        await setupAPI.completeSetup();
 
         // The app sends anyone without a media server back here, so it has
         // to see the new configuration before the dashboard loads.
@@ -895,7 +819,7 @@ export default function SetupWizard() {
               <div className="flex flex-col sm:flex-row gap-3">
                 <Button
                   variant="outline"
-                  onClick={() => setCurrentStep("plex-server")}
+                  onClick={() => setCurrentStep(choice.jellyfin ? "jellyfin" : "plex-server")}
                   className="flex-1"
                   disabled={isLoadingLibraries}
                 >

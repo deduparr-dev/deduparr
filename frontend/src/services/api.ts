@@ -242,9 +242,52 @@ export interface ServiceTestResponse {
   available_servers?: string[];
 }
 
+/** A connection test's outcome, as the UI shows it */
+export interface ConnectionTestResult {
+  success: boolean;
+  error?: string;
+  server_name?: string;
+  version?: string;
+}
+
+/** Run a connection test, keeping whatever reason the API gave for a failure. */
+export async function runConnectionTest(
+  test: () => Promise<ServiceTestResponse>
+): Promise<ConnectionTestResult> {
+  try {
+    const response = await test();
+    return response.success
+      ? { success: true, server_name: response.server_name, version: response.version }
+      : { success: false, error: response.error ?? response.message ?? "Connection failed" };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Connection failed" };
+  }
+}
+
 export interface ServiceConfig {
   url: string;
   api_key: string;
+}
+
+export interface EmailTestConfig {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_password: string;
+  notification_email: string;
+}
+
+export interface PlexServer {
+  name: string;
+  client_identifier: string;
+  product: string;
+  platform: string;
+  owned: boolean;
+}
+
+interface SaveResponse {
+  status: string;
+  message: string;
 }
 
 export interface QBittorrentConfig {
@@ -253,11 +296,23 @@ export interface QBittorrentConfig {
   password: string;
 }
 
+/** Why a request failed: the API's own explanation when it sent one. */
+async function requestError(response: Response): Promise<Error> {
+  const text = await response.text();
+  try {
+    const { detail } = JSON.parse(text) as { detail?: unknown };
+    if (typeof detail === "string") return new Error(detail);
+  } catch {
+    // Not JSON, so the text itself is the explanation
+  }
+  return new Error(text || response.statusText || `Request failed (${response.status})`);
+}
+
 async function fetchAPI<T>(endpoint: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${endpoint}`);
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -273,8 +328,7 @@ async function postAPI<T, U>(endpoint: string, data: U): Promise<T> {
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API request failed: ${error || response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -290,8 +344,7 @@ async function putAPI<T, U>(endpoint: string, data: U): Promise<T> {
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API request failed: ${error || response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -307,8 +360,7 @@ async function patchAPI<T, U>(endpoint: string, data: U): Promise<T> {
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API request failed: ${error || response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -412,8 +464,17 @@ export const setupAPI = {
   checkPlexAuth: (pinId: string) =>
     fetchAPI<PlexAuthCheckResponse>(`/api/setup/plex/auth/check/${pinId}`),
 
+  getPlexServers: (authToken: string) =>
+    postAPI<{ servers: PlexServer[] }, { auth_token: string }>("/api/setup/plex/servers", {
+      auth_token: authToken,
+    }),
+
   // Service testing
-  testPlex: () => fetchAPI<ServiceTestResponse>("/api/setup/test/plex"),
+  testPlex: (authToken: string, serverName: string) =>
+    postAPI<ServiceTestResponse, { auth_token: string; server_name: string }>(
+      "/api/setup/test/plex",
+      { auth_token: authToken, server_name: serverName }
+    ),
   testJellyfin: (config: JellyfinConfig) =>
     postAPI<ServiceTestResponse, JellyfinConfig>("/api/setup/test/jellyfin", config),
   // Libraries from every configured media server, each tagged with its origin
@@ -427,6 +488,13 @@ export const setupAPI = {
     postAPI<ServiceTestResponse, ServiceConfig>("/api/setup/test/sonarr", config),
   testQBittorrent: (config: QBittorrentConfig) =>
     postAPI<ServiceTestResponse, QBittorrentConfig>("/api/setup/test/qbittorrent", config),
+  testEmail: (config: EmailTestConfig) =>
+    postAPI<ServiceTestResponse, EmailTestConfig>("/api/setup/test/email", config),
+
+  // Keys left out keep their stored values; secrets are encrypted on save
+  saveConfig: (config: Record<string, string>) =>
+    postAPI<SaveResponse, { config: Record<string, string> }>("/api/setup/save", { config }),
+  completeSetup: () => postAPI<SaveResponse, Record<string, never>>("/api/setup/complete", {}),
 
   // Plex libraries
   getPlexLibrariesWithAuth: (authToken: string, serverName: string) =>

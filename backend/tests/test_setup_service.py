@@ -402,3 +402,50 @@ async def test_get_media_libraries_survives_one_server_failing(test_db):
         libraries = await SetupService(test_db).get_media_libraries()
 
     assert [lib["server"] for lib in libraries] == ["plex"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved", [False, True])
+async def test_test_jellyfin_connection_takes_the_saved_key_too(test_db, saved):
+    """
+    Settings keeps a saved key out of its field and tests with that one; it
+    reached Jellyfin still encrypted.
+    """
+    key = encrypt_test_password("admin-key") if saved else "admin-key"
+    seen: dict = {}
+
+    async def connect(adapter):
+        seen.update(
+            await adapter._get_encrypted_config(
+                "Jellyfin", {"api_key": "jellyfin_api_key"}
+            )
+        )
+        return {"success": True, "server_name": "Home", "version": "12.4.0"}
+
+    with patch(
+        "app.services.setup_service.JellyfinAdapter.test_connection",
+        autospec=True,
+        side_effect=connect,
+    ):
+        await SetupService(test_db).test_jellyfin_connection("http://jf:8096", key)
+
+    assert seen["api_key"] == "admin-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("saved", [False, True])
+async def test_test_qbittorrent_connection_takes_the_saved_password_too(test_db, saved):
+    """
+    Settings sends a saved password back as it holds it, encrypted, and the
+    test encrypted it again before logging in with it.
+    """
+    password = encrypt_test_password("adminadmin") if saved else "adminadmin"
+
+    with patch("app.services.download.qbittorrent_service.Client") as client:
+        client.return_value.app_version.return_value = "v4.6.0"
+        result = await SetupService(test_db).test_qbittorrent_connection(
+            "http://qbit:8080", "admin", password
+        )
+
+    assert result["success"] is True
+    assert client.call_args.kwargs["password"] == "adminadmin"

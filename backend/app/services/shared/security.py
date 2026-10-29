@@ -201,6 +201,19 @@ def encrypt_if_sensitive(key: str, value: Optional[str]) -> Optional[str]:
         return token_manager.encrypt(value)
 
 
+def decrypt_if_encrypted(value: str) -> str:
+    """
+    A secret as typed, whether it was typed just now or comes back stored.
+
+    Settings sends a saved secret back encrypted, as it loaded it, so a
+    connection test has to accept both.
+    """
+    try:
+        return get_token_manager().decrypt(value) or value
+    except (InvalidTokenError, Exception):
+        return value
+
+
 def get_token_manager() -> TokenManager:
     """
     Get a TokenManager instance with the application encryption key.

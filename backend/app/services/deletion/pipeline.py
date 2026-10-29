@@ -747,8 +747,8 @@ class DeletionPipeline:
                 arr_type, kept_file_path, media_type
             )
 
-        target = f"item {media_id}" if media_id else "whole library"
         if self.dry_run:
+            target = f"item {media_id}" if media_id else "whole library"
             logger.info(f"[DRY-RUN] Would have {arr_name} rescan its {target}")
             return
 
@@ -764,7 +764,6 @@ class DeletionPipeline:
             return
         except ArrClientError as e:
             raise ArrClientError(f"{arr_name} was not asked to rescan: {e}") from e
-        logger.info(f"Asked {arr_name} to rescan its {target}")
 
     async def _get_arr_media_id(
         self, arr_type: str, file_path: str, media_type: MediaType

@@ -6,6 +6,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -418,6 +419,50 @@ async def test_evaluate_unavailable_when_arr_unreachable(test_db):
     with patch.object(ranker.radarr_service, "_get_client", return_value=client):
         with pytest.raises(ArrQualityUnavailable, match="Radarr request failed"):
             await ranker.evaluate(MediaType.MOVIE, ["/movies/Film (2020)/a.mkv"])
+
+    client.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_unavailable_when_arr_answers_with_a_page(test_db):
+    """A login or proxy error page instead of JSON falls back like a failed request"""
+    client = RadarrClient(base_url="http://radarr:7878", api_key="key")
+    client._client = httpx.AsyncClient(
+        base_url="http://radarr:7878/api/v3",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, text="<html>Sign in</html>")
+        ),
+    )
+    ranker = ArrQualityRanker(test_db)
+
+    with patch.object(ranker.radarr_service, "_get_client", return_value=client):
+        with pytest.raises(ArrQualityUnavailable, match="Radarr request failed.*JSON"):
+            await ranker.evaluate(MediaType.MOVIE, ["/movies/Film (2020)/a.mkv"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "break_answer",
+    [
+        lambda client: client.get_movie.return_value[1].pop("qualityProfileId"),
+        lambda client: setattr(
+            client.get_quality_profile, "return_value", {**PROFILE, "items": [None]}
+        ),
+    ],
+    ids=["movie without a profile", "null profile entry"],
+)
+async def test_evaluate_unavailable_when_arr_answers_in_another_shape(
+    test_db, break_answer
+):
+    client = radarr_client_mock()
+    break_answer(client)
+    ranker = ArrQualityRanker(test_db)
+
+    with patch.object(ranker.radarr_service, "_get_client", return_value=client):
+        with pytest.raises(ArrQualityUnavailable, match="Radarr gave an unexpected"):
+            await ranker.evaluate(
+                MediaType.MOVIE, ["/movies/Film (2020)/Film.WEBDL-1080p.mkv"]
+            )
 
     client.close.assert_awaited()
 

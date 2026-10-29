@@ -262,7 +262,11 @@ class ArrClient:
             if response.status_code == 204:
                 return {}
 
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as e:
+                # A login page or a proxy's error page, for instance
+                raise ArrClientError(f"{endpoint} did not answer with JSON: {e}")
 
         except httpx.ConnectError as e:
             raise ArrConnectionError(f"Failed to connect to {self.base_url}: {e}")

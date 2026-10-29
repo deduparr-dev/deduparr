@@ -212,6 +212,8 @@ export interface AppConfig {
   prefer_arr_quality_profile?: string; // "true" or "false" string from backend
   jellyfin_url?: string;
   jellyfin_api_key?: string;
+  radarr_path_mappings?: string; // one "<Radarr path>=<media server path>" per line
+  sonarr_path_mappings?: string; // one "<Sonarr path>=<media server path>" per line
   email_notifications_enabled?: string; // "true" or "false" string from backend
   notification_email?: string;
   smtp_host?: string;
@@ -447,6 +449,12 @@ export const configAPI = {
   updateArrQualityProfileSetting: (enabled: boolean) =>
     putAPI<ArrQualityProfileSetting, { enabled: boolean }>("/api/config/arr-quality-profile", {
       enabled,
+    }),
+
+  // Single config value (an empty string clears it)
+  setValue: (key: string, value: string) =>
+    putAPI<{ key: string; value: string | null }, { value: string }>(`/api/config/${key}`, {
+      value,
     }),
 
   // Scheduler configuration

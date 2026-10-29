@@ -16,6 +16,7 @@ from app.services.arr.client import (
 )
 from app.services.arr.helpers import find_episode_by_file_path, rescan_media_item
 from app.services.shared.base_service import BaseExternalService
+from app.services.arr.path_mapping import PathMapper
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +58,13 @@ class SonarrService(BaseExternalService):
         )
 
         try:
+            path_mapper = PathMapper.from_text(
+                await self._get_optional_config("sonarr_path_mappings")
+            )
             self._client = SonarrClient(
-                base_url=config["url"], api_key=config["api_key"]
+                base_url=config["url"],
+                api_key=config["api_key"],
+                path_mapper=path_mapper,
             )
             return self._client
         except (ArrConnectionError, ArrAuthError) as e:

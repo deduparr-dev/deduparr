@@ -65,6 +65,8 @@ test.describe("deleting duplicates through every service", () => {
 
     const radarr = await serviceState(request, RADARR_URL);
     expect(radarr.deletedMovieFiles).toEqual([11]);
+    // Re-read from disk, Radarr's movie takes up the kept file
+    expect(radarr.commands).toEqual([{ name: "RescanMovie", movieId: 1 }]);
     const qbit = await serviceState(request, QBIT_URL);
     expect(qbit.deleted).toEqual([{ hash: "aaaa1111", deleteFiles: true }]);
     expect((await getPendingSets(request)).some((s: { title: string }) => s.title === title)).toBe(
@@ -92,6 +94,7 @@ test.describe("deleting duplicates through every service", () => {
 
     const sonarr = await serviceState(request, SONARR_URL);
     expect(sonarr.deletedEpisodeFiles).toEqual([21]);
+    expect(sonarr.commands).toEqual([{ name: "RescanSeries", seriesId: 1 }]);
     const qbit = await serviceState(request, QBIT_URL);
     expect(qbit.deleted).toEqual([]);
   });
@@ -100,10 +103,11 @@ test.describe("deleting duplicates through every service", () => {
     page,
     request,
   }) => {
-    await markServicesUnconfigured(request);
     const title = uniqueTitle("Fake Split");
     await setJellyfinMode(request, "split", title);
     const media = seedJellyfinMedia(title, "split");
+    // The stand-ins hold another title, so neither copy is Radarr's
+    await resetServices(request, uniqueTitle("Fake Unrelated"));
     await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
 
     await deleteFromScanPage(page, request, title);
@@ -113,6 +117,9 @@ test.describe("deleting duplicates through every service", () => {
     expect(fs.existsSync(titleFolder)).toBe(false);
     expect(fs.existsSync(path.dirname(titleFolder))).toBe(true);
     expect(fs.existsSync(media.keep)).toBe(true);
+    // Radarr may still hold a copy under its own mount: its whole library is re-read
+    const radarr = await serviceState(request, RADARR_URL);
+    expect(radarr.commands).toEqual([{ name: "RescanMovie" }]);
   });
 
   test("a kept copy directly in Radarr's root folder stays put, and the result says why", async ({

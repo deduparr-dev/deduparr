@@ -15,9 +15,7 @@ from app.services.arr.client import (
 )
 from app.services.arr.helpers import (
     find_media_by_file_path,
-    manual_import_file,
     rescan_media_item,
-    trigger_full_library_scan,
 )
 from app.services.shared.base_service import BaseExternalService
 
@@ -87,72 +85,15 @@ class RadarrService(BaseExternalService):
             )
             raise
 
-    async def manual_import_file(
-        self, file_path: str, movie_id: int, search_for_file: bool = True
-    ) -> Optional[bool]:
+    async def rescan_movie(self, movie_id: Optional[int], kept_file_path: str) -> None:
         """
-        Manually import a specific file for a movie using Radarr's manual import API
+        Have Radarr rescan a movie from disk, or every movie without an id.
 
-        Args:
-            file_path: Full path to the file to import (may be outdated if file was moved)
-            movie_id: ID of the movie this file belongs to
-            search_for_file: If True, search for actual file location if original path not found
-
-        Returns:
-            True if import succeeded, False if failed, None if file not found
+        Used after deleting duplicates, so Radarr imports the file kept and
+        drops the ones deleted.
         """
         client = await self._get_client()
-        return await manual_import_file(
-            client=client,
-            file_path=file_path,
-            media_id=movie_id,
-            media_type="movie",
-            logger_instance=logger,
-            search_for_file=search_for_file,
-        )
-
-    async def rescan_movie(
-        self, movie_id: int, kept_file_path: Optional[str] = None
-    ) -> bool:
-        """
-        Trigger a scan to find and import files for a specific movie
-
-        This is used after deleting a duplicate file to make Radarr find and import
-        the better quality file we kept. We use DownloadedMoviesScan with the folder
-        containing the kept file to ensure Radarr finds it.
-
-        Args:
-            movie_id: ID of the movie to scan for
-            kept_file_path: Path to the file we kept (if known). If provided, we'll
-                           scan the parent directory of this file. If not provided,
-                           we'll scan the movie's configured path.
-
-        Returns:
-            True if command was successfully queued, False otherwise
-        """
-        client = await self._get_client()
-        return await rescan_media_item(
-            client=client,
-            media_id=movie_id,
-            media_type="movie",
-            kept_file_path=kept_file_path,
-            logger_instance=logger,
-        )
-
-    async def trigger_rescan_all(self) -> bool:
-        """
-        Trigger a full library scan for all movies
-
-        This is used when we have a file that isn't tracked in Radarr yet
-        and we want Radarr to find and import it.
-
-        Returns:
-            True if command was successfully queued
-        """
-        client = await self._get_client()
-        return await trigger_full_library_scan(
-            client=client, media_type="movie", logger_instance=logger
-        )
+        await rescan_media_item(client, movie_id, kept_file_path, logger)
 
     async def test_connection(self) -> Dict[str, str | bool]:
         """

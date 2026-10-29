@@ -15,9 +15,7 @@ from app.services.arr.client import (
 )
 from app.services.arr.helpers import (
     find_media_by_file_path,
-    manual_import_file,
     rescan_media_item,
-    trigger_full_library_scan,
 )
 from app.services.shared.base_service import BaseExternalService
 
@@ -93,72 +91,17 @@ class SonarrService(BaseExternalService):
             )
             raise
 
-    async def manual_import_file(
-        self, file_path: str, series_id: int, search_for_file: bool = True
-    ) -> Optional[bool]:
-        """
-        Manually import a specific file for a series using Sonarr's manual import API
-
-        Args:
-            file_path: Full path to the file to import (may be outdated if file was moved)
-            series_id: ID of the series this file belongs to
-            search_for_file: If True, search for actual file location if original path not found
-
-        Returns:
-            True if import succeeded, False if failed, None if file not found
-        """
-        client = await self._get_client()
-        return await manual_import_file(
-            client=client,
-            file_path=file_path,
-            media_id=series_id,
-            media_type="series",
-            logger_instance=logger,
-            search_for_file=search_for_file,
-        )
-
     async def rescan_series(
-        self, series_id: int, kept_file_path: Optional[str] = None
-    ) -> bool:
+        self, series_id: Optional[int], kept_file_path: str
+    ) -> None:
         """
-        Trigger a scan to find and import files for a specific series
+        Have Sonarr rescan a series from disk, or every series without an id.
 
-        This is used after deleting a duplicate file to make Sonarr find and import
-        the better quality file we kept. We use DownloadedEpisodesScan with the folder
-        containing the kept file to ensure Sonarr finds it.
-
-        Args:
-            series_id: ID of the series to scan for
-            kept_file_path: Path to the file we kept (if known). If provided, we'll
-                           scan the parent directory of this file. If not provided,
-                           we'll scan the series' configured path.
-
-        Returns:
-            True if command was successfully queued, False otherwise
+        Used after deleting duplicates, so Sonarr imports the file kept and
+        drops the ones deleted.
         """
         client = await self._get_client()
-        return await rescan_media_item(
-            client=client,
-            media_id=series_id,
-            media_type="series",
-            kept_file_path=kept_file_path,
-            logger_instance=logger,
-        )
-
-    async def trigger_rescan_all(self) -> bool:
-        """
-        Trigger a full library scan for all series
-
-        This is used when we have a file that isn't tracked in Sonarr yet
-        and we want Sonarr to find and import it.
-
-        Returns:
-            True if command was successfully queued
-        """
-        client = await self._get_client()
-        return await trigger_full_library_scan(
-            client=client, media_type="series", logger_instance=logger
-        )
+        await rescan_media_item(client, series_id, kept_file_path, logger)
 
     async def test_connection(self) -> Dict[str, str | bool]:
         """

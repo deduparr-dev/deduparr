@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.models import DuplicateSet, DuplicateFile, DeletionHistory
 from app.models.duplicate import MediaType, DuplicateStatus
 from app.models.config import Config
+from app.services.arr.client import ArrConnectionError
 from app.services.media_server import MediaServerError
 from tests.conftest import encrypt_test_password
 
@@ -238,10 +239,8 @@ async def test_delete_movie_full_pipeline_success(
             delete_files=True, torrent_hashes="abc123"
         )
 
-        # Stage 3: *arr rescan (finds and imports the better file we kept)
-        mock_rescan_movie.assert_called_once_with(
-            1, "/media/movies/Test Movie 1080p.mkv"
-        )
+        # Stage 3, the *arr rescan, runs once per set in delete_set
+        mock_rescan_movie.assert_not_called()
 
         # Stage 4: Disk cleanup is skipped when qBit already deleted files
         # (os.remove should NOT be called)
@@ -325,10 +324,8 @@ async def test_delete_episode_full_pipeline_success(
         # Stage 2: qBittorrent removal would be here but torrents_info returned []
         # so qBit stage is skipped
 
-        # Stage 3: *arr rescan (finds and imports the better file we kept)
-        mock_rescan_series.assert_called_once_with(
-            1, "/media/tv/Test Series/S01E01 1080p.mkv"
-        )
+        # Stage 3, the *arr rescan, runs once per set in delete_set
+        mock_rescan_series.assert_not_called()
 
         # Stage 4: Disk cleanup - file already deleted by *arr
         mock_remove.assert_not_called()
@@ -1005,6 +1002,67 @@ async def test_delete_set_counts_a_deleted_file_when_the_refresh_fails(
     assert any("Plex refresh failed" in warning for warning in outcome.warnings)
     assert not drop.exists()
     assert dup_set.status == DuplicateStatus.PROCESSED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tracked", [True, False])
+async def test_delete_set_rescans_the_arr_once_after_every_file(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path, tracked
+):
+    """
+    Radarr rescans the movie once its unwanted files are all gone. A movie
+    Radarr tracks under neither path is looked for in its whole library.
+    """
+    keep, first, second = (tmp_path / f"{n}.mkv" for n in ("keep", "first", "second"))
+    for path in (keep, first, second):
+        path.write_bytes(b"x" * 10)
+    dup_set = await create_duplicate_set(media_server="disk")
+    await create_duplicate_file(
+        dup_set.id, file_path=str(keep), file_size=10, keep=True
+    )
+    for path in (first, second):
+        await create_duplicate_file(dup_set.id, file_path=str(path), file_size=10)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.radarr_service = AsyncMock()
+    pipeline.radarr_service.find_movie_by_file_path.side_effect = lambda path: (
+        {"id": 7, "movieFile": {"id": 70}} if tracked and path != str(keep) else None
+    )
+    outcome = await pipeline.delete_set(await _with_files(test_db, dup_set.id))
+
+    assert outcome.files_deleted == 2
+    pipeline.radarr_service.rescan_movie.assert_awaited_once_with(
+        7 if tracked else None, str(keep)
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_set_reports_a_rescan_radarr_never_got(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """Radarr being down after the deletion is for the user to know, not only the log."""
+    keep, drop = tmp_path / "keep.mkv", tmp_path / "drop.mkv"
+    for path in (keep, drop):
+        path.write_bytes(b"x" * 10)
+    dup_set = await create_duplicate_set(media_server="disk")
+    await create_duplicate_file(
+        dup_set.id, file_path=str(keep), file_size=10, keep=True
+    )
+    await create_duplicate_file(dup_set.id, file_path=str(drop), file_size=10)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.radarr_service = AsyncMock()
+    pipeline.radarr_service.find_movie_by_file_path.return_value = None
+    pipeline.radarr_service.rescan_movie.side_effect = ArrConnectionError(
+        "Failed to connect to http://radarr:7878: connection refused"
+    )
+    outcome = await pipeline.delete_set(await _with_files(test_db, dup_set.id))
+
+    assert (outcome.files_deleted, outcome.errors) == (1, [])
+    assert (
+        "Radarr was not asked to rescan: Failed to connect to "
+        "http://radarr:7878: connection refused"
+    ) in outcome.warnings
 
 
 @pytest.mark.asyncio

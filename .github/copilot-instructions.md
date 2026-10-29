@@ -244,9 +244,11 @@ stages, tracked in `DeletionHistory`:
 2. `deleted_from_qbit`: remove the torrent holding the file, with its data -
    unless the kept file has a torrent, or the torrent holds other videos too
    (a season pack)
-3. *arr rescan, once per set, so the kept file is imported. A kept file
-   directly in a root folder cannot be; it is never moved, and the result
-   says so
+3. *arr rescan, once per set: `RescanMovie`/`RescanSeries` re-reads the item
+   from disk, importing the kept file - or the whole library when the *arr
+   tracks neither file, as it may hold one under its own mount. A kept file
+   directly in a root folder cannot be imported; it is never moved, and the
+   result says so
 4. `deleted_from_disk`: delete the file if still on disk, then the side files
    named after it (.nfo, subtitles, artwork), and the release's
    Sample/Subs/Proof/Extras folders once no other video shares the directory,
@@ -423,7 +425,7 @@ from app.services.arr.client import RadarrClient, ArrConnectionError
 client = RadarrClient(base_url="http://localhost:7878", api_key="xxx")
 try:
     movies = await client.get_movie()
-    await client.post_command("DownloadedMoviesScan", path="/movies")
+    await client.post_command("RescanMovie", movieId=movies[0]["id"])
 except ArrConnectionError as e:
     logger.error(f"Radarr API error: {e}")
 ```

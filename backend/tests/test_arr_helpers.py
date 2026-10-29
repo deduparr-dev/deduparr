@@ -4,140 +4,54 @@ Tests for arr_helpers module
 
 import logging
 import os
-from unittest.mock import AsyncMock, MagicMock, call, create_autospec, patch
+from unittest.mock import create_autospec
 
 import pytest
 
 from app.services.arr.client import RadarrClient, SonarrClient
-from app.services.arr.helpers import (
-    manual_import_file,
-    rescan_media_item,
-    trigger_full_library_scan,
-)
+from app.services.arr.helpers import rescan_media_item
+
+LOG = logging.getLogger("test")
 
 
-@pytest.mark.asyncio
-async def test_rescan_media_item_movie_with_kept_file():
-    """Test rescanning a movie with a kept file path"""
-    mock_client = MagicMock()
-    mock_client.get_movie = AsyncMock(
-        return_value={
-            "id": 1,
-            "title": "Test Movie",
-            "year": 2024,
-            "path": "/movies/Test Movie (2024)",
-        }
-    )
-    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/movies"}])
-    mock_client.post_command = AsyncMock()
-
-    logger = logging.getLogger("test")
-
-    result = await rescan_media_item(
-        client=mock_client,
-        media_id=1,
-        media_type="movie",
-        kept_file_path="/movies/Test Movie (2024)/movie.mkv",
-        logger_instance=logger,
-    )
-
-    assert result is True
-    mock_client.get_movie.assert_called_once_with(1)
-    mock_client.post_command.assert_called_once_with(
-        "DownloadedMoviesScan", path="/movies/Test Movie (2024)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_rescan_media_item_series_with_kept_file():
-    """Test rescanning a series with a kept file path"""
-    mock_client = MagicMock()
-    mock_client.get_series = AsyncMock(
-        return_value={
-            "id": 1,
-            "title": "Test Series",
-            "year": 2024,
-            "path": "/tv/Test Series (2024)",
-        }
-    )
-    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/tv"}])
-    mock_client.post_command = AsyncMock()
-
-    logger = logging.getLogger("test")
-
-    result = await rescan_media_item(
-        client=mock_client,
-        media_id=1,
-        media_type="series",
-        kept_file_path="/tv/Test Series (2024)/S01E01.mkv",
-        logger_instance=logger,
-    )
-
-    assert result is True
-    mock_client.get_series.assert_called_once_with(1)
-    mock_client.post_command.assert_called_once_with(
-        "DownloadedEpisodesScan", path="/tv/Test Series (2024)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_rescan_media_item_without_kept_file():
-    """Test rescanning when no kept file path is provided"""
-    mock_client = MagicMock()
-    mock_client.get_movie = AsyncMock(
-        return_value={
-            "id": 1,
-            "title": "Test Movie",
-            "year": 2024,
-            "path": "/movies/Test Movie (2024)",
-        }
-    )
-    mock_client.post_command = AsyncMock()
-
-    logger = logging.getLogger("test")
-
-    result = await rescan_media_item(
-        client=mock_client,
-        media_id=1,
-        media_type="movie",
-        kept_file_path=None,
-        logger_instance=logger,
-    )
-
-    assert result is True
-    mock_client.post_command.assert_called_once_with(
-        "DownloadedMoviesScan", path="/movies/Test Movie (2024)"
-    )
-
-
-@pytest.mark.asyncio
-async def test_rescan_media_item_path_mismatch():
-    """
-    A kept file outside the movie's folder moves the movie there.
-
-    The client is spec'd so a call it would reject fails here too: a plain
-    mock accepted update_movie(data=...), which the real client turns down.
-    """
+def _radarr(path: str = "/movies/Test Movie (2024)", root: str = "/movies/"):
     client = create_autospec(RadarrClient, instance=True)
     client.get_movie.return_value = {
         "id": 1,
         "title": "Test Movie",
         "year": 2024,
-        "path": "/movies/Old Path",
+        "path": path,
     }
-    client.get_root_folder.return_value = [{"path": "/movies"}]
+    client.get_root_folder.return_value = [{"path": root}]
+    return client
 
-    result = await rescan_media_item(
-        client=client,
-        media_id=1,
-        media_type="movie",
-        kept_file_path="/movies/New Path/movie.mkv",
-        logger_instance=logging.getLogger("test"),
-    )
 
-    assert result is True
+@pytest.mark.asyncio
+async def test_rescan_media_item_rescans_the_movie_holding_the_kept_file():
+    """
+    Radarr re-reads the movie's folder, which imports the kept file.
+
+    The import scan used before refuses a folder that belongs to a movie, so
+    it never imported anything.
+    """
+    client = _radarr()
+
+    await rescan_media_item(client, 1, "/movies/Test Movie (2024)/movie.mkv", LOG)
+
+    client.update_movie.assert_not_awaited()
+    client.post_command.assert_awaited_once_with("RescanMovie", movieId=1)
+
+
+@pytest.mark.asyncio
+async def test_rescan_media_item_points_the_movie_at_a_kept_file_elsewhere():
+    """A kept file outside the movie's folder moves the movie there first."""
+    client = _radarr(path="/movies/Old Path")
+
+    await rescan_media_item(client, 1, "/movies/New Path/movie.mkv", LOG)
+
     client.update_movie.assert_awaited_once()
     assert client.update_movie.await_args.args[0]["path"] == "/movies/New Path"
+    client.post_command.assert_awaited_once_with("RescanMovie", movieId=1)
 
 
 @pytest.mark.asyncio
@@ -152,21 +66,33 @@ async def test_rescan_media_item_keeps_a_series_path_over_its_season_folder():
         "title": "Test Series",
         "path": "/tv/Test Series (2024)",
     }
-    client.get_root_folder.return_value = [{"path": "/tv"}]
+    client.get_root_folder.return_value = [{"path": "/tv/"}]
 
-    result = await rescan_media_item(
-        client=client,
-        media_id=1,
-        media_type="series",
-        kept_file_path="/tv/Test Series (2024)/Season 1/S01E01.mkv",
-        logger_instance=logging.getLogger("test"),
+    await rescan_media_item(
+        client, 1, "/tv/Test Series (2024)/Season 1/S01E01.mkv", LOG
     )
 
-    assert result is True
     client.update_series.assert_not_awaited()
-    client.post_command.assert_awaited_once_with(
-        "DownloadedEpisodesScan", path="/tv/Test Series (2024)/Season 1"
-    )
+    client.post_command.assert_awaited_once_with("RescanSeries", seriesId=1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_class, command",
+    [(RadarrClient, "RescanMovie"), (SonarrClient, "RescanSeries")],
+)
+async def test_rescan_media_item_without_an_item_rescans_the_whole_library(
+    client_class, command
+):
+    """
+    The *arr tracked neither file, yet it may hold one under a path of its own
+    mount, so every movie or series is re-read from disk.
+    """
+    client = create_autospec(client_class, instance=True)
+
+    await rescan_media_item(client, None, "/media/Movie (2020)/movie.mkv", LOG)
+
+    client.post_command.assert_awaited_once_with(command)
 
 
 @pytest.mark.asyncio
@@ -186,172 +112,13 @@ async def test_rescan_media_item_leaves_a_kept_file_in_a_root_folder(
     root.mkdir()
     kept = root / "Test Movie (2024).mkv"
     kept.write_text("x")
-    client = create_autospec(RadarrClient, instance=True)
-    client.get_movie.return_value = {
-        "id": 1,
-        "title": "Test Movie",
-        "year": 2024,
-        "path": str(root / "Test Movie (2024)"),
-    }
-    client.get_root_folder.return_value = [{"path": stored_as.format(root=root)}]
+    client = _radarr(
+        path=str(root / "Test Movie (2024)"), root=stored_as.format(root=root)
+    )
 
     with pytest.raises(ValueError, match="sits directly in the root folder"):
-        await rescan_media_item(
-            client=client,
-            media_id=1,
-            media_type="movie",
-            kept_file_path=str(kept),
-            logger_instance=logging.getLogger("test"),
-        )
+        await rescan_media_item(client, 1, str(kept), LOG)
 
     assert os.listdir(root) == [kept.name]
     client.update_movie.assert_not_awaited()
     client.post_command.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_rescan_media_item_media_not_found():
-    """Test error handling when media item is not found"""
-    mock_client = MagicMock()
-    mock_client.get_movie = AsyncMock(return_value=None)
-
-    logger = logging.getLogger("test")
-
-    result = await rescan_media_item(
-        client=mock_client,
-        media_id=999,
-        media_type="movie",
-        kept_file_path=None,
-        logger_instance=logger,
-    )
-
-    assert result is False
-
-
-@pytest.mark.asyncio
-async def test_trigger_full_library_scan_movie():
-    """Test triggering full library scan for movies"""
-    mock_client = MagicMock()
-    mock_client.get_root_folder = AsyncMock(
-        return_value=[
-            {"path": "/movies"},
-            {"path": "/movies2"},
-        ]
-    )
-    mock_client.post_command = AsyncMock()
-
-    logger = logging.getLogger("test")
-
-    result = await trigger_full_library_scan(
-        client=mock_client, media_type="movie", logger_instance=logger
-    )
-
-    assert result is True
-    assert mock_client.post_command.call_count == 2
-    mock_client.post_command.assert_any_call("DownloadedMoviesScan", path="/movies")
-    mock_client.post_command.assert_any_call("DownloadedMoviesScan", path="/movies2")
-
-
-@pytest.mark.asyncio
-async def test_trigger_full_library_scan_series():
-    """Test triggering full library scan for series"""
-    mock_client = MagicMock()
-    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/tv"}])
-    mock_client.post_command = AsyncMock()
-
-    logger = logging.getLogger("test")
-
-    result = await trigger_full_library_scan(
-        client=mock_client, media_type="series", logger_instance=logger
-    )
-
-    assert result is True
-    mock_client.post_command.assert_called_once_with(
-        "DownloadedEpisodesScan", path="/tv"
-    )
-
-
-@pytest.mark.asyncio
-async def test_manual_import_file_movie_queues_import(tmp_path):
-    """Manual import scans the file's folder, then queues a ManualImport command"""
-    media_file = tmp_path / "Film.2020.1080p.mkv"
-    media_file.write_bytes(b"x")
-    client = RadarrClient(base_url="http://radarr:7878", api_key="key")
-    request = AsyncMock(
-        side_effect=[
-            [
-                {
-                    "path": str(media_file),
-                    "quality": {"quality": {"id": 7}},
-                    "languages": [{"id": 1}],
-                    "releaseGroup": "GRP",
-                }
-            ],
-            {"id": 99},
-        ]
-    )
-
-    with patch.object(client, "_request", request):
-        result = await manual_import_file(
-            client, str(media_file), 42, "movie", logging.getLogger("test")
-        )
-
-    assert result is True
-    assert request.await_args_list[0] == call(
-        "GET",
-        "/manualimport",
-        params={"folder": str(tmp_path), "filterExistingFiles": True, "movieId": 42},
-    )
-    assert request.await_args_list[1] == call(
-        "POST",
-        "/command",
-        json_data={
-            "name": "ManualImport",
-            "files": [
-                {
-                    "path": str(media_file),
-                    "movieId": 42,
-                    "quality": {"quality": {"id": 7}},
-                    "languages": [{"id": 1}],
-                    "releaseGroup": "GRP",
-                }
-            ],
-            "importMode": "Move",
-        },
-    )
-
-
-@pytest.mark.asyncio
-async def test_manual_import_file_series_queues_import(tmp_path):
-    """Series manual import filters by seriesId and sends the matched episode IDs"""
-    media_file = tmp_path / "Show.S01E01.1080p.mkv"
-    media_file.write_bytes(b"x")
-    client = SonarrClient(base_url="http://sonarr:8989", api_key="key")
-    request = AsyncMock(
-        side_effect=[
-            [
-                {
-                    "path": str(media_file),
-                    "quality": {"quality": {"id": 7}},
-                    "episodes": [{"id": 5}, {"id": 6}],
-                }
-            ],
-            {"id": 100},
-        ]
-    )
-
-    with patch.object(client, "_request", request):
-        result = await manual_import_file(
-            client, str(media_file), 7, "series", logging.getLogger("test")
-        )
-
-    assert result is True
-    assert request.await_args_list[0] == call(
-        "GET",
-        "/manualimport",
-        params={"folder": str(tmp_path), "filterExistingFiles": True, "seriesId": 7},
-    )
-    command = request.await_args_list[1].kwargs["json_data"]
-    assert command["name"] == "ManualImport"
-    assert command["files"][0]["seriesId"] == 7
-    assert command["files"][0]["episodeIds"] == [5, 6]

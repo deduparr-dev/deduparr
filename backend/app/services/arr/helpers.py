@@ -16,345 +16,69 @@ MediaType = Literal["movie", "series"]
 
 async def rescan_media_item(
     client: Union[RadarrClient, SonarrClient],
-    media_id: int,
-    media_type: MediaType,
-    kept_file_path: Optional[str],
+    media_id: Optional[int],
+    kept_file_path: str,
     logger_instance: logging.Logger,
-) -> bool:
+) -> None:
     """
-    Trigger a scan to find and import files for a specific movie or series
+    Have Radarr/Sonarr rescan a movie or series from disk, or every one of
+    them when media_id is None.
 
-    This is used after deleting a duplicate file to make Radarr/Sonarr find and import
-    the better quality file we kept. We use DownloadedMoviesScan/DownloadedEpisodesScan
-    with the folder containing the kept file.
+    A rescan imports the files in the item's folder the *arr does not track
+    yet - the kept file - and drops the ones gone from disk. A kept file in
+    another folder gets the item pointed at that folder first.
 
-    Args:
-        client: Radarr or Sonarr API client instance
-        media_id: ID of the movie/series to scan for
-        media_type: Type of media ("movie" or "series")
-        kept_file_path: Path to the file we kept (if known)
-        logger_instance: Logger instance to use
-
-    Returns:
-        True if command was successfully queued, False otherwise
+    Raises:
+        ValueError: The kept file sits directly in a root folder. The *arr
+            refuses a root folder as a movie or series path, and the kept file
+            is not moved behind the user's back.
     """
-    try:
-        scan_path = None
+    if isinstance(client, RadarrClient):
+        arr, kind, command, id_param = "Radarr", "movie", "RescanMovie", "movieId"
+    else:
+        arr, kind, command, id_param = "Sonarr", "series", "RescanSeries", "seriesId"
 
-        if kept_file_path:
-            scan_path = os.path.dirname(kept_file_path)
-            logger_instance.info(f"Using kept file's directory for scan: {scan_path}")
+    if media_id is None:
+        await client.post_command(command)
+        logger_instance.info(f"Asked {arr} to rescan every {kind} from disk")
+        return
 
-            # Get media item and handle path issues
-            if media_type == "movie":
-                media_item = await client.get_movie(media_id)
-                update_method = client.update_movie
-                scan_command = "DownloadedMoviesScan"
-            else:
-                media_item = await client.get_series(media_id)
-                update_method = client.update_series
-                scan_command = "DownloadedEpisodesScan"
+    item = await (
+        client.get_movie(media_id)
+        if isinstance(client, RadarrClient)
+        else client.get_series(media_id)
+    )
+    current_path = item.get("path", "")
+    folder = os.path.dirname(kept_file_path)
 
-            if media_item:
-                current_path = media_item.get("path", "")
-
-                # A file directly in a root folder cannot be imported: the *arr
-                # refuses a root folder as a movie or series path, and the kept
-                # file is not moved behind the user's back. Root folders picked
-                # in the *arr's folder browser carry a trailing slash.
-                for root in await client.get_root_folder():
-                    if root.get("path", "").rstrip("/") == scan_path.rstrip("/"):
-                        arr = "Radarr" if media_type == "movie" else "Sonarr"
-                        raise ValueError(
-                            f"{arr} cannot import {kept_file_path}: it sits directly "
-                            f"in the root folder {root['path']}. Move it into "
-                            f"{current_path} and refresh the {media_type} in {arr}."
-                        )
-
-                if current_path and not _within(current_path, scan_path):
-                    # File is in proper folder but path is different - update it
-                    logger_instance.info(
-                        f"{media_type.capitalize()} path mismatch detected. "
-                        f"Current: {current_path}, Updating to: {scan_path}"
-                    )
-                    media_item["path"] = scan_path
-                    await update_method(media_item)
-                    logger_instance.info(
-                        f"Updated {media_type} path in {media_type.capitalize()}arr to: {scan_path}"
-                    )
-        else:
-            # Fallback: Get the media item's configured path
-            if media_type == "movie":
-                media_item = await client.get_movie(media_id)
-                scan_command = "DownloadedMoviesScan"
-            else:
-                media_item = await client.get_series(media_id)
-                scan_command = "DownloadedEpisodesScan"
-
-            if not media_item:
-                logger_instance.error(
-                    f"{media_type.capitalize()} {media_id} not found in {media_type.capitalize()}arr"
-                )
-                return False
-
-            media_path = media_item.get("path", "")
-            if not media_path:
-                logger_instance.error(
-                    f"Could not determine folder path for {media_type} {media_id}"
-                )
-                return False
-
-            scan_path = media_path
-            logger_instance.info(
-                f"Using {media_type.capitalize()}arr's configured {media_type} path for scan: {scan_path}"
+    # Root folders picked in the *arr's folder browser carry a trailing slash
+    for root in await client.get_root_folder():
+        if root.get("path", "").rstrip("/") == folder.rstrip("/"):
+            raise ValueError(
+                f"{arr} cannot import {kept_file_path}: it sits directly in the "
+                f"root folder {root['path']}. Move it into {current_path} and "
+                f"refresh the {kind} in {arr}."
             )
 
-        logger_instance.info(f"Triggering {scan_command} for folder: {scan_path}")
-        await client.post_command(scan_command, path=scan_path)
+    if current_path and not _within(current_path, folder):
         logger_instance.info(
-            f"Scan command queued for {media_type} {media_id} in folder {scan_path}"
+            f"{arr} keeps this {kind} in {current_path}; pointing it at {folder}"
         )
-        return True
+        item["path"] = folder
+        await (
+            client.update_movie(item)
+            if isinstance(client, RadarrClient)
+            else client.update_series(item)
+        )
 
-    except Exception as e:
-        logger_instance.error(f"Error triggering scan for {media_type} {media_id}: {e}")
-        raise
+    await client.post_command(command, **{id_param: media_id})
+    logger_instance.info(f"Asked {arr} to rescan {kind} {media_id} from disk")
 
 
 def _within(folder: str, path: str) -> bool:
     """Whether path is folder itself or inside it, as a season folder is."""
     folder = folder.rstrip("/")
     return path == folder or path.startswith(folder + "/")
-
-
-async def manual_import_file(
-    client: Union[RadarrClient, SonarrClient],
-    file_path: str,
-    media_id: int,
-    media_type: MediaType,
-    logger_instance: logging.Logger,
-    search_for_file: bool = True,
-) -> Optional[bool]:
-    """
-    Manually import a specific file using *arr's manual import API
-
-    This is more targeted than a full library scan and works exactly like the
-    "Manual Import" feature in Radarr/Sonarr's UI.
-
-    Args:
-        client: Radarr or Sonarr API client instance
-        file_path: Full path to the file to import (may be outdated if file was moved)
-        media_id: ID of the movie/series this file belongs to
-        media_type: Type of media ("movie" or "series")
-        logger_instance: Logger instance to use
-        search_for_file: If True, search for actual file location if original path not found
-
-    Returns:
-        True if import succeeded, False if failed, None if file not found
-    """
-    try:
-        # Check if file exists at reported location
-        actual_path = file_path
-        if search_for_file and not os.path.exists(file_path):
-            logger_instance.info(
-                f"File not found at {file_path}, searching library for actual location"
-            )
-            # File might have been moved (e.g., from root to organized folder)
-            # Search by filename in the library
-            filename = os.path.basename(file_path)
-
-            # Get media details to find the root path
-            if media_type == "movie":
-                media_item = await client.get_movie(media_id)
-            else:
-                media_item = await client.get_series(media_id)
-
-            if media_item and "path" in media_item:
-                media_folder = media_item["path"]
-                # Search in media's folder and parent library
-                library_root = os.path.dirname(media_folder)
-                for root, dirs, files in os.walk(library_root):
-                    if filename in files:
-                        potential_path = os.path.join(root, filename)
-                        if os.path.exists(potential_path):
-                            logger_instance.info(
-                                f"Found file at new location: {potential_path}"
-                            )
-                            actual_path = potential_path
-                            break
-
-        if not os.path.exists(actual_path):
-            logger_instance.warning(f"File not found in library: {file_path}")
-            return None
-
-        folder_path = os.path.dirname(actual_path)
-
-        # Scan folder to get importable files
-        logger_instance.info(
-            f"Manual import: scanning {folder_path} for {media_type} {media_id}"
-        )
-
-        # Build parameters based on media type
-        if media_type == "movie":
-            manual_import_items = await client.get_manual_import(
-                folder=folder_path,
-                movie_id=media_id,
-                filter_existing_files=True,
-            )
-        else:  # series
-            manual_import_items = await client.get_manual_import(
-                folder=folder_path,
-                series_id=media_id,
-                filter_existing_files=True,
-            )
-
-        if not manual_import_items:
-            logger_instance.warning(
-                f"No importable files found in {folder_path} for {media_type} {media_id}"
-            )
-            return None
-
-        # Find our specific file in the results
-        matching_item = None
-        for item in manual_import_items:
-            if item.get("path") == actual_path:
-                matching_item = item
-                break
-
-        if not matching_item:
-            logger_instance.warning(
-                f"File {actual_path} not found in manual import scan results"
-            )
-            return None
-
-        # Import the file using ManualImport command
-        logger_instance.info(f"Manually importing file: {actual_path}")
-
-        # Build import payload based on media type
-        if media_type == "movie":
-            import_files = [
-                {
-                    "path": actual_path,
-                    "movieId": media_id,
-                    "quality": matching_item.get("quality"),
-                    "languages": matching_item.get("languages", []),
-                    "releaseGroup": matching_item.get("releaseGroup"),
-                }
-            ]
-        else:  # series
-            import_files = [
-                {
-                    "path": actual_path,
-                    "seriesId": media_id,
-                    "episodeIds": [e["id"] for e in matching_item.get("episodes", [])],
-                    "quality": matching_item.get("quality"),
-                    "languages": matching_item.get("languages", []),
-                    "releaseGroup": matching_item.get("releaseGroup"),
-                }
-            ]
-
-        response = await client.post_command(
-            "ManualImport",
-            files=import_files,
-            importMode="Move",
-        )
-
-        logger_instance.info(
-            f"✅ Manual import queued for {actual_path} (command ID: {response.get('id')})"
-        )
-        return True
-
-    except Exception as e:
-        logger_instance.error(f"Manual import failed for {file_path}: {e}")
-        return False
-
-
-async def trigger_full_library_scan(
-    client: Union[RadarrClient, SonarrClient],
-    media_type: MediaType,
-    logger_instance: logging.Logger,
-) -> bool:
-    """
-    Trigger a full library scan for all movies or series
-
-    Args:
-        client: Radarr or Sonarr API client instance
-        media_type: Type of media ("movie" or "series")
-        logger_instance: Logger instance to use
-
-    Returns:
-        True if command was successfully queued
-    """
-    try:
-        scan_command = (
-            "DownloadedMoviesScan"
-            if media_type == "movie"
-            else "DownloadedEpisodesScan"
-        )
-
-        root_folders = await client.get_root_folder()
-        for root in root_folders:
-            path = root.get("path")
-            if path:
-                await client.post_command(scan_command, path=path)
-                logger_instance.info(
-                    f"Queued full scan for {media_type.capitalize()}arr library: {path}"
-                )
-        return True
-
-    except Exception as e:
-        logger_instance.error(
-            f"Error triggering full {media_type.capitalize()}arr library scan: {e}"
-        )
-        raise
-
-
-async def refresh_media_item(
-    client: Union[RadarrClient, SonarrClient],
-    media_id: int,
-    media_type: MediaType,
-    logger_instance: logging.Logger,
-) -> bool:
-    """
-    Refresh a movie or series metadata and clean up orphaned database entries
-
-    This command will:
-    - Update metadata from indexers (TMDB/TVDB)
-    - Check if files still exist on disk
-    - Remove orphaned database entries if files are missing
-
-    Useful for cleaning up after external deletions (e.g., qBittorrent removed a file
-    but *arr still has it in the database).
-
-    Args:
-        client: Radarr or Sonarr API client instance
-        media_id: ID of the movie/series to refresh
-        media_type: Type of media ("movie" or "series")
-        logger_instance: Logger instance to use
-
-    Returns:
-        True if command was successfully queued
-    """
-    try:
-        if media_type == "movie":
-            command_name = "RefreshMovie"
-            id_param = "movieId"
-        elif media_type == "series":
-            command_name = "RefreshSeries"
-            id_param = "seriesId"
-        else:
-            raise ValueError(f"Unknown media type: {media_type}")
-
-        result = await client.post_command(command_name, **{id_param: media_id})
-        logger_instance.info(
-            f"Queued {media_type} refresh for ID {media_id}, "
-            f"command ID: {result.get('id')} (will clean up orphaned DB entries)"
-        )
-        return True
-
-    except Exception as e:
-        logger_instance.error(f"Error refreshing {media_type} {media_id}: {e}")
-        raise
 
 
 async def find_media_by_file_path(

@@ -187,9 +187,9 @@ labels:
 4. **Fallback Disk Cleanup** - Requires `:rw` for:
    - Manually added files (not in *arr)
    - Associated files (`.srt`, `.nfo`, fanart)
-   - Subdirectories (`Sample/`, `Subs/`, `Proof/`, `Extras/`)
+   - Subdirectories (`Sample/`, `Subs/`, `Proof/`, `Extras/`) once no other video shares the folder
    - Empty directories
-5. **Plex Refresh** - Updates Plex library
+5. **Media Server Refresh** - Updates Plex or Jellyfin
 
 **Note:** Stage 4 only runs as fallback for files missed by API deletion. All deletions require manual approval (dry-run by default).
 

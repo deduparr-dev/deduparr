@@ -210,7 +210,7 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
   entry - OAuth only. This rule is specific to Plex; Jellyfin is configured
   with a URL and an admin API key, which is the only thing it offers.
 - Always authenticate via plex.tv token first
-- All tokens/API keys encrypted using `services/security.py`
+- All tokens/API keys encrypted using `services/shared/security.py`
 - Use `get_token_manager()` for all encryption/decryption operations (works for any service)
 - Encryption key is file-based at `/app/data/.encryption_key` (auto-generated, persists via Docker volume)
 - `security.py` is service-agnostic - use it for Plex, Radarr, Sonarr, qBittorrent, etc.
@@ -226,7 +226,7 @@ Five core models with specific relationships:
 - `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`).
   `media_server` + `item_id` say which server reported it and its id there
 - `DuplicateFile`: Individual file in duplicate set (has one `DeletionHistory`)
-- `DeletionHistory`: Tracks multi-stage deletion (qBittorrent → *arr → disk → Plex refresh)
+- `DeletionHistory`: Tracks multi-stage deletion (*arr → qBittorrent → disk → media server refresh)
 - `ScoringRule`: User-defined regex patterns for scoring
 - `Config`: Key-value settings store
 
@@ -237,14 +237,24 @@ All models use timezone-aware UTC timestamps via `datetime.now(timezone.utc)`. E
 
 ### Multi-Stage Deletion Pipeline
 
-Deletion is a transaction-like process with four stages tracked in `DeletionHistory`:
+`DeletionPipeline` (`services/deletion/pipeline.py`) deletes one file in these
+stages, tracked in `DeletionHistory`:
 
-1. `deleted_from_qbit`: Remove item from qBittorrent
-2. `deleted_from_arr`: Delete from Radarr/Sonarr via API
-3. `deleted_from_disk`: Physical file deletion
-4. `plex_refreshed`: Trigger Plex library scan
+1. `deleted_from_arr`: delete through Radarr/Sonarr, which removes the file
+2. `deleted_from_qbit`: remove the torrent holding the file, with its data -
+   unless the kept file has a torrent, or the torrent holds other videos too
+   (a season pack)
+3. *arr rescan, once per set, so the kept file is imported
+4. `deleted_from_disk`: delete the file if still on disk, then the side files
+   named after it (.nfo, subtitles, artwork), and the release's
+   Sample/Subs/Proof/Extras folders once no other video shares the directory
+5. `media_server_refreshed`: refresh the item on the server that reported it
 
-The `is_complete` property verifies all stages succeeded without errors. Implement rollback logic if any stage fails.
+A file is only ever identified by more than its name, since other titles share
+names like `S01E01.mkv`: on disk by the media server's path, or that path's
+tail under the media directory at the reported size; in qBittorrent by full
+path, or by name and size. A file counts as deleted only once it is gone from
+disk; anything less is an error and the set stays pending for a retry.
 
 ## Development Workflows
 
@@ -388,8 +398,8 @@ async def test_function(test_db):
 ### *arr APIs (httpx-based clients)
 
 **Direct httpx implementation** (migrated from PyArr):
-- **RadarrClient** (`app.services.arr_client.RadarrClient`): Radarr API v3 client
-- **SonarrClient** (`app.services.arr_client.SonarrClient`): Sonarr API v3/v5 client
+- **RadarrClient** (`app.services.arr.client.RadarrClient`): Radarr API v3 client
+- **SonarrClient** (`app.services.arr.client.SonarrClient`): Sonarr API v3/v5 client
 - Both use `httpx.AsyncClient` for async HTTP requests
 - Error handling via `ArrConnectionError` exception
 - API keys stored in `Config` model (encrypted)
@@ -403,7 +413,7 @@ async def test_function(test_db):
 
 **Usage Pattern:**
 ```python
-from app.services.arr_client import RadarrClient, ArrConnectionError
+from app.services.arr.client import RadarrClient, ArrConnectionError
 
 client = RadarrClient(base_url="http://localhost:7878", api_key="xxx")
 try:
@@ -415,7 +425,9 @@ except ArrConnectionError as e:
 
 ### qBittorrent (`qbittorrent-api`)
 
-Not yet implemented. Will remove torrents by hash after verifying file path matches.
+`QBittorrentService` (`services/download/qbittorrent_service.py`) finds the
+torrent holding a file and removes it by hash; the deletion pipeline above says
+when.
 
 ## Common Gotchas
 

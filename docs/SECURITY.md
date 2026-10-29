@@ -119,7 +119,7 @@ console.log('URL:', sanitizeUrl(requestUrl));
 
 ### Backend Security
 
-The backend implements comprehensive security through `app/services/security.py`:
+The backend implements comprehensive security through `app/services/shared/security.py`:
 - Token encryption/decryption (TokenManager)
 - Log data sanitization (SensitiveDataFilter)
 - CSRF protection (state token generation)

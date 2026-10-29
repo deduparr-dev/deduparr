@@ -270,6 +270,10 @@ class ArrClient:
             raise ArrConnectionError(f"Request timeout to {self.base_url}: {e}")
         except httpx.HTTPError as e:
             raise ArrClientError(f"HTTP error: {e}")
+        except ValueError as e:
+            raise ArrClientError(
+                f"Invalid JSON response from {self.base_url}{endpoint}: {e}"
+            )
 
     async def get_system_status(self) -> SystemStatus:
         """Get system status"""

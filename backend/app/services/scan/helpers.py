@@ -43,6 +43,7 @@ def build_file_metadata(
     if arr_quality:
         file_metadata["arr_quality"] = arr_quality.quality_name
         file_metadata["arr_custom_format_score"] = arr_quality.custom_format_score
+        file_metadata["arr_tracked"] = arr_quality.tracked
     return json.dumps(file_metadata)
 
 
@@ -86,7 +87,8 @@ async def rank_files(
             f"'{title}': {'keep' if keep else 'delete'} {metadata.file_path} - "
             f"{quality.quality_name} (profile rank {quality.quality_rank}, "
             f"revision {quality.revision[0]}.{quality.revision[1]}, "
-            f"custom format score {quality.custom_format_score}, score {score})"
+            f"custom format score {quality.custom_format_score}, "
+            f"{'tracked' if quality.tracked else 'untracked'} by the *arr, score {score})"
         )
     return ranked, arr_qualities
 

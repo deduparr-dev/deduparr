@@ -5,6 +5,9 @@ Mirrors the *arr upgrade logic (QualityModelComparer + custom format score):
 1. Position of the quality in the profile (a quality group counts as one rank)
 2. Revision (version, then real) - propers and repacks
 3. Custom format score
+
+When all three tie, the file the *arr tracks is preferred: deleting it would leave
+the *arr without a file until it imports the other copy.
 """
 
 import logging
@@ -53,10 +56,16 @@ class ArrQuality:
     quality_rank: int
     revision: Tuple[int, int]
     custom_format_score: int
+    tracked: bool = False
 
     @property
-    def sort_key(self) -> Tuple[int, Tuple[int, int], int]:
-        return (self.quality_rank, self.revision, self.custom_format_score)
+    def sort_key(self) -> Tuple[int, Tuple[int, int], int, bool]:
+        return (
+            self.quality_rank,
+            self.revision,
+            self.custom_format_score,
+            self.tracked,
+        )
 
 
 def get_quality_rank(profile: QualityProfile, quality_id: int) -> int:
@@ -79,10 +88,14 @@ def get_quality_rank(profile: QualityProfile, quality_id: int) -> int:
 
 
 def build_arr_quality(
-    resource: ArrFile, profile: QualityProfile
+    resource: ArrFile, profile: QualityProfile, tracked: bool = False
 ) -> Optional[ArrQuality]:
     """
     Build an ArrQuality from a moviefile, episodefile or manualimport resource.
+
+    Args:
+        tracked: True if the resource is a file the *arr tracks (moviefile or
+            episodefile), False if it comes from a manual import scan.
 
     Returns None if the *arr could not determine the file's quality.
     """
@@ -109,6 +122,7 @@ def build_arr_quality(
         quality_rank=get_quality_rank(profile, quality_id),
         revision=(revision.get("version", 1), revision.get("real", 0)),
         custom_format_score=score,
+        tracked=tracked,
     )
 
 
@@ -238,6 +252,7 @@ class ArrQualityRanker:
                 else client.get_episode_files_by_series_id(media_id)
             )
             resources = {f.get("path"): f for f in tracked_files}
+            tracked_paths = set(resources)
 
             untracked_folders = {
                 os.path.dirname(path) for path in file_paths if path not in resources
@@ -250,21 +265,25 @@ class ArrQualityRanker:
                 )
                 for item in items:
                     resources.setdefault(item.get("path"), item)
+
+            qualities: Dict[str, ArrQuality] = {}
+            for path in file_paths:
+                resource = resources.get(path)
+                if resource is None:
+                    raise ArrQualityUnavailable(f"{arr_name} does not know file {path}")
+                quality = build_arr_quality(
+                    resource, profile, tracked=path in tracked_paths
+                )
+                if quality is None:
+                    raise ArrQualityUnavailable(
+                        f"{arr_name} could not parse the quality of {path}"
+                    )
+                qualities[path] = quality
         except ArrClientError as e:
             raise ArrQualityUnavailable(f"{arr_name} request failed: {e}")
+        except (KeyError, TypeError, AttributeError) as e:
+            raise ArrQualityUnavailable(f"unexpected response from {arr_name}: {e!r}")
         finally:
             await client.close()
-
-        qualities: Dict[str, ArrQuality] = {}
-        for path in file_paths:
-            resource = resources.get(path)
-            if resource is None:
-                raise ArrQualityUnavailable(f"{arr_name} does not know file {path}")
-            quality = build_arr_quality(resource, profile)
-            if quality is None:
-                raise ArrQualityUnavailable(
-                    f"{arr_name} could not parse the quality of {path}"
-                )
-            qualities[path] = quality
 
         return qualities

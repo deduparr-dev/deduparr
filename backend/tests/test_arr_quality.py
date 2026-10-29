@@ -6,6 +6,7 @@ import json
 import logging
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -15,6 +16,7 @@ from app.main import app
 from app.models import Config, DuplicateSet
 from app.models.duplicate import MediaType
 from app.services.arr.client import (
+    ArrClientError,
     ArrConnectionError,
     RadarrClient,
     SonarrClient,
@@ -571,3 +573,138 @@ async def test_existing_set_rerank_uses_arr_ranker(test_db):
     files = {f.file_path: f for f in dup_set.files}
     assert files[bluray.file_path].keep is True
     assert files[web.file_path].keep is False
+
+
+# --- Unexpected *arr responses fall back instead of failing the scan ---
+
+
+def _radarr_client_answering(handler) -> RadarrClient:
+    client = RadarrClient(base_url="http://radarr:7878", api_key="key")
+    client._client = httpx.AsyncClient(
+        base_url="http://radarr:7878/api/v3", transport=httpx.MockTransport(handler)
+    )
+    return client
+
+
+@pytest.mark.asyncio
+async def test_client_raises_arr_client_error_on_non_json_response():
+    client = _radarr_client_answering(
+        lambda request: httpx.Response(200, text="<html>Sign in</html>")
+    )
+
+    with pytest.raises(ArrClientError, match="Invalid JSON response"):
+        await client.get_movie()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_falls_back_when_arr_answers_with_a_web_page(test_db):
+    client = _radarr_client_answering(
+        lambda request: httpx.Response(200, text="<html>Sign in</html>")
+    )
+    ranker = ArrQualityRanker(test_db)
+
+    with patch.object(ranker.radarr_service, "_get_client", return_value=client):
+        with pytest.raises(ArrQualityUnavailable, match="Radarr request failed"):
+            await ranker.evaluate(MediaType.MOVIE, ["/movies/Film (2020)/a.mkv"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "movies",
+    [
+        [{"id": 42, "path": "/movies/Film (2020)"}],  # no qualityProfileId
+        [{"path": "/movies/Film (2020)", "qualityProfileId": 4}],  # no id
+        [None],  # not an object
+    ],
+)
+async def test_evaluate_falls_back_on_a_malformed_movie(test_db, movies):
+    client = radarr_client_mock()
+    client.get_movie.return_value = movies
+    ranker = ArrQualityRanker(test_db)
+
+    with patch.object(ranker.radarr_service, "_get_client", return_value=client):
+        with pytest.raises(ArrQualityUnavailable, match="unexpected response"):
+            await ranker.evaluate(MediaType.MOVIE, ["/movies/Film (2020)/a.mkv"])
+
+    client.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_falls_back_on_a_malformed_file_listing(test_db):
+    client = radarr_client_mock()
+    client.get_movie_files.return_value = [None]
+    ranker = ArrQualityRanker(test_db)
+
+    with patch.object(ranker.radarr_service, "_get_client", return_value=client):
+        with pytest.raises(ArrQualityUnavailable, match="unexpected response"):
+            await ranker.evaluate(
+                MediaType.MOVIE, ["/movies/Film (2020)/Film.WEBDL-1080p.mkv"]
+            )
+
+
+# --- The file the *arr tracks wins a full tie ---
+
+
+def test_rank_tracked_file_wins_a_full_arr_tie_over_deduparr_score():
+    tracked = metadata("/m/tracked.mkv", size=1000)
+    untracked = metadata("/m/untracked.mkv", size=9000)
+    ranked = [(untracked, 40000, True), (tracked, 10000, False)]
+    qualities = {
+        "/m/tracked.mkv": ArrQuality("Bluray-1080p", 2, (1, 0), 0, tracked=True),
+        "/m/untracked.mkv": ArrQuality("Bluray-1080p", 2, (1, 0), 0, tracked=False),
+    }
+
+    result = rank_by_arr_quality(ranked, qualities)
+
+    assert result[0][0] is tracked and result[0][2] is True
+    assert result[1][2] is False
+
+
+def test_rank_a_better_untracked_file_still_beats_the_tracked_one():
+    tracked = metadata("/m/tracked.mkv")
+    untracked = metadata("/m/untracked.mkv")
+    ranked = [(tracked, 40000, True), (untracked, 10000, False)]
+    qualities = {
+        "/m/tracked.mkv": ArrQuality("WEBDL-1080p", 0, (1, 0), 0, tracked=True),
+        "/m/untracked.mkv": ArrQuality("Remux-1080p", 3, (1, 0), 0, tracked=False),
+    }
+
+    result = rank_by_arr_quality(ranked, qualities)
+
+    assert result[0][0] is untracked and result[0][2] is True
+
+
+@pytest.mark.asyncio
+async def test_evaluate_marks_which_files_the_arr_tracks(test_db):
+    client = radarr_client_mock()
+    ranker = ArrQualityRanker(test_db)
+    tracked = "/movies/Film (2020)/Film.WEBDL-1080p.mkv"
+    untracked = "/downloads/Film.2020.Remux-1080p.mkv"
+
+    with patch.object(ranker.radarr_service, "_get_client", return_value=client):
+        qualities = await ranker.evaluate(MediaType.MOVIE, [tracked, untracked])
+
+    assert qualities[tracked].tracked is True
+    assert qualities[untracked].tracked is False
+
+
+@pytest.mark.asyncio
+async def test_create_set_stores_whether_the_arr_tracks_each_file(test_db, caplog):
+    ranker = AsyncMock(spec=ArrQualityRanker)
+    ranker.evaluate.return_value = {
+        "/movies/Film (2020)/Film.2020.1080p.WEB-DL.x265.mkv": ArrQuality(
+            "Bluray-1080p", 2, (1, 0), 0, tracked=True
+        ),
+        "/movies/Film (2020)/Film.2020.1080p.BluRay.x264.mkv": ArrQuality(
+            "Bluray-1080p", 2, (1, 0), 0, tracked=False
+        ),
+    }
+
+    dup_set = await _create_set(test_db, ranker, caplog)
+
+    kept = [f for f in dup_set.files if f.keep]
+    assert [f.file_path for f in kept] == [
+        "/movies/Film (2020)/Film.2020.1080p.WEB-DL.x265.mkv"
+    ]
+    assert json.loads(kept[0].file_metadata)["arr_tracked"] is True
+    assert "untracked by the *arr" in caplog.text

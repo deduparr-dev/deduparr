@@ -232,7 +232,8 @@ Files are then ranked the way Radarr/Sonarr rank upgrades:
 1. **Quality** - Position in the movie's/series' quality profile (a quality group counts as one rank)
 2. **Revision** - Propers and repacks beat the original release
 3. **Custom format score** - As calculated by the quality profile
-4. **Deduparr score** - Only breaks ties
+4. **Tracked by the *arr** - When all of the above tie, the file Radarr/Sonarr track is kept, so they are not left without a file
+5. **Deduparr score** - Only breaks the remaining ties
 
 Radarr is used for movies and Sonarr for episodes. Tracked files are read from `/api/v3/moviefile` or `/api/v3/episodefile`. Files the *arr does not track yet are evaluated with `/api/v3/manualimport` against the item's own quality profile. When the kept file is untracked, the deletion pipeline's existing rescan makes the *arr import it.
 

@@ -18,13 +18,60 @@ import {
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  MEDIA_SERVER_NAMES,
   scanAPI,
   configAPI,
   setupAPI,
+  type AppConfig,
   type DuplicateSet as ApiDuplicateSet,
   type DuplicateFile,
+  type DeleteResponse,
+  type DeleteAllResponse,
+  type LibrarySelection,
+  type MediaLibrary,
 } from "@/services/api";
 import { toast } from "@/components/ui/use-toast";
+
+const SHOWN_ERRORS = 3;
+
+function deletionTitle({ success, dry_run }: DeleteResponse | DeleteAllResponse): string {
+  if (!success) return dry_run ? "Dry Run Found Problems" : "Deletion Incomplete";
+  return dry_run ? "Dry Run Complete" : "Deletion Complete";
+}
+
+function showDeletionResult(result: DeleteResponse | DeleteAllResponse) {
+  const hidden = result.errors.length - SHOWN_ERRORS;
+  toast({
+    title: deletionTitle(result),
+    description: (
+      <div className="space-y-1">
+        <div>{result.message}</div>
+        {result.errors.slice(0, SHOWN_ERRORS).map((error) => (
+          <div key={error} className="text-xs break-all">
+            {error}
+          </div>
+        ))}
+        {hidden > 0 && <div className="text-xs">…and {hidden} more</div>}
+      </div>
+    ),
+    variant: result.success ? undefined : "destructive",
+  });
+}
+
+function namesIn(value?: string): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+/** The libraries each server is set to scan, as stored */
+function storedSelection(config?: AppConfig): LibrarySelection {
+  return {
+    plex: namesIn(config?.plex_libraries),
+    jellyfin: namesIn(config?.jellyfin_libraries),
+  };
+}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 Bytes";
@@ -139,7 +186,7 @@ function DuplicateSetCard({
   }
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden" data-testid={`duplicate-set-${dupSet.id}`}>
       {/* Header */}
       <div className="p-3 md:p-4 bg-muted/50">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -168,13 +215,14 @@ function DuplicateSetCard({
                   {dupSet.media_type}
                 </Badge>
                 <Badge variant="outline" className="text-xs" data-testid="set-media-server">
-                  {dupSet.media_server}
+                  {MEDIA_SERVER_NAMES[dupSet.media_server] ?? dupSet.media_server}
                 </Badge>
                 <Badge variant="outline" className="text-xs">
                   Versions: {dupSet.files.length}
                 </Badge>
                 <Badge variant="outline" className="text-xs">
-                  Can reclaim: {formatBytes(dupSet.space_to_reclaim)}
+                  {dupSet.status === "processed" ? "Reclaimed" : "Can reclaim"}:{" "}
+                  {formatBytes(dupSet.space_to_reclaim)}
                 </Badge>
               </div>
             </div>
@@ -318,17 +366,27 @@ function DuplicateSetCard({
 }
 
 export default function Scan() {
-  const [selectedLibraries, setSelectedLibraries] = useState<string[]>([]);
+  // The stored selection until the user changes it here
+  const [pickedLibraries, setPickedLibraries] = useState<LibrarySelection | null>(null);
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: () => configAPI.getAll(),
+  });
+  const selection = pickedLibraries ?? storedSelection(config);
   const queryClient = useQueryClient();
 
-  // Check if Plex is configured
-  const { data: config } = useQuery({
-    queryKey: ["plexConfig"],
-    queryFn: () => configAPI.getAll(),
-    staleTime: 10 * 60 * 1000,
-  });
-
-  const plexConfigured = !!config?.plex_auth_token;
+  // Everything a scan or a deletion can change
+  const refreshDuplicateQueries = () => {
+    for (const key of [
+      "duplicates",
+      "scanStatus",
+      "dashboardStats",
+      "recentActivity",
+      "recentDeletions",
+    ]) {
+      queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  };
 
   // Fetch deep scan setting
   const { data: deepScanData } = useQuery({
@@ -343,7 +401,6 @@ export default function Scan() {
   const { data: libraries = [], isPending: librariesPending } = useQuery({
     queryKey: ["mediaLibraries"],
     queryFn: () => setupAPI.getMediaLibraries(),
-    enabled: plexConfigured, // Only run query if plex_auth_token exists in config
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes
     retry: false, // Don't retry failed requests to avoid delays
   });
@@ -365,35 +422,22 @@ export default function Scan() {
 
   // Start scan mutation
   const startScanMutation = useMutation({
-    mutationFn: (libraryNames: string[]) => scanAPI.startScan({ library_names: libraryNames }),
-    onSuccess: async (data) => {
-      const totalSets = data.total_sets || data.sets_created;
-      const newSets = data.sets_created || 0;
-      const existingSets = data.sets_already_exist || 0;
-
-      // Build description with helpful context
-      const mainMessage = `Found ${data.duplicates_found} duplicate files. ${newSets} new sets, ${existingSets} existing sets (${totalSets} total).`;
-
-      // Add helpful explanation if files found but no sets created
-      const showWarning = data.duplicates_found > 0 && totalSets === 0;
-
+    mutationFn: (libraries: LibrarySelection) => scanAPI.startScan({ libraries }),
+    onSuccess: (data) => {
       toast({
         title: "Scan Complete",
-        description: showWarning ? (
+        description: (
           <div>
-            <div>{mainMessage}</div>
-            <div className="mt-2">No sets created because files are missing on disk.</div>
+            <div>{data.message}</div>
+            {data.duplicates_found > 0 && data.total_sets === 0 && (
+              <div className="mt-2">No sets created because files are missing on disk.</div>
+            )}
           </div>
-        ) : (
-          <div>{mainMessage}</div>
         ),
       });
-
-      // Invalidate all caches to update dashboard immediately
-      await queryClient.invalidateQueries({ queryKey: ["duplicates"] });
-      await queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-      await queryClient.invalidateQueries({ queryKey: ["recentActivity"] });
+      refreshDuplicateQueries();
+      // The selection scanned is now the stored one
+      queryClient.invalidateQueries({ queryKey: ["config"] });
     },
     onError: (error: Error) => {
       toast({
@@ -412,18 +456,8 @@ export default function Scan() {
     mutationFn: ({ setId, dryRun }: { setId: number; dryRun: boolean }) =>
       scanAPI.deleteDuplicateSet(setId, dryRun),
     onSuccess: (data) => {
-      toast({
-        title: data.dry_run ? "Dry Run Complete" : "Deletion Complete",
-        description: <div>{data.message}</div>,
-      });
-      if (!data.dry_run) {
-        // Invalidate all relevant caches to show updated stats immediately
-        queryClient.invalidateQueries({ queryKey: ["duplicates"] });
-        queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
-        queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-        queryClient.invalidateQueries({ queryKey: ["recentActivity"] });
-        queryClient.invalidateQueries({ queryKey: ["recentDeletions"] });
-      }
+      showDeletionResult(data);
+      if (!data.dry_run) refreshDuplicateQueries();
     },
     onError: (error: Error) => {
       toast({
@@ -438,19 +472,9 @@ export default function Scan() {
   const deleteAllMutation = useMutation({
     mutationFn: (dryRun: boolean) => scanAPI.deleteAllDuplicateSets(dryRun),
     onSuccess: (data) => {
-      toast({
-        title: data.dry_run ? "Dry Run Complete" : "Deletion Complete",
-        description: <div>{data.message}</div>,
-        variant: data.success ? undefined : "destructive",
-      });
+      showDeletionResult(data);
       setShowDeleteAllConfirm(false);
-      if (!data.dry_run) {
-        queryClient.invalidateQueries({ queryKey: ["duplicates"] });
-        queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
-        queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-        queryClient.invalidateQueries({ queryKey: ["recentActivity"] });
-        queryClient.invalidateQueries({ queryKey: ["recentDeletions"] });
-      }
+      if (!data.dry_run) refreshDuplicateQueries();
     },
     onError: (error: Error) => {
       toast({
@@ -489,9 +513,25 @@ export default function Scan() {
     },
   });
 
+  function isSelected(library: MediaLibrary) {
+    return selection[library.server]?.includes(library.title) ?? false;
+  }
+
+  // Every listed server is sent, so one with nothing ticked stores that; a
+  // server that could not be listed keeps its selection.
+  const scanSelection: LibrarySelection = Object.fromEntries(
+    [...new Set(libraries.map((library) => library.server))].map((server) => [
+      server,
+      libraries
+        .filter((library) => library.server === server && isSelected(library))
+        .map((library) => library.title),
+    ])
+  );
+  const nothingSelected = Object.values(scanSelection).every((titles) => titles.length === 0);
+
   function handleStartScan() {
-    if (selectedLibraries.length === 0) return;
-    startScanMutation.mutate(selectedLibraries);
+    if (nothingSelected) return;
+    startScanMutation.mutate(scanSelection);
   }
 
   function handleDelete(setId: number, dryRun: boolean) {
@@ -502,10 +542,14 @@ export default function Scan() {
     toggleKeepMutation.mutate({ setId, fileId, keep });
   }
 
-  function toggleLibrary(library: string) {
-    setSelectedLibraries((prev) =>
-      prev.includes(library) ? prev.filter((l) => l !== library) : [...prev, library]
-    );
+  function toggleLibrary(library: MediaLibrary) {
+    const titles = selection[library.server] ?? [];
+    setPickedLibraries({
+      ...selection,
+      [library.server]: isSelected(library)
+        ? titles.filter((title) => title !== library.title)
+        : [...titles, library.title],
+    });
   }
 
   const isScanning = startScanMutation.isPending;
@@ -520,15 +564,12 @@ export default function Scan() {
   // Dev-only: Direct disk scan mutation
   const devScanMutation = useMutation({
     mutationFn: () => scanAPI.devDiskScan(),
-    onSuccess: async (data) => {
+    onSuccess: (data) => {
       toast({
         title: "Dev Scan Complete",
         description: `Created ${data.sets_created} duplicate sets (${data.duplicates_found} files)`,
       });
-      // Invalidate all caches to show results immediately
-      await queryClient.invalidateQueries({ queryKey: ["duplicates"] });
-      await queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
+      refreshDuplicateQueries();
     },
     onError: (error: Error) => {
       toast({
@@ -599,28 +640,36 @@ export default function Scan() {
             ) : libraries.length === 0 ? (
               <div className="p-4 rounded-lg bg-muted border border-border">
                 <p className="text-sm text-muted-foreground">
-                  No libraries found. Please{" "}
-                  <Link to="/setup" className="text-primary hover:underline">
-                    run the Setup Wizard
-                  </Link>{" "}
-                  to configure Plex.
+                  No libraries found. Check your media server in{" "}
+                  <Link to="/settings" className="text-primary hover:underline">
+                    Settings
+                  </Link>
+                  .
                 </p>
               </div>
             ) : (
               <div className="space-y-2">
                 {libraries.map((library) => (
-                  <div key={library.key} className="flex items-center gap-2">
+                  <div key={`${library.server}:${library.key}`} className="flex items-center gap-2">
                     <Checkbox
-                      id={library.key}
-                      checked={selectedLibraries.includes(library.title)}
-                      onCheckedChange={() => toggleLibrary(library.title)}
+                      id={`scan-${library.server}-${library.key}`}
+                      checked={isSelected(library)}
+                      onCheckedChange={() => toggleLibrary(library)}
                     />
-                    <label htmlFor={library.key} className="text-sm cursor-pointer">
+                    <label
+                      htmlFor={`scan-${library.server}-${library.key}`}
+                      className="text-sm cursor-pointer"
+                    >
                       {library.title}{" "}
-                      <span className="text-muted-foreground">({library.type})</span>
+                      <span className="text-muted-foreground">
+                        ({library.type}) on {MEDIA_SERVER_NAMES[library.server] ?? library.server}
+                      </span>
                     </label>
                   </div>
                 ))}
+                <p className="text-xs text-muted-foreground pt-1">
+                  Scheduled scans use the same selection.
+                </p>
               </div>
             )}
           </div>
@@ -629,7 +678,7 @@ export default function Scan() {
         <div className="flex flex-wrap gap-2">
           <Button
             size="lg"
-            disabled={selectedLibraries.length === 0 || isScanning}
+            disabled={nothingSelected || isScanning}
             onClick={handleStartScan}
             className="w-full sm:w-auto"
           >

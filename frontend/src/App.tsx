@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { configAPI } from "./services/api";
 import { Layout } from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Scan from "./pages/Scan";
@@ -18,11 +19,7 @@ function AppRoutes() {
   // Deduparr needs a media server, not Plex specifically
   const { data: config } = useQuery({
     queryKey: ["config"],
-    queryFn: async () => {
-      const response = await fetch("/api/config/");
-      if (!response.ok) return null;
-      return response.json();
-    },
+    queryFn: () => configAPI.getAll(),
     retry: false,
   });
 

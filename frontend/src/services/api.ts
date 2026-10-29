@@ -37,9 +37,12 @@ export interface DeletionActivity {
   error: string | null;
 }
 
+/** Library titles to scan, per media server ("plex", "jellyfin") */
+export type LibrarySelection = Record<string, string[]>;
+
 export interface ScanRequest {
-  library_names: string[];
-  // media_types removed - auto-detected from library type
+  /** Becomes each server's stored selection; left out, the stored one is scanned */
+  libraries?: LibrarySelection;
 }
 
 export interface ScanResponse {
@@ -47,7 +50,8 @@ export interface ScanResponse {
   message: string;
   duplicates_found: number;
   sets_created: number;
-  sets_already_exist: number;
+  sets_updated: number;
+  sets_removed: number;
   total_sets: number;
 }
 
@@ -109,6 +113,12 @@ export interface MediaLibrary {
   /** Which media server reported this library: "plex" or "jellyfin" */
   server: string;
 }
+
+/** How each media server is named on screen */
+export const MEDIA_SERVER_NAMES: Record<string, string> = {
+  plex: "Plex",
+  jellyfin: "Jellyfin",
+};
 
 export interface JellyfinConfig {
   url: string;
@@ -186,7 +196,7 @@ export interface LogsResponse {
   limit: number;
 }
 
-export interface PlexConfig {
+export interface AppConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
   plex_libraries?: string;
@@ -209,14 +219,6 @@ export interface PlexConfig {
   smtp_user?: string;
   smtp_password?: string;
   smtp_from_email?: string;
-}
-
-export interface SetupStatus {
-  plex_configured: boolean;
-  radarr_configured: boolean;
-  sonarr_configured: boolean;
-  qbittorrent_configured: boolean;
-  is_complete: boolean;
 }
 
 export interface PlexAuthResponse {
@@ -380,9 +382,7 @@ export interface SchedulerConfig {
 }
 
 export const configAPI = {
-  getAll: () => fetchAPI<PlexConfig>("/api/config/"),
-  // Use GET endpoint that reads credentials from DB
-  getPlexLibraries: () => fetchAPI<PlexLibrary[]>("/api/setup/plex/libraries"),
+  getAll: () => fetchAPI<AppConfig>("/api/config/"),
 
   // Deep scan configuration
   getDeepScanSetting: () => fetchAPI<DeepScanSetting>("/api/config/deep-scan"),
@@ -407,8 +407,6 @@ export const configAPI = {
 };
 
 export const setupAPI = {
-  getStatus: () => fetchAPI<SetupStatus>("/api/setup/status"),
-
   // Plex OAuth
   initiatePlexAuth: () => fetchAPI<PlexAuthResponse>("/api/setup/plex/auth/initiate"),
   checkPlexAuth: (pinId: string) =>
@@ -430,16 +428,7 @@ export const setupAPI = {
   testQBittorrent: (config: QBittorrentConfig) =>
     postAPI<ServiceTestResponse, QBittorrentConfig>("/api/setup/test/qbittorrent", config),
 
-  // Service configuration
-  configureRadarr: (config: ServiceConfig) =>
-    putAPI<ServiceTestResponse, ServiceConfig>("/api/setup/configure/radarr", config),
-  configureSonarr: (config: ServiceConfig) =>
-    putAPI<ServiceTestResponse, ServiceConfig>("/api/setup/configure/sonarr", config),
-  configureQBittorrent: (config: QBittorrentConfig) =>
-    putAPI<ServiceTestResponse, QBittorrentConfig>("/api/setup/configure/qbittorrent", config),
-
   // Plex libraries
-  getPlexLibraries: () => fetchAPI<PlexLibrary[]>("/api/setup/plex/libraries"),
   getPlexLibrariesWithAuth: (authToken: string, serverName: string) =>
     postAPI<PlexLibrary[], { auth_token: string; server_name: string }>(
       "/api/setup/plex/libraries",

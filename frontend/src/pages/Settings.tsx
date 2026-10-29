@@ -795,7 +795,7 @@ function ServiceSettings({
 
 export default function Settings() {
   const { data: plexConfig, isPending: plexPending } = useQuery({
-    queryKey: ["plexConfig"],
+    queryKey: ["config"],
     queryFn: () => configAPI.getAll(),
     staleTime: 10 * 60 * 1000,
   });
@@ -890,11 +890,11 @@ function SettingsContent({
         await configAPI.updateArrQualityProfileSetting(preferArrQualityProfile);
 
         // Build config object, only including non-empty values
+        // Library selections are made on the Scan page, so they are left out
+        // rather than written back from what was loaded here
         const config: Record<string, string> = {
           plex_auth_token: initialConfig.plex_auth_token || "",
           plex_server_name: selectedServer,
-          plex_libraries: initialConfig.plex_libraries || "",
-          jellyfin_libraries: initialConfig.jellyfin_libraries || "",
         };
 
         if (jellyfinUrl) {
@@ -944,7 +944,7 @@ function SettingsContent({
         }
 
         // Invalidate caches to refetch fresh data from backend
-        queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
+        queryClient.invalidateQueries({ queryKey: ["config"] });
         queryClient.invalidateQueries({ queryKey: ["config", "deep-scan"] });
 
         // Save scheduler configuration

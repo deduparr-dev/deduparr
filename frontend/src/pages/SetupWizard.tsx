@@ -6,7 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Loader2, Check, X, Film, Tv, Download, AlertCircle, Server } from "lucide-react";
-import { setupAPI, type MediaLibrary } from "@/services/api";
+import {
+  MEDIA_SERVER_NAMES,
+  setupAPI,
+  type MediaLibrary,
+  type ServiceTestResponse,
+} from "@/services/api";
 import { useQueryClient } from "@tanstack/react-query";
 
 interface ConnectionTestResult {
@@ -152,6 +157,15 @@ export default function SetupWizard() {
   const [error, setError] = useState<string>("");
   const [testResults, setTestResults] = useState<Record<string, ConnectionTestResult>>({});
 
+  /** A result only holds for the details it was tested with. */
+  function forgetTest(service: string) {
+    setTestResults((prev) => {
+      const next = { ...prev };
+      delete next[service];
+      return next;
+    });
+  }
+
   function closeAuthWindow() {
     if (plexAuthWindowRef.current && !plexAuthWindowRef.current.closed) {
       plexAuthWindowRef.current.close();
@@ -275,7 +289,6 @@ export default function SetupWizard() {
 
     startLibrariesTransition(async () => {
       try {
-        console.log("Loading Plex libraries for server:", serverName);
         const plexLibs = await setupAPI.getPlexLibrariesWithAuth(authToken, serverName);
         setLibraries((prev) => [
           ...prev.filter((lib) => lib.server !== "plex"),
@@ -323,33 +336,31 @@ export default function SetupWizard() {
     }
   }
 
-  function handleTestJellyfin() {
+  /** Run a connection test and keep its outcome under the service's name. */
+  function runTest(service: string, test: () => Promise<ServiceTestResponse>) {
     setError("");
     startTransition(async () => {
+      let result: ConnectionTestResult;
       try {
-        const result = await setupAPI.testJellyfin({
-          url: jellyfinUrl,
-          api_key: jellyfinApiKey,
-        });
-        setTestResults((prev) => ({
-          ...prev,
-          jellyfin: {
-            success: result.success,
-            error: result.success ? undefined : (result.error ?? result.message),
-            server_name: result.server_name,
-            version: result.version,
-          },
-        }));
+        const response = await test();
+        result = {
+          success: response.success,
+          error: response.success ? undefined : (response.error ?? response.message),
+          server_name: response.server_name,
+          version: response.version,
+        };
       } catch (err) {
-        setTestResults((prev) => ({
-          ...prev,
-          jellyfin: {
-            success: false,
-            error: err instanceof Error ? err.message : "Connection failed",
-          },
-        }));
+        result = {
+          success: false,
+          error: err instanceof Error ? err.message : "Connection failed",
+        };
       }
+      setTestResults((prev) => ({ ...prev, [service]: result }));
     });
+  }
+
+  function handleTestJellyfin() {
+    runTest("jellyfin", () => setupAPI.testJellyfin({ url: jellyfinUrl, api_key: jellyfinApiKey }));
   }
 
   const scannableLibraries = libraries.filter(
@@ -389,13 +400,13 @@ export default function SetupWizard() {
   }
 
   function testService(service: "radarr" | "sonarr" | "qbittorrent") {
-    startTransition(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setTestResults((prev) => ({
-        ...prev,
-        [service]: { success: true, version: "4.5.2.1234" },
-      }));
-    });
+    const tests = {
+      radarr: () => setupAPI.testRadarr({ url: radarrUrl, api_key: radarrApiKey }),
+      sonarr: () => setupAPI.testSonarr({ url: sonarrUrl, api_key: sonarrApiKey }),
+      qbittorrent: () =>
+        setupAPI.testQBittorrent({ url: qbitUrl, username: qbitUsername, password: qbitPassword }),
+    };
+    runTest(service, tests[service]);
   }
 
   function completeSetup() {
@@ -457,12 +468,11 @@ export default function SetupWizard() {
           method: "POST",
         });
 
-        // Invalidate all queries to refresh data after setup
-        queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
-        queryClient.invalidateQueries({ queryKey: ["plexLibraries"] });
+        // The app sends anyone without a media server back here, so it has
+        // to see the new configuration before the dashboard loads.
+        await queryClient.invalidateQueries({ queryKey: ["config"] });
+        queryClient.invalidateQueries({ queryKey: ["mediaLibraries"] });
         queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-
-        // Redirect to dashboard immediately
         navigate("/");
       } catch (error) {
         console.error("Setup failed:", error);
@@ -750,7 +760,10 @@ export default function SetupWizard() {
                   <Input
                     id="jellyfin-url"
                     value={jellyfinUrl}
-                    onChange={(e) => setJellyfinUrl(e.target.value)}
+                    onChange={(e) => {
+                      setJellyfinUrl(e.target.value);
+                      forgetTest("jellyfin");
+                    }}
                     placeholder="http://jellyfin:8096"
                     className="mt-1"
                   />
@@ -761,7 +774,10 @@ export default function SetupWizard() {
                     id="jellyfin-api-key"
                     type="password"
                     value={jellyfinApiKey}
-                    onChange={(e) => setJellyfinApiKey(e.target.value)}
+                    onChange={(e) => {
+                      setJellyfinApiKey(e.target.value);
+                      forgetTest("jellyfin");
+                    }}
                     placeholder="Administrator API key"
                     className="mt-1"
                   />
@@ -860,7 +876,7 @@ export default function SetupWizard() {
                           ({library.type})
                         </span>
                         <span className="text-xs text-muted-foreground ml-2">
-                          on {library.server}
+                          on {MEDIA_SERVER_NAMES[library.server] ?? library.server}
                         </span>
                       </div>
                     </label>
@@ -871,7 +887,7 @@ export default function SetupWizard() {
               {!isLoadingLibraries && libraries.length > 0 && (
                 <Card className="p-3 md:p-4 bg-card border-border">
                   <p className="text-xs md:text-sm text-muted-foreground">
-                    Tip: You can change library selection later in Settings
+                    Tip: You can change this selection on the Scan page
                   </p>
                 </Card>
               )}
@@ -918,16 +934,15 @@ export default function SetupWizard() {
                     <p className="font-semibold mb-1">These services are optional:</p>
                     <ul className="space-y-1 text-muted-foreground">
                       <li>
-                        • <strong>Without these services:</strong> View duplicates and delete
-                        manually
+                        • <strong>Without them:</strong> Deduparr deletes the files itself
                       </li>
                       <li>
-                        • <strong>With qBittorrent:</strong> Automatically remove library items from
-                        qBittorrent
+                        • <strong>With qBittorrent:</strong> a deleted file's torrent is removed
+                        when nothing else needs it
                       </li>
                       <li>
-                        • <strong>With Radarr/Sonarr:</strong> Remove from library to prevent
-                        re-acquisition
+                        • <strong>With Radarr/Sonarr:</strong> files are deleted through them, so
+                        they are not downloaded again
                       </li>
                       <li>• You can configure these later in Settings</li>
                     </ul>
@@ -950,7 +965,10 @@ export default function SetupWizard() {
                       id="radarr-url"
                       type="url"
                       value={radarrUrl}
-                      onChange={(e) => setRadarrUrl(e.target.value)}
+                      onChange={(e) => {
+                        setRadarrUrl(e.target.value);
+                        forgetTest("radarr");
+                      }}
                       placeholder="http://localhost:7878"
                       className="mt-2 text-sm"
                     />
@@ -963,7 +981,10 @@ export default function SetupWizard() {
                       id="radarr-key"
                       type="password"
                       value={radarrApiKey}
-                      onChange={(e) => setRadarrApiKey(e.target.value)}
+                      onChange={(e) => {
+                        setRadarrApiKey(e.target.value);
+                        forgetTest("radarr");
+                      }}
                       placeholder="Enter your Radarr API key"
                       className="mt-2 text-sm"
                     />
@@ -994,7 +1015,10 @@ export default function SetupWizard() {
                       id="sonarr-url"
                       type="url"
                       value={sonarrUrl}
-                      onChange={(e) => setSonarrUrl(e.target.value)}
+                      onChange={(e) => {
+                        setSonarrUrl(e.target.value);
+                        forgetTest("sonarr");
+                      }}
                       placeholder="http://localhost:8989"
                       className="mt-2 text-sm"
                     />
@@ -1007,7 +1031,10 @@ export default function SetupWizard() {
                       id="sonarr-key"
                       type="password"
                       value={sonarrApiKey}
-                      onChange={(e) => setSonarrApiKey(e.target.value)}
+                      onChange={(e) => {
+                        setSonarrApiKey(e.target.value);
+                        forgetTest("sonarr");
+                      }}
                       placeholder="Enter your Sonarr API key"
                       className="mt-2 text-sm"
                     />
@@ -1038,7 +1065,10 @@ export default function SetupWizard() {
                       id="qbit-url"
                       type="url"
                       value={qbitUrl}
-                      onChange={(e) => setQbitUrl(e.target.value)}
+                      onChange={(e) => {
+                        setQbitUrl(e.target.value);
+                        forgetTest("qbittorrent");
+                      }}
                       placeholder="http://localhost:8080"
                       className="mt-2 text-sm"
                     />
@@ -1050,7 +1080,10 @@ export default function SetupWizard() {
                     <Input
                       id="qbit-user"
                       value={qbitUsername}
-                      onChange={(e) => setQbitUsername(e.target.value)}
+                      onChange={(e) => {
+                        setQbitUsername(e.target.value);
+                        forgetTest("qbittorrent");
+                      }}
                       placeholder="admin"
                       className="mt-2 text-sm"
                     />
@@ -1063,7 +1096,10 @@ export default function SetupWizard() {
                       id="qbit-pass"
                       type="password"
                       value={qbitPassword}
-                      onChange={(e) => setQbitPassword(e.target.value)}
+                      onChange={(e) => {
+                        setQbitPassword(e.target.value);
+                        forgetTest("qbittorrent");
+                      }}
                       placeholder="Enter your qBittorrent password"
                       className="mt-2 text-sm"
                     />

@@ -72,6 +72,22 @@ async def selected_libraries(
     return [name.strip() for name in config.value.split(",") if name.strip()]
 
 
+async def save_selected_libraries(
+    db: AsyncSession, selection: Dict[MediaServerType, List[str]]
+) -> None:
+    """Store which libraries to scan on each server named, nothing included."""
+    for server_type, names in selection.items():
+        key = libraries_config_key(server_type)
+        value = ",".join(names)
+        config = (
+            await db.execute(select(Config).where(Config.key == key))
+        ).scalar_one_or_none()
+        if config:
+            config.value = value
+        else:
+            db.add(Config(key=key, value=value))
+
+
 async def configured_types(db: AsyncSession) -> List[MediaServerType]:
     """Media servers this instance has credentials for, in a stable order."""
     result = await db.execute(select(Config.key, Config.value))
@@ -122,6 +138,7 @@ __all__ = [
     "get_media_servers",
     "is_sample_file",
     "libraries_config_key",
+    "save_selected_libraries",
     "probe_file",
     "selected_libraries",
 ]

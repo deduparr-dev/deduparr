@@ -5,7 +5,7 @@ Scan routes for triggering and managing duplicate detection
 import json
 import logging
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -26,7 +26,9 @@ from app.services.scan.disk_scan import (
 )
 from app.services.media_server import (
     MediaServer,
+    MediaServerType,
     get_media_servers,
+    save_selected_libraries,
 )
 from app.services.scan.runner import run_scan
 from app.services.scan.scoring_engine import ScoringEngine
@@ -39,8 +41,9 @@ router = APIRouter()
 class ScanRequest(BaseModel):
     """Request to start a duplicate scan"""
 
-    library_names: List[str]
-    # media_types removed - auto-detected from library type
+    # The libraries to scan on each server, kept as the selection scheduled
+    # scans use as well. Left out, the stored selection is scanned.
+    libraries: Optional[Dict[MediaServerType, List[str]]] = None
 
 
 class ScanResponse(BaseModel):
@@ -141,13 +144,15 @@ async def start_scan(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Scan the named libraries for duplicates.
+    Scan every configured media server over the libraries chosen for it.
 
-    Every configured media server is scanned, each over the libraries chosen
-    for it. Passing library_names overrides those selections for this run.
+    A selection sent along replaces the stored one first, so scheduled scans
+    cover the same libraries as the last manual one.
     """
     await get_configured_media_servers(db)
-    totals = await run_scan(db, scan_request.library_names or None)
+    if scan_request.libraries is not None:
+        await save_selected_libraries(db, scan_request.libraries)
+    totals = await run_scan(db)
 
     total_result = await db.execute(
         select(func.count(DuplicateSet.id)).where(
@@ -320,91 +325,31 @@ async def delete_duplicate_set(
             status_code=400, detail="This duplicate set has already been processed"
         )
 
-    files_to_delete = [f for f in duplicate_set.files if not f.keep]
-    files_to_keep = [f for f in duplicate_set.files if f.keep]
-
-    if not files_to_delete:
+    if all(f.keep for f in duplicate_set.files):
         raise HTTPException(
             status_code=400, detail="No files marked for deletion in this set"
         )
 
-    # Log which files are being kept vs deleted for clarity
-    logger.info(f"Processing duplicate set '{duplicate_set.title}' (ID: {set_id})")
-    for file in files_to_keep:
-        logger.info(f"  KEEPING (score {file.score}): {file.file_path}")
-    for file in files_to_delete:
-        logger.info(f"  DELETING (score {file.score}): {file.file_path}")
-
-    pipeline = DeletionPipeline(db, dry_run=delete_request.dry_run)
-
-    deleted_count = 0
-    total_space = 0
-    errors = []
-    warnings = []
-
-    # Delete all files WITHOUT triggering individual rescans
-    for file in files_to_delete:
-        try:
-            history = await pipeline.delete_file(
-                file.id,
-                skip_qbit=False,
-                skip_rescan=True,  # Skip rescan during deletion
-            )
-            deleted_count += 1
-            total_space += file.file_size
-
-            # Collect warnings from deletion history
-            if history.error and history.is_complete:
-                # Deletion succeeded but with warnings about unconfigured services
-                warnings.append(history.error)
-
-            logger.info(
-                f"{'[DRY-RUN] Would delete' if delete_request.dry_run else 'Deleted'} file: {file.file_path}"
-            )
-        except Exception as e:
-            error_msg = f"Failed to delete {file.file_path}: {str(e)}"
-            logger.error(error_msg)
-            errors.append(error_msg)
-
-    # After ALL deletions complete, trigger ONE rescan using the kept file
-    if deleted_count > 0 and files_to_keep:
-        kept_file = files_to_keep[0]  # There's only one kept file per set
-        try:
-            # The deletion pipeline saves arr_media_id in history, pass the set ID
-            # so rescan_for_kept_file can query it from deletion history
-            await pipeline.rescan_for_kept_file(
-                duplicate_set.media_type, kept_file.file_path, duplicate_set.id
-            )
-            logger.info(
-                f"Triggered *arr rescan to import kept file: {kept_file.file_path}"
-            )
-        except Exception as e:
-            # Rescan failure is non-critical
-            logger.warning(f"Failed to trigger *arr rescan (non-critical): {e}")
-
-    if not delete_request.dry_run and deleted_count > 0:
-        duplicate_set.status = DuplicateStatus.PROCESSED
+    outcome = await DeletionPipeline(db, dry_run=delete_request.dry_run).delete_set(
+        duplicate_set
+    )
+    if not delete_request.dry_run:
         await db.commit()
 
-    # Build message with warnings if any
-    base_message = (
+    message = (
         f"{'[DRY-RUN] Would delete' if delete_request.dry_run else 'Deleted'} "
-        f"{deleted_count} file(s) from duplicate set '{duplicate_set.title}'"
+        f"{outcome.files_deleted} file(s) from duplicate set '{duplicate_set.title}'"
     )
-
-    if warnings and not delete_request.dry_run:
-        # Get unique warnings
-        unique_warnings = list(set(warnings))
-        warning_text = "; ".join(unique_warnings)
-        base_message += f". Note: {warning_text}"
+    if outcome.warnings and not delete_request.dry_run:
+        message += f". Note: {'; '.join(dict.fromkeys(outcome.warnings))}"
 
     return DeleteResponse(
-        success=len(errors) == 0,
-        message=base_message,
+        success=not outcome.errors,
+        message=message,
         dry_run=delete_request.dry_run,
-        files_deleted=deleted_count,
-        space_reclaimed=total_space,
-        errors=errors,
+        files_deleted=outcome.files_deleted,
+        space_reclaimed=outcome.space_reclaimed,
+        errors=outcome.errors,
     )
 
 

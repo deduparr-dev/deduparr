@@ -8,7 +8,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from app.api.routes.scan import get_configured_media_servers
-from app.services.media_server import DuplicateGroup, MediaServerType
+from app.services.media_server import (
+    DuplicateGroup,
+    MediaServerType,
+    selected_libraries,
+)
 from app.services.scan.runner import (
     ScanTotals,
     _process_duplicate_groups,
@@ -319,7 +323,7 @@ async def test_get_duplicates_filtered_by_media_type(
 async def test_start_scan_without_a_media_server(client, test_db):
     """The scan endpoint explains that setup has not been completed."""
     response = await client.post(
-        "/api/scan/start", json={"library_names": ["Movies"], "media_types": ["movie"]}
+        "/api/scan/start", json={"libraries": {"plex": ["Movies"]}}
     )
 
     assert response.status_code == 400
@@ -338,16 +342,45 @@ async def test_start_scan_reports_what_the_run_did(client, test_db):
     with patch(
         "app.api.routes.scan.run_scan", new_callable=AsyncMock, return_value=totals
     ):
-        response = await client.post(
-            "/api/scan/start",
-            json={"library_names": ["Movies"], "media_types": ["movie"]},
-        )
+        response = await client.post("/api/scan/start", json={})
 
     assert response.status_code == 200
     body = response.json()
     assert body["duplicates_found"] == 4
     assert body["sets_created"] == 2
     assert body["sets_updated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_start_scan_keeps_the_libraries_it_was_given(client, test_db):
+    """
+    The libraries a scan starts with become each server's stored selection,
+    so a scheduled scan covers the same ground.
+    """
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="token"),
+            Config(key="jellyfin_libraries", value="Films"),
+        ]
+    )
+    await test_db.commit()
+
+    with patch(
+        "app.api.routes.scan.run_scan",
+        new_callable=AsyncMock,
+        return_value=ScanTotals(),
+    ):
+        response = await client.post(
+            "/api/scan/start",
+            json={"libraries": {"plex": ["Movies", "TV Shows"], "jellyfin": []}},
+        )
+
+    assert response.status_code == 200
+    assert await selected_libraries(test_db, MediaServerType.PLEX) == [
+        "Movies",
+        "TV Shows",
+    ]
+    assert await selected_libraries(test_db, MediaServerType.JELLYFIN) == []
 
 
 @pytest.mark.asyncio
@@ -474,64 +507,54 @@ async def test_preview_deletion_endpoint(client, test_db, create_duplicate_set):
 
 
 @pytest.mark.asyncio
-async def test_delete_duplicate_set_dry_run(client, test_db, create_duplicate_set):
-    """Test deletion with dry_run=True (default)"""
-    # Configure required services in database
-    from tests.conftest import encrypt_test_password
+async def test_delete_duplicate_set_dry_run(
+    client, test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """A dry run reports the deletion without deleting or closing the set"""
+    drop, keep = tmp_path / "delete.720p.mkv", tmp_path / "delete.1080p.mkv"
+    drop.write_bytes(b"d" * 3)
+    keep.write_bytes(b"k" * 8)
 
-    plex_token_config = Config(
-        key="plex_auth_token", value=encrypt_test_password("test_token")
-    )
-    plex_server_config = Config(key="plex_server_name", value="Test Server")
-    plex_libraries_config = Config(key="media_libraries", value="Movies,TV Shows")
-    test_db.add(plex_token_config)
-    test_db.add(plex_server_config)
-    test_db.add(plex_libraries_config)
-    await test_db.commit()
+    dup_set = await create_duplicate_set(title="Delete Test Movie")
+    await create_duplicate_file(dup_set.id, file_path=str(drop), file_size=3)
+    await create_duplicate_file(dup_set.id, file_path=str(keep), file_size=8, keep=True)
 
-    # Create duplicate set
-    dup_set = await create_duplicate_set(
-        item_id="delete_test",
-        title="Delete Test Movie",
-        media_type=MediaType.MOVIE,
-        status=DuplicateStatus.PENDING,
-        space_to_reclaim=5 * 1024**3,
-    )
-
-    file1 = DuplicateFile(
-        set_id=dup_set.id,
-        file_path="/movies/delete.720p.mkv",
-        file_size=3 * 1024**3,
-        score=10000,
-        keep=False,
-    )
-    file2 = DuplicateFile(
-        set_id=dup_set.id,
-        file_path="/movies/delete.1080p.mkv",
-        file_size=8 * 1024**3,
-        score=20000,
-        keep=True,
-    )
-    test_db.add(file1)
-    test_db.add(file2)
-    await test_db.commit()
-
-    # Test dry run (should not actually delete)
     response = await client.post(
         f"/api/scan/duplicates/{dup_set.id}/delete", json={"dry_run": True}
     )
 
     assert response.status_code == 200
     data = response.json()
-
     assert data["success"] is True
     assert data["dry_run"] is True
     assert data["files_deleted"] == 1
-    assert data["space_reclaimed"] == 3 * 1024**3
+    assert data["space_reclaimed"] == 3
     assert "[DRY-RUN]" in data["message"]
-    assert len(data["errors"]) == 0
+    assert data["errors"] == []
 
-    # Verify set is NOT marked as processed in dry-run mode
+    assert drop.exists()
+    await test_db.refresh(dup_set)
+    assert dup_set.status == DuplicateStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_delete_reports_a_file_it_could_not_find(
+    client, test_db, create_duplicate_set, create_duplicate_file
+):
+    """A file nothing removed is not reported deleted, and the set stays open"""
+    dup_set = await create_duplicate_set(title="Ghost", media_server="disk")
+    await create_duplicate_file(dup_set.id, file_path="/nowhere/Ghost.mkv", keep=True)
+    await create_duplicate_file(dup_set.id, file_path="/nowhere/Ghost 720p.mkv")
+
+    response = await client.post(
+        f"/api/scan/duplicates/{dup_set.id}/delete", json={"dry_run": False}
+    )
+
+    data = response.json()
+    assert data["success"] is False
+    assert data["files_deleted"] == 0
+    assert data["space_reclaimed"] == 0
+    assert "File not found for deletion" in data["errors"][0]
     await test_db.refresh(dup_set)
     assert dup_set.status == DuplicateStatus.PENDING
 

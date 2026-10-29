@@ -159,7 +159,9 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { version: "5.0.0.0", appName: FLAVOUR, instanceName: FLAVOUR });
   }
   if (v3 === "/rootfolder") {
-    return json(res, 200, [{ id: 1, path: `${MEDIA_DIR}/Movies` }]);
+    // Picked in the *arr's folder browser, a root folder keeps a trailing slash
+    const folder = FLAVOUR === "sonarr" ? "Shows" : "Movies";
+    return json(res, 200, [{ id: 1, path: `${MEDIA_DIR}/${folder}/` }]);
   }
   if (v3 === "/movie") {
     return json(res, 200, state.movies);

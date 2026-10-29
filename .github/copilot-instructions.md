@@ -244,10 +244,14 @@ stages, tracked in `DeletionHistory`:
 2. `deleted_from_qbit`: remove the torrent holding the file, with its data -
    unless the kept file has a torrent, or the torrent holds other videos too
    (a season pack)
-3. *arr rescan, once per set, so the kept file is imported
+3. *arr rescan, once per set, so the kept file is imported. A kept file
+   directly in a root folder cannot be; it is never moved, and the result
+   says so
 4. `deleted_from_disk`: delete the file if still on disk, then the side files
    named after it (.nfo, subtitles, artwork), and the release's
-   Sample/Subs/Proof/Extras folders once no other video shares the directory
+   Sample/Subs/Proof/Extras folders once no other video shares the directory,
+   then the folders left empty - up to the library folder the media server
+   reports, never it, and none when the server cannot list its libraries
 5. `media_server_refreshed`: refresh the item on the server that reported it
 
 A file is only ever identified by more than its name, since other titles share

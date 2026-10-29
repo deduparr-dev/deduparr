@@ -137,28 +137,34 @@ export async function serviceState(request: APIRequestContext, url: string) {
   return res.json();
 }
 
+/** Where the stand-in Jellyfin's mode puts a movie's two copies. */
+type MovieLayout = "default" | "split" | "loose";
+
 /**
- * Create the files the stand-in Jellyfin claims to hold.
+ * Create the files the stand-in Jellyfin claims to hold, laid out as its mode
+ * has them.
  *
  * A duplicate set is only stored when every file is present on disk, so these
  * have to exist for a scan to produce anything.
  */
-export function seedJellyfinMedia(title = "Fake Duplicate (2024)") {
-  const dir = path.join(E2E_TMP, "media", "Movies", title);
-  const file = (name: string, size: number) => writeFile(path.join(dir, name), size);
+export function seedJellyfinMedia(
+  title = "Fake Duplicate (2024)",
+  layout: MovieLayout = "default"
+) {
+  const movies = path.join(E2E_TMP, "media", "Movies");
+  const keepDir = layout === "loose" ? movies : path.join(movies, title);
+  const dropDir =
+    layout === "split" ? path.join(E2E_TMP, "media", "Movies 4K", title) : path.join(movies, title);
+  const keep = (name: string, size: number) => writeFile(path.join(keepDir, name), size);
+  const drop = (name: string, size: number) => writeFile(path.join(dropDir, name), size);
 
-  file(`${title} 1080p.mkv`, 8_000_000);
-  file(`${title} 720p.mkv`, 2_000_000);
-  writeFile(
-    path.join(E2E_TMP, "media", "Movies", "Fake Single (2024)", "Fake Single (2024) 1080p.mkv"),
-    5_000_000
-  );
+  writeFile(path.join(movies, "Fake Single (2024)", "Fake Single (2024) 1080p.mkv"), 5_000_000);
 
   return {
-    keep: path.join(dir, `${title} 1080p.mkv`),
-    keepSidecar: file(`${title} 1080p.en.srt`, 10),
-    drop: path.join(dir, `${title} 720p.mkv`),
-    dropSidecars: [file(`${title} 720p.nfo`, 10), file(`${title} 720p.en.srt`, 10)],
+    keep: keep(`${title} 1080p.mkv`, 8_000_000),
+    keepSidecar: keep(`${title} 1080p.en.srt`, 10),
+    drop: drop(`${title} 720p.mkv`, 2_000_000),
+    dropSidecars: [drop(`${title} 720p.nfo`, 10), drop(`${title} 720p.en.srt`, 10)],
   };
 }
 
@@ -187,7 +193,7 @@ function writeFile(filePath: string, size: number) {
 /** Point the stand-in Jellyfin at a different library state. */
 export async function setJellyfinMode(
   request: APIRequestContext,
-  mode: "default" | "empty" | "no-duplicates" | "episodes",
+  mode: MovieLayout | "empty" | "no-duplicates" | "episodes",
   title?: string
 ) {
   const res = await request.post(`${JELLYFIN_URL}/reset`, { data: { mode, title } });

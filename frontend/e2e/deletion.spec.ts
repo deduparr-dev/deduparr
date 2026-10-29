@@ -1,4 +1,5 @@
 import fs from "fs";
+import path from "path";
 
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
@@ -93,6 +94,47 @@ test.describe("deleting duplicates through every service", () => {
     expect(sonarr.deletedEpisodeFiles).toEqual([21]);
     const qbit = await serviceState(request, QBIT_URL);
     expect(qbit.deleted).toEqual([]);
+  });
+
+  test("the only title in a library folder takes its own folder, not the library's", async ({
+    page,
+    request,
+  }) => {
+    await markServicesUnconfigured(request);
+    const title = uniqueTitle("Fake Split");
+    await setJellyfinMode(request, "split", title);
+    const media = seedJellyfinMedia(title, "split");
+    await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
+
+    await deleteFromScanPage(page, request, title);
+
+    await expect(page.getByText("Deletion Complete", { exact: true })).toBeVisible();
+    const titleFolder = path.dirname(media.drop);
+    expect(fs.existsSync(titleFolder)).toBe(false);
+    expect(fs.existsSync(path.dirname(titleFolder))).toBe(true);
+    expect(fs.existsSync(media.keep)).toBe(true);
+  });
+
+  test("a kept copy directly in Radarr's root folder stays put, and the result says why", async ({
+    page,
+    request,
+  }) => {
+    const title = uniqueTitle("Fake Loose");
+    await setJellyfinMode(request, "loose", title);
+    const media = seedJellyfinMedia(title, "loose");
+    await resetServices(request, title);
+    await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
+
+    await deleteFromScanPage(page, request, title);
+
+    await expect(page.getByText("Deletion Complete", { exact: true })).toBeVisible();
+    await expect(page.getByText(/sits directly in the root folder/).first()).toBeVisible();
+    expect(fs.existsSync(media.drop)).toBe(false);
+    expect(fs.existsSync(media.keep)).toBe(true);
+    const radarr = await serviceState(request, RADARR_URL);
+    expect(radarr.deletedMovieFiles).toEqual([11]);
+    // Neither pointed at the root folder nor asked to scan it
+    expect(radarr.commands).toEqual([]);
   });
 
   test("a file nothing could remove is reported, and its set stays to retry", async ({

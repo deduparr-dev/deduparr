@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from app.models import DuplicateSet, DuplicateFile, DeletionHistory
 from app.models.duplicate import MediaType, DuplicateStatus
 from app.models.config import Config
+from app.services.media_server import MediaServerError
 from tests.conftest import encrypt_test_password
 
 
@@ -854,7 +855,7 @@ async def test_disk_stage_removes_a_release_folder_with_its_last_video(
 
     history = DeletionHistory(duplicate_file_id=1)
     await DeletionPipeline(test_db, dry_run=dry_run)._stage_disk_removal(
-        str(video), history, str(video)
+        str(video), history, str(video), str(library)
     )
 
     assert release.exists() is dry_run
@@ -1004,6 +1005,108 @@ async def test_delete_set_counts_a_deleted_file_when_the_refresh_fails(
     assert any("Plex refresh failed" in warning for warning in outcome.warnings)
     assert not drop.exists()
     assert dup_set.status == DuplicateStatus.PROCESSED
+
+
+@pytest.mark.asyncio
+async def test_delete_set_reports_what_the_arr_could_not_import(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """A kept file the *arr cannot take is in the result, not only the log."""
+    keep, drop = tmp_path / "keep.mkv", tmp_path / "drop.mkv"
+    keep.write_bytes(b"k" * 30)
+    drop.write_bytes(b"d" * 10)
+    dup_set = await create_duplicate_set(media_server="disk")
+    await create_duplicate_file(
+        dup_set.id, file_path=str(keep), file_size=30, keep=True
+    )
+    await create_duplicate_file(dup_set.id, file_path=str(drop), file_size=10)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    problem = f"Radarr cannot import {keep}: it sits directly in the root folder"
+    with patch.object(
+        pipeline, "rescan_for_kept_file", AsyncMock(side_effect=ValueError(problem))
+    ):
+        outcome = await pipeline.delete_set(await _with_files(test_db, dup_set.id))
+
+    assert (outcome.files_deleted, outcome.errors) == (1, [])
+    assert problem in outcome.warnings
+    assert dup_set.status == DuplicateStatus.PROCESSED
+
+
+async def _split_movie(test_db, create_duplicate_set, create_duplicate_file, root):
+    """A movie kept in movies/ whose other copy is the only title in movies-4k/."""
+    kept = root / "movies" / "Movie (2020)" / "Movie (2020) 1080p.mkv"
+    dropped = root / "movies-4k" / "Movie (2020)" / "Movie (2020) 2160p.mkv"
+    for path in (kept, dropped):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"x" * 10)
+
+    dup_set = await create_duplicate_set(media_server="jellyfin")
+    for path, keep in ((kept, True), (dropped, False)):
+        await create_duplicate_file(
+            dup_set.id, file_path=str(path), file_size=10, keep=keep
+        )
+    return await _with_files(test_db, dup_set.id), kept, dropped
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_mount", [None, "/data"])
+async def test_deleting_the_last_title_in_a_library_folder_keeps_the_folder(
+    test_db,
+    create_duplicate_set,
+    create_duplicate_file,
+    tmp_path,
+    monkeypatch,
+    server_mount,
+):
+    """
+    The copy's own folder goes, its library folder stays: Radarr, Sonarr and
+    the media server still point at it. The server may mount the media
+    somewhere else than this container does.
+    """
+    monkeypatch.setattr(settings, "media_dir", str(tmp_path))
+    dup_set, kept, dropped = await _split_movie(
+        test_db, create_duplicate_set, create_duplicate_file, tmp_path
+    )
+    mount = server_mount or str(tmp_path)
+    for file in dup_set.files:
+        file.file_path = file.file_path.replace(str(tmp_path), mount)
+    server = AsyncMock()
+    server.get_libraries.return_value = [{"title": "Movies"}]
+    server.get_library_paths.return_value = [f"{mount}/movies", f"{mount}/movies-4k"]
+    monkeypatch.setattr(
+        "app.services.deletion.pipeline.get_media_server",
+        AsyncMock(return_value=server),
+    )
+
+    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
+
+    assert (outcome.files_deleted, outcome.errors) == (1, [])
+    assert not dropped.parent.exists()
+    assert (tmp_path / "movies-4k").is_dir()
+    assert kept.exists()
+
+
+@pytest.mark.asyncio
+async def test_folders_stay_when_the_library_folders_cannot_be_listed(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path, monkeypatch
+):
+    """Without the library folder there is no telling where removing must stop."""
+    dup_set, kept, dropped = await _split_movie(
+        test_db, create_duplicate_set, create_duplicate_file, tmp_path
+    )
+    server = AsyncMock()
+    server.get_libraries.side_effect = MediaServerError("Jellyfin is unreachable")
+    monkeypatch.setattr(
+        "app.services.deletion.pipeline.get_media_server",
+        AsyncMock(return_value=server),
+    )
+
+    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
+
+    assert (outcome.files_deleted, outcome.errors) == (1, [])
+    assert not dropped.exists()
+    assert dropped.parent.is_dir()
 
 
 @pytest.mark.asyncio

@@ -61,13 +61,51 @@ class DeletionPipeline:
         self.qbit_service = QBittorrentService(db)
         self.radarr_service = RadarrService(db)
         self.sonarr_service = SonarrService(db)
+        # Library folders per media server, as the server reports them
+        self._library_roots: dict[str, list[str]] = {}
 
-    def _get_media_root_from_path(self, file_path: str) -> str:
-        """The top directory of a path (/media for /media/movies/x.mkv)."""
-        parts = [p for p in file_path.split("/") if p]
-        if parts:
-            return f"/{parts[0]}"
-        return settings.media_dir
+    async def _library_root(
+        self, duplicate_file: DuplicateFile, located_path: Optional[str]
+    ) -> Optional[str]:
+        """
+        The library folder a file lives in, where this container sees it.
+
+        Cleanup removes emptied folders up to it, never it: Radarr, Sonarr and
+        the media server all expect it to be there. It comes from the libraries
+        of the server that reported the file, so it is None when that server
+        cannot list them, and then no folder is removed.
+        """
+        if self.dry_run or not located_path:
+            return None
+
+        server_name = duplicate_file.duplicate_set.media_server
+        if server_name not in self._library_roots:
+            self._library_roots[server_name] = []
+            try:
+                server = await get_media_server(self.db, MediaServerType(server_name))
+                self._library_roots[server_name] = [
+                    path
+                    for library in await server.get_libraries()
+                    for path in await server.get_library_paths(library["title"])
+                ]
+            except Exception as e:
+                logger.warning(
+                    f"Leaving emptied folders in place: the library folders "
+                    f"of '{server_name}' are unknown ({e})"
+                )
+
+        # The innermost library holding the file. Below it, the server's path
+        # and the located one are the same, whatever each mounts it as.
+        server_path = duplicate_file.file_path
+        for root in sorted(
+            (path.rstrip("/") for path in self._library_roots[server_name]),
+            key=len,
+            reverse=True,
+        ):
+            below = server_path[len(root) :]
+            if server_path.startswith(root + "/") and located_path.endswith(below):
+                return located_path[: -len(below)]
+        return None
 
     def _locate_file(self, server_path: str, size: int) -> Optional[str]:
         """
@@ -125,15 +163,15 @@ class DeletionPipeline:
             default=None,
         )
 
-    def _clean_up_after(self, video_path: str) -> None:
+    def _clean_up_after(self, video_path: str, library_root: Optional[str]) -> None:
         """
         Remove what a deleted video leaves behind.
 
         That is its own subtitles, .nfo and artwork and, once no other video
         shares the directory, the release's Sample/Subs/Proof/Extras folders
-        and the directories left empty. A side file belongs to the video with
-        the longest name it extends, so a kept version or an extra named after
-        the deleted file keeps its own files.
+        and the directories left empty, up to its library folder. A side file
+        belongs to the video with the longest name it extends, so a kept
+        version or an extra named after the deleted file keeps its own files.
         """
         directory, name = os.path.split(video_path)
         if not os.path.isdir(directory):
@@ -166,13 +204,12 @@ class DeletionPipeline:
                 f"[DRY-RUN] Would remove {directory} and its parents once empty"
             )
             return
+        if library_root is None:
+            return
 
-        root = self._get_media_root_from_path(directory)
         try:
-            while (
-                directory != root
-                and directory.startswith(root)
-                and not os.listdir(directory)
+            while directory.startswith(library_root + "/") and not os.listdir(
+                directory
             ):
                 os.rmdir(directory)
                 logger.info(f"Removed empty directory: {directory}")
@@ -238,7 +275,8 @@ class DeletionPipeline:
                     duplicate_set.media_type, kept[0].file_path, duplicate_set.id
                 )
             except Exception as e:
-                logger.warning(f"Failed to trigger *arr rescan (non-critical): {e}")
+                # The duplicates are gone either way; what is left is for the user
+                outcome.warnings.append(str(e))
 
         if not self.dry_run and not outcome.errors:
             duplicate_set.status = DuplicateStatus.PROCESSED
@@ -372,6 +410,7 @@ class DeletionPipeline:
         # Resolved before any stage removes the file, so later stages still
         # know where it lived.
         located_path = self._locate_file(file_path, duplicate_file.file_size)
+        library_root = await self._library_root(duplicate_file, located_path)
 
         try:
             # Stage 1: Remove from *arr and delete files
@@ -396,7 +435,9 @@ class DeletionPipeline:
                 await self.db.commit()
 
             # Stage 4: Delete the file if it is still there, and its leftovers
-            await self._stage_disk_removal(file_path, history, located_path)
+            await self._stage_disk_removal(
+                file_path, history, located_path, library_root
+            )
             await self.db.commit()
 
             # Stage 5: Refresh the item on the media server that reported it
@@ -632,6 +673,7 @@ class DeletionPipeline:
         file_path: str,
         history: DeletionHistory,
         located_path: Optional[str],
+        library_root: Optional[str] = None,
     ):
         """
         Stage 4: Delete the file if it is still on disk, then what it leaves behind
@@ -644,6 +686,8 @@ class DeletionPipeline:
             history: DeletionHistory record
             located_path: Where the file was before any stage ran, None when
                 this container cannot see it
+            library_root: The library folder the file lives in, which emptied
+                folders are removed up to; None removes none
         """
         if not located_path:
             if history.deleted_from_arr or history.deleted_from_qbit:
@@ -684,7 +728,7 @@ class DeletionPipeline:
                 return
 
         try:
-            self._clean_up_after(located_path)
+            self._clean_up_after(located_path, library_root)
         except OSError as e:
             logger.warning(f"Could not clean up after {located_path}: {e}")
         history.deleted_from_disk = True

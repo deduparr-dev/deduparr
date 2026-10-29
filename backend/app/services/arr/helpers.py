@@ -5,8 +5,6 @@ Extracts common rescan and path management logic
 
 import logging
 import os
-import re
-import shutil
 from typing import Literal, Optional, Union
 
 from app.services.arr.client import RadarrClient, SonarrClient
@@ -60,33 +58,20 @@ async def rescan_media_item(
             if media_item:
                 current_path = media_item.get("path", "")
 
-                # Check if file is in library root (not in proper subfolder)
-                root_folders = await client.get_root_folder()
-                is_library_root = any(
-                    root.get("path") == scan_path for root in root_folders
-                )
+                # A file directly in a root folder cannot be imported: the *arr
+                # refuses a root folder as a movie or series path, and the kept
+                # file is not moved behind the user's back. Root folders picked
+                # in the *arr's folder browser carry a trailing slash.
+                for root in await client.get_root_folder():
+                    if root.get("path", "").rstrip("/") == scan_path.rstrip("/"):
+                        arr = "Radarr" if media_type == "movie" else "Sonarr"
+                        raise ValueError(
+                            f"{arr} cannot import {kept_file_path}: it sits directly "
+                            f"in the root folder {root['path']}. Move it into "
+                            f"{current_path} and refresh the {media_type} in {arr}."
+                        )
 
-                if is_library_root:
-                    # Move file into proper subfolder
-                    new_folder = _create_media_subfolder(
-                        media_item,
-                        media_type,
-                        scan_path,
-                        kept_file_path,
-                        logger_instance,
-                    )
-                    if not new_folder:
-                        return False
-
-                    # Update media path in *arr
-                    media_item["path"] = new_folder
-                    await update_method(media_item)
-                    logger_instance.info(
-                        f"Updated {media_type} path in {media_type.capitalize()}arr to: {new_folder}"
-                    )
-                    scan_path = new_folder
-
-                elif current_path and not _within(current_path, scan_path):
+                if current_path and not _within(current_path, scan_path):
                     # File is in proper folder but path is different - update it
                     logger_instance.info(
                         f"{media_type.capitalize()} path mismatch detected. "
@@ -140,59 +125,6 @@ def _within(folder: str, path: str) -> bool:
     """Whether path is folder itself or inside it, as a season folder is."""
     folder = folder.rstrip("/")
     return path == folder or path.startswith(folder + "/")
-
-
-def _create_media_subfolder(
-    media_item: dict,
-    media_type: MediaType,
-    library_root: str,
-    kept_file_path: str,
-    logger_instance: logging.Logger,
-) -> Optional[str]:
-    """
-    Create proper media subfolder and move file into it
-
-    Args:
-        media_item: Movie or series data from *arr API
-        media_type: Type of media ("movie" or "series")
-        library_root: Library root path where file currently is
-        kept_file_path: Path to the file we kept
-        logger_instance: Logger instance to use
-
-    Returns:
-        Path to the new subfolder if successful, None otherwise
-    """
-    # Generate folder name: "Title (Year)"
-    title = media_item.get("title", media_type.capitalize())
-    year = media_item.get("year", "")
-    folder_name = f"{title} ({year})" if year else title
-
-    # Sanitize folder name
-    folder_name = re.sub(r'[<>:"/\\|?*]', "", folder_name)
-
-    new_media_folder = os.path.join(library_root, folder_name)
-    new_file_path = os.path.join(new_media_folder, os.path.basename(kept_file_path))
-
-    logger_instance.warning(
-        f"Kept file is loose in library root ({library_root}). "
-        f"Creating proper {media_type} subfolder and moving file..."
-    )
-
-    try:
-        os.makedirs(new_media_folder, exist_ok=True)
-        logger_instance.info(f"Created {media_type} folder: {new_media_folder}")
-
-        shutil.move(kept_file_path, new_file_path)
-        logger_instance.info(f"Moved file to: {new_file_path}")
-
-        return new_media_folder
-
-    except Exception as e:
-        logger_instance.error(
-            f"Failed to move file into subfolder: {e}. "
-            f"Manual action required: Move {kept_file_path} to {new_media_folder}/"
-        )
-        return None
 
 
 async def manual_import_file(

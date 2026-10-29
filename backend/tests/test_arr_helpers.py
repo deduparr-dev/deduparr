@@ -4,7 +4,6 @@ Tests for arr_helpers module
 
 import logging
 import os
-import tempfile
 from unittest.mock import AsyncMock, MagicMock, call, create_autospec, patch
 
 import pytest
@@ -14,7 +13,6 @@ from app.services.arr.helpers import (
     manual_import_file,
     rescan_media_item,
     trigger_full_library_scan,
-    _create_media_subfolder,
 )
 
 
@@ -172,6 +170,46 @@ async def test_rescan_media_item_keeps_a_series_path_over_its_season_folder():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stored_as", ["{root}", "{root}/"])
+async def test_rescan_media_item_leaves_a_kept_file_in_a_root_folder(
+    tmp_path, stored_as
+):
+    """
+    Radarr cannot import a file that sits directly in a root folder, so the
+    kept file stays where it is and the user is told why.
+
+    A root folder picked in Radarr's folder browser is stored with a trailing
+    slash. That form was not recognised, so the movie was pointed at the root
+    folder, which Radarr refuses; the other form moved the kept file.
+    """
+    root = tmp_path / "movies"
+    root.mkdir()
+    kept = root / "Test Movie (2024).mkv"
+    kept.write_text("x")
+    client = create_autospec(RadarrClient, instance=True)
+    client.get_movie.return_value = {
+        "id": 1,
+        "title": "Test Movie",
+        "year": 2024,
+        "path": str(root / "Test Movie (2024)"),
+    }
+    client.get_root_folder.return_value = [{"path": stored_as.format(root=root)}]
+
+    with pytest.raises(ValueError, match="sits directly in the root folder"):
+        await rescan_media_item(
+            client=client,
+            media_id=1,
+            media_type="movie",
+            kept_file_path=str(kept),
+            logger_instance=logging.getLogger("test"),
+        )
+
+    assert os.listdir(root) == [kept.name]
+    client.update_movie.assert_not_awaited()
+    client.post_command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_rescan_media_item_media_not_found():
     """Test error handling when media item is not found"""
     mock_client = MagicMock()
@@ -231,82 +269,6 @@ async def test_trigger_full_library_scan_series():
     mock_client.post_command.assert_called_once_with(
         "DownloadedEpisodesScan", path="/tv"
     )
-
-
-def test_create_media_subfolder_success():
-    """Test creating media subfolder and moving file"""
-    logger = logging.getLogger("test")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create a test file
-        test_file = os.path.join(tmpdir, "movie.mkv")
-        with open(test_file, "w") as f:
-            f.write("test content")
-
-        media_item = {"title": "Test Movie", "year": 2024}
-
-        result = _create_media_subfolder(
-            media_item=media_item,
-            media_type="movie",
-            library_root=tmpdir,
-            kept_file_path=test_file,
-            logger_instance=logger,
-        )
-
-        expected_folder = os.path.join(tmpdir, "Test Movie (2024)")
-        assert result == expected_folder
-        assert os.path.exists(expected_folder)
-        assert os.path.exists(os.path.join(expected_folder, "movie.mkv"))
-        assert not os.path.exists(test_file)
-
-
-def test_create_media_subfolder_special_characters():
-    """Test creating subfolder with special characters in title"""
-    logger = logging.getLogger("test")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        test_file = os.path.join(tmpdir, "movie.mkv")
-        with open(test_file, "w") as f:
-            f.write("test content")
-
-        media_item = {"title": 'Test: "Movie" <2024>', "year": 2024}
-
-        result = _create_media_subfolder(
-            media_item=media_item,
-            media_type="movie",
-            library_root=tmpdir,
-            kept_file_path=test_file,
-            logger_instance=logger,
-        )
-
-        # Special characters should be removed
-        expected_folder = os.path.join(tmpdir, "Test Movie 2024 (2024)")
-        assert result == expected_folder
-        assert os.path.exists(expected_folder)
-
-
-def test_create_media_subfolder_no_year():
-    """Test creating subfolder when year is not available"""
-    logger = logging.getLogger("test")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        test_file = os.path.join(tmpdir, "series.mkv")
-        with open(test_file, "w") as f:
-            f.write("test content")
-
-        media_item = {"title": "Test Series", "year": ""}
-
-        result = _create_media_subfolder(
-            media_item=media_item,
-            media_type="series",
-            library_root=tmpdir,
-            kept_file_path=test_file,
-            logger_instance=logger,
-        )
-
-        expected_folder = os.path.join(tmpdir, "Test Series")
-        assert result == expected_folder
-        assert os.path.exists(expected_folder)
 
 
 @pytest.mark.asyncio

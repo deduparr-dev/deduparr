@@ -55,24 +55,26 @@ function mediaSource(filePath, { size, bitrate, codec, width, height }) {
   };
 }
 
-/** One movie stored twice: a 1080p HEVC copy and a 720p H264 copy. */
-function duplicateMovie(title, id) {
-  const dir = movieDir(title);
+/**
+ * One movie stored twice: a 1080p HEVC copy and a 720p H264 copy, side by
+ * side in the movie's folder unless placed elsewhere.
+ */
+function duplicateMovie(title, id, { keepDir = movieDir(title), dropDir = movieDir(title) } = {}) {
   return {
     Id: id ?? itemId(title),
     Name: title,
     Type: "Movie",
     ProductionYear: 2024,
-    Path: dir,
+    Path: movieDir(title),
     MediaSources: [
-      mediaSource(path.join(dir, `${title} 1080p.mkv`), {
+      mediaSource(path.join(keepDir, `${title} 1080p.mkv`), {
         size: 8_000_000,
         bitrate: 12_000_000,
         codec: "hevc",
         width: 1920,
         height: 1080,
       }),
-      mediaSource(path.join(dir, `${title} 720p.mkv`), {
+      mediaSource(path.join(dropDir, `${title} 720p.mkv`), {
         size: 2_000_000,
         bitrate: 4_000_000,
         codec: "h264",
@@ -212,6 +214,12 @@ const server = http.createServer((req, res) => {
         items = [singleMovie(name, id)];
       } else if (mode === "episodes") {
         items = [duplicateEpisode("Fake Show", 1, 2, name)];
+      } else if (mode === "split") {
+        // The copy to delete is the only title in the library's second folder
+        items = [duplicateMovie(name, id, { dropDir: path.join(MEDIA_DIR, "Movies 4K", name) })];
+      } else if (mode === "loose") {
+        // The copy to keep sits directly in the root folder
+        items = [duplicateMovie(name, id, { keepDir: path.join(MEDIA_DIR, "Movies") })];
       } else {
         items = [
           duplicateMovie(name, id),
@@ -256,7 +264,7 @@ const server = http.createServer((req, res) => {
         Name: "Fake Movies",
         CollectionType: "movies",
         ItemId: LIBRARY_ID,
-        Locations: [path.join(MEDIA_DIR, "Movies")],
+        Locations: [path.join(MEDIA_DIR, "Movies"), path.join(MEDIA_DIR, "Movies 4K")],
       },
       {
         Name: "Fake Shows",

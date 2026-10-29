@@ -22,6 +22,32 @@ export const JELLYFIN_URL = `http://127.0.0.1:${JELLYFIN_PORT}`;
 export const JELLYFIN_API_KEY = "fake-admin-key";
 export const JELLYFIN_LIBRARY = "Fake Movies";
 
+// Stand-ins for the services a deletion goes through
+const RADARR_PORT = Number(process.env.E2E_RADARR_PORT ?? 17901);
+const SONARR_PORT = Number(process.env.E2E_SONARR_PORT ?? 17902);
+const QBIT_PORT = Number(process.env.E2E_QBIT_PORT ?? 17903);
+export const RADARR_URL = `http://127.0.0.1:${RADARR_PORT}`;
+export const SONARR_URL = `http://127.0.0.1:${SONARR_PORT}`;
+export const QBIT_URL = `http://127.0.0.1:${QBIT_PORT}`;
+export const ARR_API_KEY = "fake-arr-key";
+export const QBIT_USERNAME = "admin";
+export const QBIT_PASSWORD = "adminadmin";
+
+const MEDIA_DIR = path.join(E2E_TMP, "media");
+
+function fakeService(script: string, port: number, env: Record<string, string>) {
+  return {
+    command: `node ${script}`,
+    cwd: ROOT_DIR,
+    url: `http://127.0.0.1:${port}/state`,
+    reuseExistingServer: !process.env.CI,
+    timeout: 30_000,
+    stdout: "pipe" as const,
+    stderr: "pipe" as const,
+    env: { PORT: String(port), MEDIA_DIR, ...env },
+  };
+}
+
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: "./e2e/global-setup.ts",
@@ -58,10 +84,22 @@ export default defineConfig({
       stderr: "pipe",
       env: {
         PORT: String(JELLYFIN_PORT),
-        MEDIA_DIR: path.join(E2E_TMP, "media"),
+        MEDIA_DIR,
         ADMIN_API_KEY: JELLYFIN_API_KEY,
       },
     },
+    fakeService("e2e/fake-services/arr.mjs", RADARR_PORT, {
+      FLAVOUR: "radarr",
+      API_KEY: ARR_API_KEY,
+    }),
+    fakeService("e2e/fake-services/arr.mjs", SONARR_PORT, {
+      FLAVOUR: "sonarr",
+      API_KEY: ARR_API_KEY,
+    }),
+    fakeService("e2e/fake-services/qbittorrent.mjs", QBIT_PORT, {
+      USERNAME: QBIT_USERNAME,
+      PASSWORD: QBIT_PASSWORD,
+    }),
     {
       // Disposable backend: temp SQLite database and encryption key, so the
       // suite never touches a real install.
@@ -77,7 +115,7 @@ export default defineConfig({
         DATABASE_URL: `sqlite:///${path.join(E2E_TMP, "e2e.db")}`,
         ENCRYPTION_KEY_FILE: path.join(E2E_TMP, ".encryption_key"),
         CONFIG_DIR: E2E_TMP,
-        MEDIA_DIR: path.join(E2E_TMP, "media"),
+        MEDIA_DIR,
         // DEBUG unlocks /api/scan/dev/disk-scan, the only way a spec can
         // create duplicate sets without a real Plex server.
         LOG_LEVEL: "DEBUG",

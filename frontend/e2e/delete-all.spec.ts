@@ -43,7 +43,8 @@ test.describe("delete all duplicates", () => {
 
     await confirm.click();
 
-    await expect(page.getByText("Dry Run Complete")).toBeVisible();
+    // Exact, as the toast's screen reader announcement repeats the title
+    await expect(page.getByText("Dry Run Complete", { exact: true })).toBeVisible();
     expect(fs.existsSync(keep)).toBe(true);
     expect(fs.existsSync(drop)).toBe(true);
     expect(await getPendingSets(request)).toHaveLength(pendingBefore.length);

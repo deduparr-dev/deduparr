@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { gotoApp, markUnconfigured } from "./helpers";
+import { gotoApp, markJellyfinUnconfigured, markUnconfigured } from "./helpers";
 
 test.describe("setup wizard", () => {
   test.beforeEach(async ({ request }) => {
     await markUnconfigured(request);
+    await markJellyfinUnconfigured(request);
   });
 
   test("an unconfigured instance redirects the dashboard to /setup", async ({ page }) => {

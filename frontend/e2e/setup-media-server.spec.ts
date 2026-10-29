@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 
-import { JELLYFIN_API_KEY, JELLYFIN_LIBRARY, JELLYFIN_URL } from "../playwright.config";
+import {
+  ARR_API_KEY,
+  JELLYFIN_API_KEY,
+  JELLYFIN_LIBRARY,
+  JELLYFIN_URL,
+  RADARR_URL,
+} from "../playwright.config";
 import {
   gotoApp,
   markJellyfinUnconfigured,
@@ -72,6 +78,17 @@ test.describe("setup wizard media server step", () => {
     await expect(page.getByRole("heading", { name: /connect jellyfin/i })).toBeVisible();
   }
 
+  /** Through a proven Jellyfin connection and one chosen library. */
+  async function openServicesStep(page: import("@playwright/test").Page) {
+    await openJellyfinStep(page);
+    await page.locator("#jellyfin-url").fill(JELLYFIN_URL);
+    await page.locator("#jellyfin-api-key").fill(JELLYFIN_API_KEY);
+    await page.getByTestId("jellyfin-test").click();
+    await page.getByTestId("jellyfin-continue").click();
+    await page.getByText(JELLYFIN_LIBRARY).click();
+    await page.getByRole("button", { name: "Next: Services" }).click();
+  }
+
   test("the Jellyfin step will not continue until the connection is proven", async ({ page }) => {
     await openJellyfinStep(page);
 
@@ -104,8 +121,8 @@ test.describe("setup wizard media server step", () => {
     await expect(page.getByText(JELLYFIN_LIBRARY)).toBeVisible();
     // Music is not something Deduparr deduplicates
     await expect(page.getByText("Fake Music")).toHaveCount(0);
-    // The library is labelled with the server it came from
-    await expect(page.getByText(/on jellyfin/i)).toBeVisible();
+    // Each library is labelled with the server it came from
+    await expect(page.getByText("on Jellyfin")).toHaveCount(2);
   });
 
   test("the Jellyfin step can go back to the server choice", async ({ page }) => {
@@ -114,5 +131,44 @@ test.describe("setup wizard media server step", () => {
     await page.getByRole("button", { name: "Back" }).click();
 
     await expect(page.getByRole("heading", { name: /choose your media server/i })).toBeVisible();
+  });
+
+  test("changing the key after a good test asks for another test", async ({ page }) => {
+    await openJellyfinStep(page);
+    await page.locator("#jellyfin-url").fill(JELLYFIN_URL);
+    await page.locator("#jellyfin-api-key").fill(JELLYFIN_API_KEY);
+    await page.getByTestId("jellyfin-test").click();
+    await expect(page.getByTestId("jellyfin-continue")).toBeEnabled();
+
+    await page.locator("#jellyfin-api-key").fill("someone-elses-key");
+
+    await expect(page.getByTestId("jellyfin-continue")).toBeDisabled();
+    await expect(page.getByText("Connection successful")).toHaveCount(0);
+  });
+
+  test("the services step tests each connection for real", async ({ page }) => {
+    await openServicesStep(page);
+    const testRadarr = page.getByRole("button", { name: "Test Connection" }).first();
+
+    // It used to report success for anything, without asking the service
+    await page.locator("#radarr-url").fill(RADARR_URL);
+    await page.locator("#radarr-key").fill("wrong-key");
+    await testRadarr.click();
+    await expect(page.getByText(/invalid or unauthorized/i)).toBeVisible();
+
+    await page.locator("#radarr-key").fill(ARR_API_KEY);
+    await testRadarr.click();
+    await expect(page.getByText("Version: 5.0.0.0")).toBeVisible();
+  });
+
+  test("finishing with Jellyfin alone lands on the dashboard", async ({ page }) => {
+    await openServicesStep(page);
+
+    await page.getByRole("button", { name: "Complete Setup" }).click();
+
+    // The app kept the configuration it loaded before setup, and sent the
+    // user straight back to the wizard
+    await expect(page.getByRole("heading", { name: /dashboard/i })).toBeVisible();
+    await expect(page).not.toHaveURL(/\/setup/);
   });
 });

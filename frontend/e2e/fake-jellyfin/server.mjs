@@ -20,6 +20,7 @@ const MEDIA_DIR = process.env.MEDIA_DIR ?? "/tmp/fake-jellyfin-media";
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY ?? "fake-admin-key";
 const USER_ID = "11111111111111111111111111111111";
 const LIBRARY_ID = "22222222222222222222222222222222";
+const SHOW_LIBRARY_ID = "55555555555555555555555555555555";
 
 /** Items the server pretends to hold. Mutated by /reset so specs can vary it. */
 let items = [];
@@ -82,6 +83,42 @@ function duplicateMovie(title, id) {
   };
 }
 
+/**
+ * One episode stored twice.
+ *
+ * Jellyfin returns episodes as their own items carrying SeriesName and the
+ * season and episode numbers, with each stored file as a MediaSource.
+ */
+function duplicateEpisode(series, season, number, name) {
+  const dir = path.join(MEDIA_DIR, "Shows", series, `Season ${season}`);
+  const stem = `${series} - S${String(season).padStart(2, "0")}E${String(number).padStart(2, "0")}`;
+  return {
+    Id: itemId(stem),
+    Name: name,
+    Type: "Episode",
+    SeriesName: series,
+    ParentIndexNumber: season,
+    IndexNumber: number,
+    Path: dir,
+    MediaSources: [
+      mediaSource(path.join(dir, `${stem} 1080p.mkv`), {
+        size: 4_000_000,
+        bitrate: 10_000_000,
+        codec: "hevc",
+        width: 1920,
+        height: 1080,
+      }),
+      mediaSource(path.join(dir, `${stem} 480p.mkv`), {
+        size: 700_000,
+        bitrate: 1_500_000,
+        codec: "mpeg4",
+        width: 854,
+        height: 480,
+      }),
+    ],
+  };
+}
+
 /** A movie held once, which is not a duplicate. */
 function singleMovie(title, id) {
   const dir = movieDir(title);
@@ -107,6 +144,7 @@ function defaultItems() {
   return [
     duplicateMovie("Fake Duplicate (2024)", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     singleMovie("Fake Single (2024)", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+    duplicateEpisode("Fake Show", 1, 2, "The Second One"),
   ];
 }
 
@@ -172,6 +210,8 @@ const server = http.createServer((req, res) => {
         items = [];
       } else if (mode === "no-duplicates") {
         items = [singleMovie(name, id)];
+      } else if (mode === "episodes") {
+        items = [duplicateEpisode("Fake Show", 1, 2, name)];
       } else {
         items = [
           duplicateMovie(name, id),
@@ -219,6 +259,12 @@ const server = http.createServer((req, res) => {
         Locations: [path.join(MEDIA_DIR, "Movies")],
       },
       {
+        Name: "Fake Shows",
+        CollectionType: "tvshows",
+        ItemId: SHOW_LIBRARY_ID,
+        Locations: [path.join(MEDIA_DIR, "Shows")],
+      },
+      {
         Name: "Fake Music",
         CollectionType: "music",
         ItemId: "44444444444444444444444444444444",
@@ -229,9 +275,14 @@ const server = http.createServer((req, res) => {
 
   if (route === `/users/${USER_ID.toLowerCase()}/items` || route === "/items") {
     const types = (param(url, "IncludeItemTypes") ?? "").split(",");
+    const parentId = param(url, "ParentId");
     const startIndex = Number(param(url, "StartIndex") ?? 0);
     const limit = Number(param(url, "Limit") ?? 500);
-    const matching = items.filter((item) => types.includes(item.Type));
+    const libraryOf = (item) => (item.Type === "Episode" ? SHOW_LIBRARY_ID : LIBRARY_ID);
+    const matching = items.filter(
+      (item) =>
+        types.includes(item.Type) && (!parentId || libraryOf(item) === parentId)
+    );
     return json(res, 200, {
       Items: matching.slice(startIndex, startIndex + limit),
       TotalRecordCount: matching.length,

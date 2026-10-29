@@ -3,7 +3,9 @@ import { expect, test } from "@playwright/test";
 import { JELLYFIN_LIBRARY } from "../playwright.config";
 import {
   deleteConfig,
+  getConfig,
   getPendingSets,
+  gotoApp,
   markJellyfinConfigured,
   markUnconfigured,
   runScan,
@@ -25,8 +27,8 @@ test.describe("per-server library selection", () => {
     seedJellyfinMedia(title);
     await setConfig(request, "jellyfin_libraries", JELLYFIN_LIBRARY);
 
-    // No library_names, so the stored selection decides
-    const result = await runScan(request, undefined);
+    // No libraries given, so the stored selection decides
+    const result = await runScan(request);
 
     expect(result.success).toBe(true);
     expect((await getPendingSets(request)).some((s: { title: string }) => s.title === title)).toBe(
@@ -40,7 +42,7 @@ test.describe("per-server library selection", () => {
     seedJellyfinMedia(title);
     await deleteConfig(request, "jellyfin_libraries");
 
-    const result = await runScan(request, undefined);
+    const result = await runScan(request);
 
     expect(result.sets_created).toBe(0);
     expect((await getPendingSets(request)).some((s: { title: string }) => s.title === title)).toBe(
@@ -57,9 +59,29 @@ test.describe("per-server library selection", () => {
     await deleteConfig(request, "jellyfin_libraries");
     await setConfig(request, "plex_libraries", JELLYFIN_LIBRARY);
 
-    const result = await runScan(request, undefined);
+    const result = await runScan(request);
 
     expect(result.sets_created).toBe(0);
     await deleteConfig(request, "plex_libraries");
+  });
+
+  test("the Scan page starts from the stored selection and keeps what it scans", async ({
+    page,
+    request,
+  }) => {
+    await gotoApp(page, "/scan");
+    const movies = page.getByRole("checkbox", { name: /Fake Movies/ });
+    const shows = page.getByRole("checkbox", { name: /Fake Shows/ });
+
+    // Stored for Jellyfin by markJellyfinConfigured, and labelled with it
+    await expect(movies).toBeChecked();
+    await expect(shows).not.toBeChecked();
+    await expect(page.getByText(/on Jellyfin/).first()).toBeVisible();
+
+    await shows.check();
+    await page.getByRole("button", { name: "Start Scan" }).click();
+
+    await expect(page.getByText("Scan Complete", { exact: true })).toBeVisible();
+    expect((await getConfig(request)).jellyfin_libraries).toBe(`${JELLYFIN_LIBRARY},Fake Shows`);
   });
 });

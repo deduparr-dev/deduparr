@@ -74,11 +74,14 @@ test.describe("jellyfin", () => {
     expect(res.ok()).toBeTruthy();
     const libraries = await res.json();
 
-    const jellyfin = libraries.filter((lib: { server: string }) => lib.server === "jellyfin");
-    expect(jellyfin.map((lib: { title: string }) => lib.title)).toEqual([JELLYFIN_LIBRARY]);
-    expect(jellyfin[0].type).toBe("movie");
+    const jellyfin = libraries
+      .filter((lib: { server: string }) => lib.server === "jellyfin")
+      .map((lib: { title: string; type: string }) => [lib.title, lib.type]);
     // The fake also serves a music library, which Deduparr does not handle
-    expect(jellyfin.map((lib: { title: string }) => lib.title)).not.toContain("Fake Music");
+    expect(jellyfin).toEqual([
+      [JELLYFIN_LIBRARY, "movie"],
+      ["Fake Shows", "show"],
+    ]);
   });
 
   test("a scan finds the duplicate and keeps the better file", async ({ page, request }) => {
@@ -90,7 +93,7 @@ test.describe("jellyfin", () => {
 
     // A retry would find the set already stored, so assert on the end state
     // rather than on this run having been the one to create it
-    await runScan(request, [JELLYFIN_LIBRARY]);
+    await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
 
     const pending = await getPendingSets(request);
     expect(pending.find((s: { title: string }) => s.title === title)).toBeTruthy();
@@ -115,7 +118,7 @@ test.describe("jellyfin", () => {
     await markJellyfinConfigured(request);
     await setJellyfinMode(request, "no-duplicates");
 
-    const result = await runScan(request, [JELLYFIN_LIBRARY]);
+    const result = await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
 
     expect(result.sets_created).toBe(0);
     const titles = (await getPendingSets(request)).map((s: { title: string }) => s.title);
@@ -130,13 +133,13 @@ test.describe("jellyfin", () => {
     await setJellyfinMode(request, "default", title);
     seedJellyfinMedia(title);
 
-    await runScan(request, [JELLYFIN_LIBRARY]);
+    await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
     expect((await getPendingSets(request)).some((s: { title: string }) => s.title === title)).toBe(
       true
     );
 
     await setJellyfinMode(request, "empty");
-    await runScan(request, [JELLYFIN_LIBRARY]);
+    await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
 
     expect((await getPendingSets(request)).some((s: { title: string }) => s.title === title)).toBe(
       false
@@ -149,7 +152,7 @@ test.describe("jellyfin", () => {
     await setJellyfinMode(request, "default", title);
     const { keep, drop } = seedJellyfinMedia(title);
 
-    await runScan(request, [JELLYFIN_LIBRARY]);
+    await runScan(request, { jellyfin: [JELLYFIN_LIBRARY] });
     const sets = await (await request.get("/api/scan/duplicates")).json();
     const set = sets.find((s: { title: string }) => s.title === title);
     expect(set, "the scan should have stored the set").toBeTruthy();

@@ -3,11 +3,17 @@ import fs from "fs";
 import path from "path";
 
 import {
+  ARR_API_KEY,
   BACKEND_URL,
   E2E_TMP,
   JELLYFIN_API_KEY,
   JELLYFIN_LIBRARY,
   JELLYFIN_URL,
+  QBIT_PASSWORD,
+  QBIT_URL,
+  QBIT_USERNAME,
+  RADARR_URL,
+  SONARR_URL,
 } from "../playwright.config";
 
 /** Overwrite a single config key through the real API. */
@@ -93,6 +99,44 @@ export async function markJellyfinUnconfigured(request: APIRequestContext) {
   await deleteConfig(request, "jellyfin_api_key");
 }
 
+const SERVICE_CONFIG = {
+  radarr_url: RADARR_URL,
+  radarr_api_key: ARR_API_KEY,
+  sonarr_url: SONARR_URL,
+  sonarr_api_key: ARR_API_KEY,
+  qbittorrent_url: QBIT_URL,
+  qbittorrent_username: QBIT_USERNAME,
+  qbittorrent_password: QBIT_PASSWORD,
+};
+
+/** Point Deduparr at the stand-in Radarr, Sonarr and qBittorrent. */
+export async function markServicesConfigured(request: APIRequestContext) {
+  for (const [key, value] of Object.entries(SERVICE_CONFIG)) {
+    await setConfig(request, key, value);
+  }
+}
+
+export async function markServicesUnconfigured(request: APIRequestContext) {
+  for (const key of Object.keys(SERVICE_CONFIG)) {
+    await deleteConfig(request, key);
+  }
+}
+
+/** Put the stand-in services back to their starting state, around one title. */
+export async function resetServices(request: APIRequestContext, title?: string) {
+  for (const url of [RADARR_URL, SONARR_URL, QBIT_URL]) {
+    const res = await request.post(`${url}/reset`, { data: { title } });
+    expect(res.ok()).toBeTruthy();
+  }
+}
+
+/** What a stand-in service holds, and what Deduparr asked of it. */
+export async function serviceState(request: APIRequestContext, url: string) {
+  const res = await request.get(`${url}/state`);
+  expect(res.ok()).toBeTruthy();
+  return res.json();
+}
+
 /**
  * Create the files the stand-in Jellyfin claims to hold.
  *
@@ -101,34 +145,62 @@ export async function markJellyfinUnconfigured(request: APIRequestContext) {
  */
 export function seedJellyfinMedia(title = "Fake Duplicate (2024)") {
   const dir = path.join(E2E_TMP, "media", "Movies", title);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `${title} 1080p.mkv`), Buffer.alloc(8_000_000, 1));
-  fs.writeFileSync(path.join(dir, `${title} 720p.mkv`), Buffer.alloc(2_000_000, 2));
+  const file = (name: string, size: number) => writeFile(path.join(dir, name), size);
 
-  const single = path.join(E2E_TMP, "media", "Movies", "Fake Single (2024)");
-  fs.mkdirSync(single, { recursive: true });
-  fs.writeFileSync(path.join(single, "Fake Single (2024) 1080p.mkv"), Buffer.alloc(5_000_000, 3));
+  file(`${title} 1080p.mkv`, 8_000_000);
+  file(`${title} 720p.mkv`, 2_000_000);
+  writeFile(
+    path.join(E2E_TMP, "media", "Movies", "Fake Single (2024)", "Fake Single (2024) 1080p.mkv"),
+    5_000_000
+  );
 
   return {
     keep: path.join(dir, `${title} 1080p.mkv`),
+    keepSidecar: file(`${title} 1080p.en.srt`, 10),
     drop: path.join(dir, `${title} 720p.mkv`),
+    dropSidecars: [file(`${title} 720p.nfo`, 10), file(`${title} 720p.en.srt`, 10)],
   };
+}
+
+/**
+ * Create the episode the stand-in Jellyfin's "episodes" mode holds twice,
+ * beside another episode from the same season pack and the season's subtitles.
+ */
+export function seedEpisodeMedia() {
+  const season = path.join(E2E_TMP, "media", "Shows", "Fake Show", "Season 1");
+  const file = (name: string, size: number) => writeFile(path.join(season, name), size);
+
+  return {
+    keep: file("Fake Show - S01E02 1080p.mkv", 4_000_000),
+    drop: file("Fake Show - S01E02 480p.mkv", 700_000),
+    sibling: file("Fake Show - S01E03 480p.mkv", 700_000),
+    subtitles: file("Subs/Fake Show - S01E03.en.srt", 10),
+  };
+}
+
+function writeFile(filePath: string, size: number) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, Buffer.alloc(size, 1));
+  return filePath;
 }
 
 /** Point the stand-in Jellyfin at a different library state. */
 export async function setJellyfinMode(
   request: APIRequestContext,
-  mode: "default" | "empty" | "no-duplicates",
+  mode: "default" | "empty" | "no-duplicates" | "episodes",
   title?: string
 ) {
   const res = await request.post(`${JELLYFIN_URL}/reset`, { data: { mode, title } });
   expect(res.ok()).toBeTruthy();
 }
 
-/** Run a scan through the real API and return what it reported. */
-export async function runScan(request: APIRequestContext, libraries?: string[]) {
+/**
+ * Run a scan through the real API and return what it reported. The libraries
+ * given per server become the stored selection; left out, it is scanned as is.
+ */
+export async function runScan(request: APIRequestContext, libraries?: Record<string, string[]>) {
   const res = await request.post(`${BACKEND_URL}/api/scan/start`, {
-    data: { library_names: libraries ?? [], media_types: ["movie"] },
+    data: libraries ? { libraries } : {},
   });
   if (!res.ok()) {
     throw new Error(`scan failed: HTTP ${res.status()} ${await res.text()}`);

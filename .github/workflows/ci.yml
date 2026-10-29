@@ -157,7 +157,8 @@ jobs:
       run: |
         docker run -d --name deduparr -p 8655:8655 deduparr:test
         for _ in $(seq 60); do
-          curl -fsS http://localhost:8655/health && exit 0
+          # The API's answer, through nginx: the API started and migrated the database
+          curl -fsS http://localhost:8655/health | grep '"status":"ok"' && exit 0
           sleep 2
         done
         docker logs deduparr

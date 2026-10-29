@@ -55,6 +55,10 @@ COPY --from=backend-builder /usr/local/bin /usr/local/bin
 # Copy backend application
 COPY backend/app ./app
 
+# Copy the migrations, which run when the app starts
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/alembic ./alembic
+
 # Copy manifest.json (version source of truth)
 COPY manifest.json ./manifest.json
 

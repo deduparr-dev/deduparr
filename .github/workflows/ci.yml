@@ -133,7 +133,20 @@ jobs:
       uses: docker/build-push-action@v6
       with:
         context: .
+        load: true
         push: false
         tags: deduparr:test
         cache-from: type=gha
         cache-to: type=gha,mode=max
+
+    # An image that builds can still fail to start, and a base image bump
+    # from Dependabot is merged on this job passing
+    - name: Start the image and wait for it to answer
+      run: |
+        docker run -d --name deduparr -p 8655:8655 deduparr:test
+        for _ in $(seq 60); do
+          curl -fsS http://localhost:8655/health && exit 0
+          sleep 2
+        done
+        docker logs deduparr
+        exit 1

@@ -96,7 +96,7 @@ Deduparr provides multiple Docker image tags for different deployment scenarios:
 |-----|-------------|----------|---------|
 | `latest` | Latest stable release | **Production** (recommended) | Only on version tag releases (v0.1.2, etc.) |
 | `0.1.2`, `0.1` | Specific versions (semver) | Production (pinned) | Never (immutable) |
-| `dev` | Development branch | Testing latest features | Nightly builds (midnight UTC) |
+| `dev` | Development branch | Testing latest features | Every push to `develop`, and nightly (midnight UTC) |
 | `sha-<commit>` | Specific commit SHA from `develop` | Testing/debugging dev builds | Never (immutable) |
 
 **Recommendations:**

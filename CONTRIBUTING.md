@@ -10,8 +10,8 @@ Be respectful and constructive. We're all here to build something great together
 
 ### Prerequisites
 
-- Python 3.14+
-- Node.js 22+ (CI and the Docker images use Node 26)
+- Python 3.14+ (CI and the Docker images use the Dockerfile's version)
+- Node.js 22+ (CI and the Docker images use the Dockerfile's version)
 - Docker (optional, for testing)
 
 ### Development Setup

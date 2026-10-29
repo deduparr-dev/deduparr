@@ -18,12 +18,60 @@ import {
 import { cn } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  MEDIA_SERVER_NAMES,
   scanAPI,
   configAPI,
+  setupAPI,
+  type AppConfig,
   type DuplicateSet as ApiDuplicateSet,
   type DuplicateFile,
+  type DeleteResponse,
+  type DeleteAllResponse,
+  type LibrarySelection,
+  type MediaLibrary,
 } from "@/services/api";
 import { toast } from "@/components/ui/use-toast";
+
+const SHOWN_ERRORS = 3;
+
+function deletionTitle({ success, dry_run }: DeleteResponse | DeleteAllResponse): string {
+  if (!success) return dry_run ? "Dry Run Found Problems" : "Deletion Incomplete";
+  return dry_run ? "Dry Run Complete" : "Deletion Complete";
+}
+
+function showDeletionResult(result: DeleteResponse | DeleteAllResponse) {
+  const hidden = result.errors.length - SHOWN_ERRORS;
+  toast({
+    title: deletionTitle(result),
+    description: (
+      <div className="space-y-1">
+        <div>{result.message}</div>
+        {result.errors.slice(0, SHOWN_ERRORS).map((error) => (
+          <div key={error} className="text-xs break-all">
+            {error}
+          </div>
+        ))}
+        {hidden > 0 && <div className="text-xs">…and {hidden} more</div>}
+      </div>
+    ),
+    variant: result.success ? undefined : "destructive",
+  });
+}
+
+function namesIn(value?: string): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+}
+
+/** The libraries each server is set to scan, as stored */
+function storedSelection(config?: AppConfig): LibrarySelection {
+  return {
+    plex: namesIn(config?.plex_libraries),
+    jellyfin: namesIn(config?.jellyfin_libraries),
+  };
+}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 Bytes";
@@ -31,6 +79,72 @@ function formatBytes(bytes: number): string {
   const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
+}
+
+function DeleteConfirmPanel({
+  id,
+  heading,
+  description,
+  dryRun,
+  onDryRunChange,
+  onConfirm,
+  onCancel,
+}: {
+  id: string;
+  heading: string;
+  description: React.ReactNode;
+  dryRun: boolean;
+  onDryRunChange: (value: boolean) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const checkboxId = `dry-run-${id}`;
+
+  return (
+    <div
+      data-testid={`delete-confirm-${id}`}
+      className="mt-3 md:mt-4 p-3 md:p-4 rounded-lg bg-warning-light border border-warning-border"
+    >
+      <div className="flex items-start gap-2 mb-3">
+        <AlertTriangle className="w-4 h-4 md:w-5 md:h-5 text-warning flex-shrink-0 mt-0.5" />
+        <div>
+          <h5 className="font-semibold text-sm md:text-base text-foreground">{heading}</h5>
+          <p className="text-xs md:text-sm text-muted-foreground mt-1">{description}</p>
+        </div>
+      </div>
+
+      <div className="flex items-start gap-2 mb-3">
+        <Checkbox
+          id={checkboxId}
+          checked={dryRun}
+          onCheckedChange={(checked) => onDryRunChange(checked === true)}
+          className="mt-0.5"
+        />
+        <label htmlFor={checkboxId} className="text-xs md:text-sm font-medium">
+          Dry Run <span className="text-muted-foreground font-normal">(Test without deleting)</span>
+        </label>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Button
+          size="sm"
+          variant={dryRun ? "secondary" : "destructive"}
+          onClick={onConfirm}
+          className="text-xs md:text-sm w-full sm:w-auto"
+        >
+          {dryRun ? "Test Deletion (Dry Run)" : "Delete Permanently"}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={onCancel}
+          className="text-xs md:text-sm w-full sm:w-auto"
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 function DuplicateSetCard({
@@ -72,7 +186,7 @@ function DuplicateSetCard({
   }
 
   return (
-    <Card className="overflow-hidden">
+    <Card className="overflow-hidden" data-testid={`duplicate-set-${dupSet.id}`}>
       {/* Header */}
       <div className="p-3 md:p-4 bg-muted/50">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -100,11 +214,15 @@ function DuplicateSetCard({
                 <Badge variant="outline" className="text-xs">
                   {dupSet.media_type}
                 </Badge>
+                <Badge variant="outline" className="text-xs" data-testid="set-media-server">
+                  {MEDIA_SERVER_NAMES[dupSet.media_server] ?? dupSet.media_server}
+                </Badge>
                 <Badge variant="outline" className="text-xs">
                   Versions: {dupSet.files.length}
                 </Badge>
                 <Badge variant="outline" className="text-xs">
-                  Can reclaim: {formatBytes(dupSet.space_to_reclaim)}
+                  {dupSet.status === "processed" ? "Reclaimed" : "Can reclaim"}:{" "}
+                  {formatBytes(dupSet.space_to_reclaim)}
                 </Badge>
               </div>
             </div>
@@ -137,56 +255,23 @@ function DuplicateSetCard({
           )}
         </div>
 
-        {/* Delete Confirmation */}
         {showDeleteConfirm && !isDeleting && (
-          <div className="mt-3 md:mt-4 p-3 md:p-4 rounded-lg bg-warning-light border border-warning-border">
-            <div className="flex items-start gap-2 mb-3">
-              <AlertTriangle className="w-4 h-4 md:w-5 md:h-5 text-warning flex-shrink-0 mt-0.5" />
-              <div>
-                <h5 className="font-semibold text-sm md:text-base text-foreground">
-                  Confirm Deletion
-                </h5>
-                <p className="text-xs md:text-sm text-muted-foreground mt-1">
-                  This will delete <strong>{filesToDelete.length}</strong> file
-                  {filesToDelete.length === 1 ? "" : "s"} and keep{" "}
-                  <strong>{filesToKeep.length}</strong> file
-                  {filesToKeep.length === 1 ? "" : "s"}.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-2 mb-3">
-              <Checkbox
-                id="dry-run"
-                checked={dryRun}
-                onCheckedChange={(checked) => setDryRun(checked === true)}
-                className="mt-0.5"
-              />
-              <label htmlFor="dry-run" className="text-xs md:text-sm font-medium">
-                Dry Run{" "}
-                <span className="text-muted-foreground font-normal">(Test without deleting)</span>
-              </label>
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-2">
-              <Button
-                size="sm"
-                variant={dryRun ? "secondary" : "destructive"}
-                onClick={handleDelete}
-                className="text-xs md:text-sm w-full sm:w-auto"
-              >
-                {dryRun ? "Test Deletion (Dry Run)" : "Delete Permanently"}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setShowDeleteConfirm(false)}
-                className="text-xs md:text-sm w-full sm:w-auto"
-              >
-                Cancel
-              </Button>
-            </div>
-          </div>
+          <DeleteConfirmPanel
+            id={String(dupSet.id)}
+            heading="Confirm Deletion"
+            description={
+              <>
+                This will delete <strong>{filesToDelete.length}</strong> file
+                {filesToDelete.length === 1 ? "" : "s"} and keep{" "}
+                <strong>{filesToKeep.length}</strong> file
+                {filesToKeep.length === 1 ? "" : "s"}.
+              </>
+            }
+            dryRun={dryRun}
+            onDryRunChange={setDryRun}
+            onConfirm={handleDelete}
+            onCancel={() => setShowDeleteConfirm(false)}
+          />
         )}
       </div>
 
@@ -281,17 +366,27 @@ function DuplicateSetCard({
 }
 
 export default function Scan() {
-  const [selectedLibraries, setSelectedLibraries] = useState<string[]>([]);
+  // The stored selection until the user changes it here
+  const [pickedLibraries, setPickedLibraries] = useState<LibrarySelection | null>(null);
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: () => configAPI.getAll(),
+  });
+  const selection = pickedLibraries ?? storedSelection(config);
   const queryClient = useQueryClient();
 
-  // Check if Plex is configured
-  const { data: config } = useQuery({
-    queryKey: ["plexConfig"],
-    queryFn: () => configAPI.getAll(),
-    staleTime: 10 * 60 * 1000,
-  });
-
-  const plexConfigured = !!config?.plex_auth_token;
+  // Everything a scan or a deletion can change
+  const refreshDuplicateQueries = () => {
+    for (const key of [
+      "duplicates",
+      "scanStatus",
+      "dashboardStats",
+      "recentActivity",
+      "recentDeletions",
+    ]) {
+      queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  };
 
   // Fetch deep scan setting
   const { data: deepScanData } = useQuery({
@@ -302,11 +397,10 @@ export default function Scan() {
 
   const deepScanEnabled = deepScanData?.enabled ?? false;
 
-  // Fetch Plex libraries only if Plex authentication token exists in database
+  // Libraries from every configured media server, each tagged with its origin
   const { data: libraries = [], isPending: librariesPending } = useQuery({
-    queryKey: ["plexLibraries"],
-    queryFn: () => configAPI.getPlexLibraries(),
-    enabled: plexConfigured, // Only run query if plex_auth_token exists in config
+    queryKey: ["mediaLibraries"],
+    queryFn: () => setupAPI.getMediaLibraries(),
     staleTime: 10 * 60 * 1000, // Cache for 10 minutes
     retry: false, // Don't retry failed requests to avoid delays
   });
@@ -328,35 +422,22 @@ export default function Scan() {
 
   // Start scan mutation
   const startScanMutation = useMutation({
-    mutationFn: (libraryNames: string[]) => scanAPI.startScan({ library_names: libraryNames }),
-    onSuccess: async (data) => {
-      const totalSets = data.total_sets || data.sets_created;
-      const newSets = data.sets_created || 0;
-      const existingSets = data.sets_already_exist || 0;
-
-      // Build description with helpful context
-      const mainMessage = `Found ${data.duplicates_found} duplicate files. ${newSets} new sets, ${existingSets} existing sets (${totalSets} total).`;
-
-      // Add helpful explanation if files found but no sets created
-      const showWarning = data.duplicates_found > 0 && totalSets === 0;
-
+    mutationFn: (libraries: LibrarySelection) => scanAPI.startScan({ libraries }),
+    onSuccess: (data) => {
       toast({
         title: "Scan Complete",
-        description: showWarning ? (
+        description: (
           <div>
-            <div>{mainMessage}</div>
-            <div className="mt-2">No sets created because files are missing on disk.</div>
+            <div>{data.message}</div>
+            {data.duplicates_found > 0 && data.total_sets === 0 && (
+              <div className="mt-2">No sets created because files are missing on disk.</div>
+            )}
           </div>
-        ) : (
-          <div>{mainMessage}</div>
         ),
       });
-
-      // Invalidate all caches to update dashboard immediately
-      await queryClient.invalidateQueries({ queryKey: ["duplicates"] });
-      await queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-      await queryClient.invalidateQueries({ queryKey: ["recentActivity"] });
+      refreshDuplicateQueries();
+      // The selection scanned is now the stored one
+      queryClient.invalidateQueries({ queryKey: ["config"] });
     },
     onError: (error: Error) => {
       toast({
@@ -367,23 +448,33 @@ export default function Scan() {
     },
   });
 
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false);
+  const [deleteAllDryRun, setDeleteAllDryRun] = useState(true);
+
   // Delete duplicate set mutation
   const deleteMutation = useMutation({
     mutationFn: ({ setId, dryRun }: { setId: number; dryRun: boolean }) =>
       scanAPI.deleteDuplicateSet(setId, dryRun),
     onSuccess: (data) => {
+      showDeletionResult(data);
+      if (!data.dry_run) refreshDuplicateQueries();
+    },
+    onError: (error: Error) => {
       toast({
-        title: data.dry_run ? "Dry Run Complete" : "Deletion Complete",
-        description: <div>{data.message}</div>,
+        title: "Deletion Failed",
+        description: <div>{error.message}</div>,
+        variant: "destructive",
       });
-      if (!data.dry_run) {
-        // Invalidate all relevant caches to show updated stats immediately
-        queryClient.invalidateQueries({ queryKey: ["duplicates"] });
-        queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
-        queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-        queryClient.invalidateQueries({ queryKey: ["recentActivity"] });
-        queryClient.invalidateQueries({ queryKey: ["recentDeletions"] });
-      }
+    },
+  });
+
+  // Delete every pending set in one pass
+  const deleteAllMutation = useMutation({
+    mutationFn: (dryRun: boolean) => scanAPI.deleteAllDuplicateSets(dryRun),
+    onSuccess: (data) => {
+      showDeletionResult(data);
+      setShowDeleteAllConfirm(false);
+      if (!data.dry_run) refreshDuplicateQueries();
     },
     onError: (error: Error) => {
       toast({
@@ -422,9 +513,25 @@ export default function Scan() {
     },
   });
 
+  function isSelected(library: MediaLibrary) {
+    return selection[library.server]?.includes(library.title) ?? false;
+  }
+
+  // Every listed server is sent, so one with nothing ticked stores that; a
+  // server that could not be listed keeps its selection.
+  const scanSelection: LibrarySelection = Object.fromEntries(
+    [...new Set(libraries.map((library) => library.server))].map((server) => [
+      server,
+      libraries
+        .filter((library) => library.server === server && isSelected(library))
+        .map((library) => library.title),
+    ])
+  );
+  const nothingSelected = Object.values(scanSelection).every((titles) => titles.length === 0);
+
   function handleStartScan() {
-    if (selectedLibraries.length === 0) return;
-    startScanMutation.mutate(selectedLibraries);
+    if (nothingSelected) return;
+    startScanMutation.mutate(scanSelection);
   }
 
   function handleDelete(setId: number, dryRun: boolean) {
@@ -435,26 +542,34 @@ export default function Scan() {
     toggleKeepMutation.mutate({ setId, fileId, keep });
   }
 
-  function toggleLibrary(library: string) {
-    setSelectedLibraries((prev) =>
-      prev.includes(library) ? prev.filter((l) => l !== library) : [...prev, library]
-    );
+  function toggleLibrary(library: MediaLibrary) {
+    const titles = selection[library.server] ?? [];
+    setPickedLibraries({
+      ...selection,
+      [library.server]: isSelected(library)
+        ? titles.filter((title) => title !== library.title)
+        : [...titles, library.title],
+    });
   }
 
   const isScanning = startScanMutation.isPending;
 
+  const pendingSets = duplicates.filter((dupSet) => dupSet.status === "pending");
+  const pendingFilesToDelete = pendingSets.reduce(
+    (total, dupSet) => total + dupSet.files.filter((file) => !file.keep).length,
+    0
+  );
+  const pendingSpace = pendingSets.reduce((total, dupSet) => total + dupSet.space_to_reclaim, 0);
+
   // Dev-only: Direct disk scan mutation
   const devScanMutation = useMutation({
     mutationFn: () => scanAPI.devDiskScan(),
-    onSuccess: async (data) => {
+    onSuccess: (data) => {
       toast({
         title: "Dev Scan Complete",
         description: `Created ${data.sets_created} duplicate sets (${data.duplicates_found} files)`,
       });
-      // Invalidate all caches to show results immediately
-      await queryClient.invalidateQueries({ queryKey: ["duplicates"] });
-      await queryClient.invalidateQueries({ queryKey: ["scanStatus"] });
-      await queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
+      refreshDuplicateQueries();
     },
     onError: (error: Error) => {
       toast({
@@ -475,7 +590,7 @@ export default function Scan() {
       <div>
         <h1 className="text-2xl md:text-3xl font-bold text-foreground">Scan for Duplicates</h1>
         <p className="text-sm md:text-base text-muted-foreground mt-1">
-          Find duplicate media files in your Plex libraries
+          Find duplicate media files in your libraries
         </p>
       </div>
 
@@ -525,28 +640,36 @@ export default function Scan() {
             ) : libraries.length === 0 ? (
               <div className="p-4 rounded-lg bg-muted border border-border">
                 <p className="text-sm text-muted-foreground">
-                  No libraries found. Please{" "}
-                  <Link to="/setup" className="text-primary hover:underline">
-                    run the Setup Wizard
-                  </Link>{" "}
-                  to configure Plex.
+                  No libraries found. Check your media server in{" "}
+                  <Link to="/settings" className="text-primary hover:underline">
+                    Settings
+                  </Link>
+                  .
                 </p>
               </div>
             ) : (
               <div className="space-y-2">
                 {libraries.map((library) => (
-                  <div key={library.key} className="flex items-center gap-2">
+                  <div key={`${library.server}:${library.key}`} className="flex items-center gap-2">
                     <Checkbox
-                      id={library.key}
-                      checked={selectedLibraries.includes(library.title)}
-                      onCheckedChange={() => toggleLibrary(library.title)}
+                      id={`scan-${library.server}-${library.key}`}
+                      checked={isSelected(library)}
+                      onCheckedChange={() => toggleLibrary(library)}
                     />
-                    <label htmlFor={library.key} className="text-sm cursor-pointer">
+                    <label
+                      htmlFor={`scan-${library.server}-${library.key}`}
+                      className="text-sm cursor-pointer"
+                    >
                       {library.title}{" "}
-                      <span className="text-muted-foreground">({library.type})</span>
+                      <span className="text-muted-foreground">
+                        ({library.type}) on {MEDIA_SERVER_NAMES[library.server] ?? library.server}
+                      </span>
                     </label>
                   </div>
                 ))}
+                <p className="text-xs text-muted-foreground pt-1">
+                  Scheduled scans use the same selection.
+                </p>
               </div>
             )}
           </div>
@@ -555,7 +678,7 @@ export default function Scan() {
         <div className="flex flex-wrap gap-2">
           <Button
             size="lg"
-            disabled={selectedLibraries.length === 0 || isScanning}
+            disabled={nothingSelected || isScanning}
             onClick={handleStartScan}
             className="w-full sm:w-auto"
           >
@@ -580,7 +703,46 @@ export default function Scan() {
 
       {/* Results */}
       <div className="space-y-3 md:space-y-4">
-        <h3 className="text-base md:text-lg font-semibold">Duplicate Sets Found</h3>
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <h3 className="text-base md:text-lg font-semibold">Duplicate Sets Found</h3>
+          {pendingSets.length > 0 && (
+            <Button
+              size="sm"
+              variant="destructive"
+              data-testid="delete-all"
+              disabled={deleteAllMutation.isPending}
+              onClick={() => setShowDeleteAllConfirm(!showDeleteAllConfirm)}
+              className="w-full md:w-auto text-xs md:text-sm"
+            >
+              {deleteAllMutation.isPending ? (
+                <Loader2 className="w-3 h-3 md:w-4 md:h-4 mr-2 animate-spin" />
+              ) : (
+                <Trash2 className="w-3 h-3 md:w-4 md:h-4 mr-2" />
+              )}
+              Delete All ({pendingSets.length})
+            </Button>
+          )}
+        </div>
+
+        {showDeleteAllConfirm && !deleteAllMutation.isPending && (
+          <DeleteConfirmPanel
+            id="all"
+            heading="Delete every pending duplicate set"
+            description={
+              <>
+                This will delete <strong>{pendingFilesToDelete}</strong> file
+                {pendingFilesToDelete === 1 ? "" : "s"} across <strong>{pendingSets.length}</strong>{" "}
+                set
+                {pendingSets.length === 1 ? "" : "s"}, keeping the highest ranked file in each, and
+                reclaim about <strong>{formatBytes(pendingSpace)}</strong>.
+              </>
+            }
+            dryRun={deleteAllDryRun}
+            onDryRunChange={setDeleteAllDryRun}
+            onConfirm={() => deleteAllMutation.mutate(deleteAllDryRun)}
+            onCancel={() => setShowDeleteAllConfirm(false)}
+          />
+        )}
         {duplicates.length === 0 ? (
           <Card className="p-6 md:p-8 text-center text-sm md:text-base text-muted-foreground">
             No duplicates found. Start a scan to find duplicate media files.

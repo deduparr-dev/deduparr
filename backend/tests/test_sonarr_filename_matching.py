@@ -9,7 +9,7 @@ FULL PATH, not just filename, to avoid deleting the wrong file.
 import pytest
 from unittest.mock import AsyncMock
 
-from app.services.sonarr_service import SonarrService
+from app.services.arr.sonarr_service import SonarrService
 from app.models.config import Config
 
 
@@ -166,13 +166,12 @@ async def test_find_episode_without_episode_ids(sonarr_service, mock_sonarr_clie
         "/plexdownloads/TV/Show/Show S01E01.mkv"
     )
 
-    # Should return minimal episode object with orphaned flag
+    # An episode without an ID, holding the file, so it can still be deleted
     assert result is not None
-    assert result["_orphaned"] is True
     assert result["seriesId"] == 1
     assert result["seasonNumber"] == 1
     assert result["episodeFile"]["id"] == 100
-    assert result["id"] is None  # No episode ID for orphaned files
+    assert "id" not in result
 
 
 @pytest.mark.asyncio
@@ -195,13 +194,12 @@ async def test_find_episode_empty_episode_ids(sonarr_service, mock_sonarr_client
         "/plexdownloads/TV/Show/Show S01E01.mkv"
     )
 
-    # Should return minimal episode object with orphaned flag
+    # An episode without an ID, holding the file, so it can still be deleted
     assert result is not None
-    assert result["_orphaned"] is True
     assert result["seriesId"] == 1
     assert result["seasonNumber"] == 1
     assert result["episodeFile"]["id"] == 100
-    assert result["id"] is None  # No episode ID for orphaned files
+    assert "id" not in result
 
 
 @pytest.mark.asyncio

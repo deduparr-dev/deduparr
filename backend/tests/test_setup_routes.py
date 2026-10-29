@@ -288,7 +288,7 @@ async def test_mark_setup_complete_missing_config(test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
+@patch("app.services.notifications.service.EmailService")
 async def test_test_email_connection_success(mock_email_service, test_db):
     """Test successful email connection test"""
     # Mock email service
@@ -316,7 +316,7 @@ async def test_test_email_connection_success(mock_email_service, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
+@patch("app.services.notifications.service.EmailService")
 async def test_test_email_connection_failure(mock_email_service, test_db):
     """Test failed email connection test"""
     # Mock email service to fail
@@ -347,7 +347,7 @@ async def test_test_email_connection_failure(mock_email_service, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
+@patch("app.services.notifications.service.EmailService")
 async def test_test_email_connection_exception(mock_email_service, test_db):
     """Test email connection test with exception"""
     # Mock email service to raise exception
@@ -373,21 +373,12 @@ async def test_test_email_connection_exception(mock_email_service, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_service.EmailService")
-@patch("app.api.routes.setup.get_token_manager")
+@patch("app.services.notifications.service.EmailService")
 async def test_test_email_connection_with_encrypted_password(
-    mock_get_token_manager, mock_email_service, test_db
+    mock_email_service, test_db
 ):
-    """Test email connection with encrypted password"""
-    # Mock token manager to decrypt password
-    mock_token_manager = MagicMock()
-    mock_token_manager.decrypt.return_value = "decrypted_password"
-    mock_get_token_manager.return_value = mock_token_manager
-
-    # Mock email service
-    mock_service_instance = MagicMock()
-    mock_service_instance.send_test_email.return_value = (True, None)
-    mock_email_service.return_value = mock_service_instance
+    """A saved password Settings sends back encrypted is used decrypted"""
+    mock_email_service.return_value.send_test_email.return_value = (True, None)
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -398,14 +389,10 @@ async def test_test_email_connection_with_encrypted_password(
                 "smtp_host": "smtp.gmail.com",
                 "smtp_port": 587,
                 "smtp_user": "user@gmail.com",
-                # Simulated encrypted password (has . and is long)
-                "smtp_password": "InRlc3RfcGFzc3dvcmQi.encrypted_token_here_very_long_string",
+                "smtp_password": encrypt_test_password("app-password"),
                 "notification_email": "test@example.com",
             },
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
 
-        # Verify decryption was attempted
-        mock_token_manager.decrypt.assert_called_once()
+    assert response.json()["success"] is True
+    assert mock_email_service.call_args.kwargs["smtp_password"] == "app-password"

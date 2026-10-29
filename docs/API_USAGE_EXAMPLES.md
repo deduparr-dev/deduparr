@@ -13,13 +13,15 @@ The duplicate detection and deletion process works in three stages:
 
 ### 1. Scan for Duplicates
 
-Start a scan to detect duplicates in your Plex libraries:
+Scan every configured media server for duplicates. The libraries given per
+server become its stored selection, which scheduled scans use as well; send
+`{}` to scan the stored selection as it is:
 
 ```bash
 curl -X POST "http://localhost:3001/api/scan/start" \
   -H "Content-Type: application/json" \
   -d '{
-    "library_names": ["Movies", "TV Shows"]
+    "libraries": {"plex": ["Movies", "TV Shows"], "jellyfin": ["Films"]}
   }'
 ```
 
@@ -27,10 +29,11 @@ curl -X POST "http://localhost:3001/api/scan/start" \
 ```json
 {
   "success": true,
-  "message": "Scan completed for 2 libraries",
+  "message": "Scanned 3 libraries: 8 new, 2 updated, 0 removed",
   "duplicates_found": 15,
   "sets_created": 8,
-  "sets_already_exist": 2,
+  "sets_updated": 2,
+  "sets_removed": 0,
   "total_sets": 10
 }
 ```
@@ -243,12 +246,13 @@ The setting applies when a duplicate set is created, or re-ranked because its fi
 
 When deletion is executed (non-dry-run), the following stages occur:
 
-1. **qBittorrent Removal** - Remove item (if file is in library)
-   - Skipped if qBittorrent is not configured
-2. **\*arr Removal** - Remove from Radarr/Sonarr
+1. **\*arr Removal** - Delete through Radarr/Sonarr
    - Skipped if Radarr/Sonarr is not configured
-3. **Disk Deletion** - Delete physical file
-4. **Plex Refresh** - Trigger Plex library scan to update metadata
+2. **qBittorrent Removal** - Remove the torrent holding the file
+   - Skipped if qBittorrent is not configured
+3. **\*arr Rescan** - Have Radarr/Sonarr import the kept file
+4. **Disk Deletion** - Delete the file if still there, and what it leaves behind
+5. **Media Server Refresh** - Refresh the item on Plex or Jellyfin
 
 Each stage is tracked in the database and can be rolled back if errors occur.
 

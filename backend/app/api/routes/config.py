@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.models import Config
+from app.services.shared.security import encrypt_if_sensitive
 from app.models.scoring_rule import ScoringRule
-from app.services.arr_quality import PREFER_ARR_QUALITY_PROFILE_KEY
+from app.services.arr.quality import PREFER_ARR_QUALITY_PROFILE_KEY
 
 
 class ScoringRuleImportData(TypedDict, total=False):
@@ -336,10 +337,14 @@ async def update_config(
     result = await db.execute(select(Config).where(Config.key == key))
     config = result.scalar_one_or_none()
 
+    # Secrets are encrypted here too, not only by the setup wizard, so a value
+    # written through this endpoint is never left in the clear.
+    value = encrypt_if_sensitive(key, config_update.value)
+
     if config:
-        config.value = config_update.value
+        config.value = value
     else:
-        config = Config(key=key, value=config_update.value)
+        config = Config(key=key, value=value)
         db.add(config)
 
     await db.commit()
@@ -376,10 +381,12 @@ async def batch_update_config(
         result = await db.execute(select(Config).where(Config.key == key))
         config = result.scalar_one_or_none()
 
+        stored = encrypt_if_sensitive(key, value)
+
         if config:
-            config.value = value
+            config.value = stored
         else:
-            config = Config(key=key, value=value)
+            config = Config(key=key, value=stored)
             db.add(config)
 
         updated_configs.append(config)

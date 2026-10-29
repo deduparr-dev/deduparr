@@ -6,13 +6,23 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime, timezone
 
-from app.services.scheduled_deletion import ScheduledDeletionService
+from sqlalchemy import func, select
+
+from app.services.deletion.pipeline import SetDeletion
+from app.services.deletion.scheduled import ScheduledDeletionService
 from app.models import (
     DuplicateSet,
     DuplicateFile,
     DuplicateStatus,
     MediaType,
 )
+
+
+def _pipeline(*outcomes):
+    """A DeletionPipeline stand-in whose delete_set gives these outcomes in turn."""
+    pipeline = AsyncMock()
+    pipeline.delete_set.side_effect = list(outcomes)
+    return pipeline
 
 
 @pytest.mark.asyncio
@@ -29,50 +39,12 @@ async def test_run_scheduled_deletion_no_pending_sets(test_db):
 
 
 @pytest.mark.asyncio
-async def test_run_scheduled_deletion_dry_run(test_db):
-    """Test dry run mode doesn't actually delete"""
-    # Create a pending duplicate set with files marked for deletion
-    duplicate_set = DuplicateSet(
-        plex_item_id="12345",
-        media_type=MediaType.MOVIE,
-        title="Test Movie (2020)",
-        status=DuplicateStatus.PENDING,
-    )
-    test_db.add(duplicate_set)
-    await test_db.flush()
-
-    file1 = DuplicateFile(
-        set_id=duplicate_set.id,
-        file_path="/media/movie1.mkv",
-        file_size=1000000,
-        score=75,
-        keep=False,
-    )
-    test_db.add(file1)
-    await test_db.commit()
-
-    # Run dry run
-    service = ScheduledDeletionService(test_db)
-    summary = await service.run_scheduled_deletion(dry_run=True, send_email=False)
-
-    # Verify
-    assert summary["dry_run"] is True
-    assert summary["sets_processed"] == 1
-    assert summary["files_deleted"] == 1
-    assert summary["errors"] == []
-
-    # Verify set status unchanged (dry run)
-    await test_db.refresh(duplicate_set)
-    assert duplicate_set.status == DuplicateStatus.PENDING
-
-
-@pytest.mark.asyncio
-@patch("app.services.scheduled_deletion.DeletionPipeline")
+@patch("app.services.deletion.scheduled.DeletionPipeline")
 async def test_run_scheduled_deletion_success(mock_pipeline_class, test_db):
     """Test successful scheduled deletion"""
     # Create pending duplicate set
     duplicate_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         media_type=MediaType.MOVIE,
         title="Test Movie (2020)",
         status=DuplicateStatus.PENDING,
@@ -97,26 +69,17 @@ async def test_run_scheduled_deletion_success(mock_pipeline_class, test_db):
     test_db.add_all([file1, file2])
     await test_db.commit()
 
-    # Mock deletion pipeline
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file = AsyncMock()
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(SetDeletion(files_deleted=1))
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify
     assert summary["sets_processed"] == 1
-    assert summary["files_deleted"] == 1  # Only one file marked for deletion
+    assert summary["files_deleted"] == 1
     assert summary["errors"] == []
-
-    # Verify deletion pipeline was called
-    mock_pipeline.delete_file.assert_called_once_with(file1.id)
-
-    # Verify set status updated
-    await test_db.refresh(duplicate_set)
-    assert duplicate_set.status == DuplicateStatus.PROCESSED
+    # A real run must not inherit the pipeline's dry_run=True default
+    mock_pipeline_class.assert_called_once_with(test_db, dry_run=False)
+    mock_pipeline_class.return_value.delete_set.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -124,7 +87,7 @@ async def test_run_scheduled_deletion_skip_no_files_to_delete(test_db):
     """Test that sets with no files marked for deletion are skipped"""
     # Create pending set with no files to delete
     duplicate_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         media_type=MediaType.MOVIE,
         title="Test Movie (2020)",
         status=DuplicateStatus.PENDING,
@@ -152,12 +115,12 @@ async def test_run_scheduled_deletion_skip_no_files_to_delete(test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.scheduled_deletion.DeletionPipeline")
+@patch("app.services.deletion.scheduled.DeletionPipeline")
 async def test_run_scheduled_deletion_file_error(mock_pipeline_class, test_db):
     """Test handling of file deletion errors"""
     # Create pending duplicate set
     duplicate_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         media_type=MediaType.MOVIE,
         title="Test Movie (2020)",
         status=DuplicateStatus.PENDING,
@@ -175,39 +138,31 @@ async def test_run_scheduled_deletion_file_error(mock_pipeline_class, test_db):
     test_db.add(file1)
     await test_db.commit()
 
-    # Mock deletion pipeline to fail
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file.side_effect = Exception("Deletion failed")
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(
+        SetDeletion(errors=["Failed to delete /media/movie1.mkv: Deletion failed"])
+    )
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify
-    assert summary["sets_processed"] == 0  # Set not marked processed due to error
+    assert summary["sets_processed"] == 0
     assert summary["files_deleted"] == 0
-    assert len(summary["errors"]) == 1
-    assert "Deletion failed" in summary["errors"][0]
-
-    # Verify set status unchanged
-    await test_db.refresh(duplicate_set)
-    assert duplicate_set.status == DuplicateStatus.PENDING
+    assert summary["errors"] == ["Failed to delete /media/movie1.mkv: Deletion failed"]
 
 
 @pytest.mark.asyncio
-@patch("app.services.scheduled_deletion.DeletionPipeline")
+@patch("app.services.deletion.scheduled.DeletionPipeline")
 async def test_run_scheduled_deletion_multiple_sets(mock_pipeline_class, test_db):
     """Test deletion of multiple duplicate sets"""
     # Create multiple pending sets
     set1 = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         media_type=MediaType.MOVIE,
         title="Movie 1 (2020)",
         status=DuplicateStatus.PENDING,
     )
     set2 = DuplicateSet(
-        plex_item_id="67890",
+        item_id="67890",
         media_type=MediaType.EPISODE,
         title="Show 1 S01E01",
         status=DuplicateStatus.PENDING,
@@ -233,40 +188,31 @@ async def test_run_scheduled_deletion_multiple_sets(mock_pipeline_class, test_db
     test_db.add_all([file1, file2])
     await test_db.commit()
 
-    # Mock deletion pipeline
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file = AsyncMock()
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(
+        SetDeletion(files_deleted=1), SetDeletion(files_deleted=1)
+    )
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify
     assert summary["sets_processed"] == 2
     assert summary["files_deleted"] == 2
     assert summary["errors"] == []
 
-    # Verify both sets marked processed
-    await test_db.refresh(set1)
-    await test_db.refresh(set2)
-    assert set1.status == DuplicateStatus.PROCESSED
-    assert set2.status == DuplicateStatus.PROCESSED
-
 
 @pytest.mark.asyncio
-@patch("app.services.scheduled_deletion.DeletionPipeline")
+@patch("app.services.deletion.scheduled.DeletionPipeline")
 async def test_run_scheduled_deletion_set_exception(mock_pipeline_class, test_db):
     """Test that exception in one set doesn't stop processing others"""
     # Create multiple pending sets
     set1 = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         media_type=MediaType.MOVIE,
         title="Movie 1 (2020)",
         status=DuplicateStatus.PENDING,
     )
     set2 = DuplicateSet(
-        plex_item_id="67890",
+        item_id="67890",
         media_type=MediaType.MOVIE,
         title="Movie 2 (2021)",
         status=DuplicateStatus.PENDING,
@@ -292,28 +238,17 @@ async def test_run_scheduled_deletion_set_exception(mock_pipeline_class, test_db
     test_db.add_all([file1, file2])
     await test_db.commit()
 
-    # Mock deletion pipeline to fail on first, succeed on second
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file.side_effect = [
-        Exception("First deletion failed"),  # First call fails
-        None,  # Second call succeeds
-    ]
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(
+        Exception("First deletion failed"), SetDeletion(files_deleted=1)
+    )
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify: one succeeded, one failed
-    assert summary["sets_processed"] == 1  # Only set2 processed
-    assert summary["files_deleted"] == 1  # Only file2 deleted
+    assert summary["sets_processed"] == 1
+    assert summary["files_deleted"] == 1
     assert len(summary["errors"]) == 1
-
-    # Verify set statuses
-    await test_db.refresh(set1)
-    await test_db.refresh(set2)
-    assert set1.status == DuplicateStatus.PENDING  # Failed
-    assert set2.status == DuplicateStatus.PROCESSED  # Success
+    assert "First deletion failed" in summary["errors"][0]
 
 
 @pytest.mark.asyncio
@@ -329,7 +264,7 @@ async def test_run_scheduled_deletion_includes_timestamp(test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_helpers.get_email_service_from_config")
+@patch("app.services.notifications.helpers.get_email_service_from_config")
 async def test_send_deletion_email_success(mock_get_email, test_db):
     """Test sending deletion summary email"""
     # Mock email service
@@ -362,7 +297,7 @@ async def test_send_deletion_email_success(mock_get_email, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_helpers.get_email_service_from_config")
+@patch("app.services.notifications.helpers.get_email_service_from_config")
 async def test_send_deletion_email_with_errors(mock_get_email, test_db):
     """Test email includes error details when present"""
     # Mock email service
@@ -391,7 +326,7 @@ async def test_send_deletion_email_with_errors(mock_get_email, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.email_helpers.get_email_service_from_config")
+@patch("app.services.notifications.helpers.get_email_service_from_config")
 async def test_send_deletion_email_not_configured(mock_get_email, test_db):
     """Test email is skipped when not configured"""
     # Mock email service not configured
@@ -413,15 +348,15 @@ async def test_send_deletion_email_not_configured(mock_get_email, test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.scheduled_deletion.DeletionPipeline")
-@patch("app.services.email_helpers.get_email_service_from_config")
+@patch("app.services.deletion.scheduled.DeletionPipeline")
+@patch("app.services.notifications.helpers.get_email_service_from_config")
 async def test_run_scheduled_deletion_sends_email_when_enabled(
     mock_get_email, mock_pipeline_class, test_db
 ):
     """Test that email is sent when send_email=True"""
     # Create pending set
     duplicate_set = DuplicateSet(
-        plex_item_id="12345",
+        item_id="12345",
         media_type=MediaType.MOVIE,
         title="Test Movie (2020)",
         status=DuplicateStatus.PENDING,
@@ -439,10 +374,7 @@ async def test_run_scheduled_deletion_sends_email_when_enabled(
     test_db.add(file1)
     await test_db.commit()
 
-    # Mock deletion pipeline
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file = AsyncMock()
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(SetDeletion(files_deleted=1))
 
     # Mock email service
     mock_email_service = MagicMock()
@@ -459,32 +391,85 @@ async def test_run_scheduled_deletion_sends_email_when_enabled(
 
 
 @pytest.mark.asyncio
-@patch("app.services.scheduled_deletion.DeletionPipeline")
-async def test_run_scheduled_deletion_no_email_in_dry_run(mock_pipeline_class, test_db):
-    """Test that email is NOT sent in dry run mode"""
-    # Create pending set
-    duplicate_set = DuplicateSet(
-        plex_item_id="12345",
-        media_type=MediaType.MOVIE,
-        title="Test Movie (2020)",
-        status=DuplicateStatus.PENDING,
+@patch("app.services.deletion.scheduled.DeletionPipeline")
+@patch("app.services.notifications.helpers.get_email_service_from_config")
+async def test_run_scheduled_deletion_no_email_in_dry_run(
+    mock_get_email,
+    mock_pipeline_class,
+    test_db,
+    create_duplicate_set,
+    create_duplicate_file,
+):
+    """A dry run never emails, even when asked to"""
+    dup_set = await create_duplicate_set()
+    await create_duplicate_file(dup_set.id, keep=False)
+    mock_pipeline_class.return_value = _pipeline(SetDeletion(files_deleted=1))
+
+    await ScheduledDeletionService(test_db).run_scheduled_deletion(
+        dry_run=True, send_email=True
     )
-    test_db.add(duplicate_set)
-    await test_db.flush()
 
-    file1 = DuplicateFile(
-        set_id=duplicate_set.id,
-        file_path="/media/movie1.mkv",
-        file_size=1000000,
-        score=75,
-        keep=False,
+    mock_get_email.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_real_run_deletes_from_disk(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path, monkeypatch
+):
+    """A dry_run=False run drives the real pipeline, so the file leaves the disk."""
+    from app.models import DeletionHistory
+
+    # The media server is reachable, so the refresh stage does not raise
+    server = AsyncMock()
+    server.refresh_item.return_value = True
+    monkeypatch.setattr(
+        "app.services.deletion.pipeline.get_media_server",
+        AsyncMock(return_value=server),
     )
-    test_db.add(file1)
-    await test_db.commit()
+    keep = tmp_path / "keep.mkv"
+    drop = tmp_path / "drop.mkv"
+    keep.write_bytes(b"k" * 2048)
+    drop.write_bytes(b"d" * 1024)
 
-    # Run dry run with send_email=True (should be ignored)
-    service = ScheduledDeletionService(test_db)
-    await service.run_scheduled_deletion(dry_run=True, send_email=True)
+    dup_set = await create_duplicate_set(title="Bulk Movie")
+    await create_duplicate_file(dup_set.id, file_path=str(keep), keep=True, score=90)
+    await create_duplicate_file(dup_set.id, file_path=str(drop), keep=False, score=10)
 
-    # Email should not be sent in dry run
-    # (No easy way to verify without mocking, but documented in docstring)
+    summary = await ScheduledDeletionService(test_db).run_scheduled_deletion(
+        dry_run=False, send_email=False
+    )
+
+    assert summary["files_deleted"] == 1
+    assert summary["errors"] == []
+    assert not drop.exists()
+    assert keep.exists()
+    assert (await test_db.execute(select(func.count(DeletionHistory.id)))).scalar() == 1
+    await test_db.refresh(dup_set)
+    assert dup_set.status == DuplicateStatus.PROCESSED
+
+
+@pytest.mark.asyncio
+async def test_dry_run_leaves_files_in_place(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """A dry run reports what it would do without deleting or recording anything."""
+    from app.models import DeletionHistory
+
+    drop = tmp_path / "drop.mkv"
+    drop.write_bytes(b"d" * 1024)
+
+    dup_set = await create_duplicate_set(title="Bulk Movie")
+    await create_duplicate_file(
+        dup_set.id, file_path=str(tmp_path / "keep.mkv"), keep=True, score=90
+    )
+    await create_duplicate_file(dup_set.id, file_path=str(drop), keep=False, score=10)
+
+    summary = await ScheduledDeletionService(test_db).run_scheduled_deletion(
+        dry_run=True, send_email=False
+    )
+
+    assert summary["files_deleted"] == 1
+    assert drop.exists()
+    assert (await test_db.execute(select(func.count(DeletionHistory.id)))).scalar() == 0
+    await test_db.refresh(dup_set)
+    assert dup_set.status == DuplicateStatus.PENDING

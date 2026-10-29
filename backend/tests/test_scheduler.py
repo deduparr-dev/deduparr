@@ -2,140 +2,57 @@
 Tests for the scheduler service
 """
 
-import logging
-
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.services.scan.runner import ScanTotals
 from app.services.scheduler import ScanScheduler, get_scheduler
 from app.models import Config
 
 
 @pytest.mark.asyncio
-async def test_get_enabled_libraries_success(test_db):
-    """Test retrieving enabled libraries from config"""
-    # Setup: Add config with libraries
-    config = Config(key="plex_libraries", value="Movies,TV Shows,Anime")
-    test_db.add(config)
-    await test_db.commit()
-
-    # Execute
-    scheduler = ScanScheduler()
-    libraries = await scheduler._get_enabled_libraries(test_db)
-
-    # Verify
-    assert len(libraries) == 3
-    assert "Movies" in libraries
-    assert "TV Shows" in libraries
-    assert "Anime" in libraries
-
-
-@pytest.mark.asyncio
-async def test_get_enabled_libraries_empty(test_db):
-    """Test retrieving libraries when none configured"""
-    scheduler = ScanScheduler()
-    libraries = await scheduler._get_enabled_libraries(test_db)
-
-    # Should return empty list and log warning
-    assert libraries == []
-
-
-@pytest.mark.asyncio
-async def test_get_enabled_libraries_strips_whitespace(test_db):
-    """Test that library names are properly trimmed"""
-    # Setup: Add config with extra whitespace
-    config = Config(key="plex_libraries", value="  Movies  ,  TV Shows  ,  ")
-    test_db.add(config)
-    await test_db.commit()
-
-    # Execute
-    scheduler = ScanScheduler()
-    libraries = await scheduler._get_enabled_libraries(test_db)
-
-    # Verify whitespace is stripped and empty strings removed
-    assert len(libraries) == 2
-    assert "Movies" in libraries
-    assert "TV Shows" in libraries
-
-
-@pytest.mark.asyncio
-@patch("app.api.routes.scan._cleanup_stale_duplicate_sets")
-@patch("app.api.routes.scan._process_duplicate_movies")
-@patch("app.services.scheduler.PlexService")
+@patch("app.services.scheduler.run_scan", new_callable=AsyncMock)
 @patch("app.services.scheduler.AsyncSessionLocal")
-async def test_run_scheduled_scan_movies(
-    mock_session_local, mock_plex_service, mock_process_movies, mock_cleanup, test_db
+async def test_run_scheduled_scan_delegates_to_the_runner(
+    mock_session_local, mock_run_scan, test_db
 ):
-    """Test scheduled scan for movie libraries"""
-    # Mock AsyncSessionLocal to return test_db
+    """The scheduler hands the configured libraries to the shared scan runner."""
+    mock_session_local.return_value.__aenter__.return_value = test_db
+    mock_session_local.return_value.__aexit__.return_value = AsyncMock()
+    mock_run_scan.return_value = ScanTotals(
+        duplicates_found=4, sets_created=2, sets_updated=1, libraries_scanned=["Movies"]
+    )
+
+    test_db.add_all(
+        [
+            Config(key="plex_libraries", value="Movies, TV Shows"),
+            Config(key="plex_auth_token", value="token"),
+        ]
+    )
+    await test_db.commit()
+
+    await ScanScheduler()._run_scheduled_scan()
+
+    # Each server's own selection is read inside the runner
+    mock_run_scan.assert_awaited_once_with(test_db)
+
+
+@pytest.mark.asyncio
+@patch("app.services.scheduler.run_scan", new_callable=AsyncMock)
+@patch("app.services.scheduler.AsyncSessionLocal")
+async def test_run_scheduled_scan_needs_a_media_server(
+    mock_session_local, mock_run_scan, test_db
+):
+    """With libraries but no server credentials the scan is skipped."""
     mock_session_local.return_value.__aenter__.return_value = test_db
     mock_session_local.return_value.__aexit__.return_value = AsyncMock()
 
-    # Setup configs
     test_db.add(Config(key="plex_libraries", value="Movies"))
-    test_db.add(Config(key="plex_auth_token", value="encrypted_token_123"))
-    test_db.add(Config(key="plex_server_name", value="MyPlexServer"))
     await test_db.commit()
 
-    # Mock Plex service
-    mock_library = MagicMock()
-    mock_library.type = "movie"
-    mock_plex_instance = MagicMock()
-    mock_plex_instance.get_library.return_value = mock_library
-    mock_plex_instance.find_duplicate_movies.return_value = []
-    mock_plex_service.return_value = mock_plex_instance
+    await ScanScheduler()._run_scheduled_scan()
 
-    # Mock processing functions
-    mock_cleanup.return_value = AsyncMock()
-    mock_process_movies.return_value = AsyncMock(return_value=(5, 3))
-
-    # Execute
-    scheduler = ScanScheduler()
-    await scheduler._run_scheduled_scan()
-
-    # Verify
-    mock_plex_service.assert_called_once()
-    mock_plex_instance.get_library.assert_called_once_with("Movies")
-    mock_plex_instance.find_duplicate_movies.assert_called_once_with("Movies")
-
-
-@pytest.mark.asyncio
-@patch("app.api.routes.scan._cleanup_stale_duplicate_sets")
-@patch("app.api.routes.scan._process_duplicate_episodes")
-@patch("app.services.scheduler.PlexService")
-@patch("app.services.scheduler.AsyncSessionLocal")
-async def test_run_scheduled_scan_shows(
-    mock_session_local, mock_plex_service, mock_process_episodes, mock_cleanup, test_db
-):
-    """Test scheduled scan for TV show libraries"""
-    # Mock AsyncSessionLocal to return test_db
-    mock_session_local.return_value.__aenter__.return_value = test_db
-    mock_session_local.return_value.__aexit__.return_value = AsyncMock()
-
-    # Setup configs
-    test_db.add(Config(key="plex_libraries", value="TV Shows"))
-    test_db.add(Config(key="plex_auth_token", value="encrypted_token_123"))
-    await test_db.commit()
-
-    # Mock Plex service
-    mock_library = MagicMock()
-    mock_library.type = "show"
-    mock_plex_instance = MagicMock()
-    mock_plex_instance.get_library.return_value = mock_library
-    mock_plex_instance.find_duplicate_episodes.return_value = []
-    mock_plex_service.return_value = mock_plex_instance
-
-    # Mock processing functions
-    mock_cleanup.return_value = AsyncMock()
-    mock_process_episodes.return_value = AsyncMock(return_value=(2, 1))
-
-    # Execute
-    scheduler = ScanScheduler()
-    await scheduler._run_scheduled_scan()
-
-    # Verify
-    mock_plex_instance.find_duplicate_episodes.assert_called_once_with("TV Shows")
-    mock_process_episodes.assert_called_once()
+    mock_run_scan.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -154,39 +71,7 @@ async def test_run_scheduled_scan_no_plex_config(test_db):
 
 
 @pytest.mark.asyncio
-@patch("app.services.scheduler.PlexService")
-@patch("app.services.scheduler.AsyncSessionLocal")
-async def test_run_scheduled_scan_library_error_continues(
-    mock_session_local, mock_plex_service, test_db
-):
-    """Test that scan continues if one library fails"""
-    # Mock AsyncSessionLocal to return test_db
-    mock_session_local.return_value.__aenter__.return_value = test_db
-    mock_session_local.return_value.__aexit__.return_value = AsyncMock()
-
-    # Setup configs with multiple libraries
-    test_db.add(Config(key="plex_libraries", value="Movies,TV Shows"))
-    test_db.add(Config(key="plex_auth_token", value="encrypted_token_123"))
-    await test_db.commit()
-
-    # Mock Plex service to fail on first library
-    mock_plex_instance = MagicMock()
-    mock_plex_instance.get_library.side_effect = [
-        Exception("Library not found"),  # First call fails
-        MagicMock(type="show"),  # Second call succeeds
-    ]
-    mock_plex_service.return_value = mock_plex_instance
-
-    # Execute
-    scheduler = ScanScheduler()
-    await scheduler._run_scheduled_scan()
-
-    # Verify both libraries were attempted
-    assert mock_plex_instance.get_library.call_count == 2
-
-
-@pytest.mark.asyncio
-@patch("app.services.scheduled_deletion.ScheduledDeletionService")
+@patch("app.services.deletion.scheduled.ScheduledDeletionService")
 @patch("app.services.scheduler.AsyncSessionLocal")
 async def test_run_scheduled_deletion(
     mock_session_local, mock_deletion_service, test_db
@@ -217,64 +102,31 @@ async def test_run_scheduled_deletion(
 
 
 @pytest.mark.asyncio
-@patch("app.api.routes.scan._cleanup_stale_duplicate_sets")
-@patch("app.api.routes.scan._process_duplicate_movies")
-@patch("app.services.scheduler.PlexService")
+@patch("app.services.scheduler.run_scan", new_callable=AsyncMock)
 @patch("app.services.scheduler.AsyncSessionLocal")
-async def test_run_scheduled_scan_schedules_deletion(
-    mock_session_local, mock_plex_service, mock_process_movies, mock_cleanup, test_db
+async def test_run_scheduled_scan_queues_deletion_when_enabled(
+    mock_session_local, mock_run_scan, test_db
 ):
-    """Test that scan schedules deletion job when deletion is enabled"""
-    # Mock AsyncSessionLocal to return test_db
+    """Deletion is queued after a scan only when the setting is on."""
     mock_session_local.return_value.__aenter__.return_value = test_db
     mock_session_local.return_value.__aexit__.return_value = AsyncMock()
+    mock_run_scan.return_value = ScanTotals(libraries_scanned=["Movies"])
 
-    # Setup configs with deletion enabled
-    test_db.add(Config(key="plex_libraries", value="Movies"))
-    test_db.add(Config(key="plex_auth_token", value="encrypted_token_123"))
-    test_db.add(Config(key="plex_server_name", value="MyPlexServer"))
-    test_db.add(Config(key="enable_scheduled_deletion", value="true"))
+    test_db.add_all(
+        [
+            Config(key="plex_libraries", value="Movies"),
+            Config(key="plex_auth_token", value="token"),
+            Config(key="enable_scheduled_deletion", value="true"),
+        ]
+    )
     await test_db.commit()
 
-    # Mock Plex service
-    mock_library = MagicMock()
-    mock_library.type = "movie"
-    mock_plex_instance = MagicMock()
-    mock_plex_instance.get_library.return_value = mock_library
-    mock_plex_instance.find_duplicate_movies.return_value = []
-    mock_plex_service.return_value = mock_plex_instance
-
-    # Mock processing functions
-    mock_cleanup.return_value = AsyncMock()
-    mock_process_movies.return_value = AsyncMock(return_value=(5, 3))
-
-    # Execute - start scheduler to have scheduler instance available
     scheduler = ScanScheduler()
-    await scheduler.start(scan_mode="daily", scan_time="02:00")
-
-    # Run the scan
+    scheduler.scheduler = MagicMock()
     await scheduler._run_scheduled_scan()
 
-    # Verify deletion job was scheduled
-    deletion_job = scheduler.scheduler.get_job("scheduled_deletion_after_scan")
-    assert deletion_job is not None, "Deletion job should be scheduled after scan"
-
-    # Verify it's scheduled for ~30 minutes in the future
-    import datetime
-
-    time_diff = (
-        deletion_job.next_run_time - datetime.datetime.now(datetime.timezone.utc)
-    ).total_seconds()
-    assert (
-        1700 < time_diff < 1900
-    ), f"Deletion should be scheduled ~30 min in future, got {time_diff}s"
-
-    # Verify helper methods work
-    assert scheduler.is_deletion_scheduled() is True
-    assert scheduler.get_scheduled_deletion_time() is not None
-
-    # Cleanup
-    await scheduler.stop()
+    assert scheduler.scheduler.add_job.called
+    assert scheduler.scheduler.add_job.call_args.kwargs["id"] == "scheduled_deletion"
 
 
 @pytest.mark.asyncio
@@ -413,44 +265,26 @@ def test_get_scheduler_singleton():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("library_type", ["movie", "show"])
-@patch("app.services.email_notifications.send_scan_complete_email")
-@patch("app.api.routes.scan._cleanup_stale_duplicate_sets")
-@patch("app.api.routes.scan._process_duplicate_episodes")
-@patch("app.api.routes.scan._process_duplicate_movies")
-@patch("app.services.scheduler.PlexService")
+@patch("app.services.scheduler.run_scan", new_callable=AsyncMock)
 @patch("app.services.scheduler.AsyncSessionLocal")
-async def test_run_scheduled_scan_uses_process_results(
-    mock_session_local,
-    mock_plex_service,
-    mock_process_movies,
-    mock_process_episodes,
-    mock_cleanup,
-    mock_send_email,
-    library_type,
-    test_db,
-    caplog,
+async def test_run_scheduled_scan_stops_when_nothing_was_scanned(
+    mock_session_local, mock_run_scan, test_db
 ):
-    """The (created, updated, removed) results are consumed without errors"""
+    """No libraries selected means no scan happened, so no deletion follows."""
     mock_session_local.return_value.__aenter__.return_value = test_db
     mock_session_local.return_value.__aexit__.return_value = AsyncMock()
+    mock_run_scan.return_value = ScanTotals()
 
-    test_db.add(Config(key="plex_libraries", value="Library"))
-    test_db.add(Config(key="plex_auth_token", value="encrypted_token_123"))
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="token"),
+            Config(key="enable_scheduled_deletion", value="true"),
+        ]
+    )
     await test_db.commit()
 
-    mock_library = MagicMock()
-    mock_library.type = library_type
-    mock_plex_instance = MagicMock()
-    mock_plex_instance.get_library.return_value = mock_library
-    mock_plex_service.return_value = mock_plex_instance
-    mock_process_movies.return_value = (5, 3, 1)
-    mock_process_episodes.return_value = (5, 3, 1)
+    scheduler = ScanScheduler()
+    scheduler.scheduler = MagicMock()
+    await scheduler._run_scheduled_scan()
 
-    with caplog.at_level(logging.ERROR, logger="app.services.scheduler"):
-        await ScanScheduler()._run_scheduled_scan()
-
-    assert "Error scanning library" not in caplog.text
-    mock_send_email.assert_awaited_once()
-    assert mock_send_email.await_args.kwargs["sets_created"] == 5
-    assert mock_send_email.await_args.kwargs["sets_existing"] == 3
+    assert not scheduler.scheduler.add_job.called

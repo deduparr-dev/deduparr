@@ -5,7 +5,7 @@ Provides token encryption, CSRF protection, and secure logging.
 Usage Examples:
 
     Encrypting/Decrypting Tokens (any service):
-        from app.services.security import get_token_manager
+        from app.services.shared.security import get_token_manager
 
         # Plex token
         tm = get_token_manager()
@@ -21,20 +21,20 @@ Usage Examples:
         decrypted_sonarr = tm.decrypt(encrypted_sonarr)
 
     Sanitizing Sensitive Data for Logs:
-        from app.services.security import sanitize_log_data
+        from app.services.shared.security import sanitize_log_data
 
         logger.info(f"Authenticated with token: {sanitize_log_data(api_key)}")
         # Output: "Authenticated with token: abcd...xyz"
 
     OAuth PIN Flow (for services that support it):
-        from app.services.security import pin_cache
+        from app.services.shared.security import pin_cache
 
         pin_cache.set("pin-123", {"code": "ABCD", "state": "xyz"}, ttl=600)
         data = pin_cache.get("pin-123")
         pin_cache.delete("pin-123")
 
     Setting up Secure Logging Filter:
-        from app.services.security import SensitiveDataFilter
+        from app.services.shared.security import SensitiveDataFilter
 
         # In your main.py or logging config:
         logging.basicConfig(...)
@@ -166,6 +166,52 @@ def get_or_create_key_file() -> str:
         key_file.chmod(0o600)
 
     return new_key
+
+
+# Config keys whose value is a secret and must never be stored in the clear.
+# One list, so every write path agrees: the setup wizard, the config API and
+# anything else that persists configuration.
+SENSITIVE_CONFIG_KEYS = frozenset(
+    {
+        "plex_auth_token",
+        "jellyfin_api_key",
+        "radarr_api_key",
+        "sonarr_api_key",
+        "qbittorrent_password",
+        "smtp_password",
+    }
+)
+
+
+def encrypt_if_sensitive(key: str, value: Optional[str]) -> Optional[str]:
+    """
+    Encrypt a config value when its key names a secret.
+
+    Already-encrypted values are left alone, so saving a form that round-trips
+    a stored secret does not encrypt it twice.
+    """
+    if not value or key not in SENSITIVE_CONFIG_KEYS:
+        return value
+
+    token_manager = get_token_manager()
+    try:
+        token_manager.decrypt(value)
+        return value
+    except (InvalidTokenError, Exception):
+        return token_manager.encrypt(value)
+
+
+def decrypt_if_encrypted(value: str) -> str:
+    """
+    A secret as typed, whether it was typed just now or comes back stored.
+
+    Settings sends a saved secret back encrypted, as it loaded it, so a
+    connection test has to accept both.
+    """
+    try:
+        return get_token_manager().decrypt(value) or value
+    except (InvalidTokenError, Exception):
+        return value
 
 
 def get_token_manager() -> TokenManager:

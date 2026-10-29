@@ -3,45 +3,56 @@ Tests for scan API routes
 """
 
 import pytest
-from unittest.mock import MagicMock, patch
-from sqlalchemy import select
+from unittest.mock import AsyncMock, patch
+from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
-from app.api.routes.scan import (
-    get_custom_scoring_rules,
-    get_plex_service,
-    _process_duplicate_movies,
+from app.api.routes.scan import get_configured_media_servers
+from app.services.media_server import (
+    DuplicateGroup,
+    MediaServerType,
+    selected_libraries,
 )
+from app.services.scan.runner import (
+    ScanTotals,
+    _process_duplicate_groups,
+    get_custom_scoring_rules,
+)
+from app.services.scan.scoring_engine import MediaMetadata, ScoringEngine
 from app.models import Config, ScoringRule, DuplicateSet, DuplicateFile
 from app.models.duplicate import DuplicateStatus, MediaType
 
 
 @pytest.mark.asyncio
-async def test_get_plex_service_not_configured(test_db):
-    """Test getting Plex service when not configured"""
+async def test_get_configured_media_servers_requires_setup(test_db):
+    """Scanning refuses with a 400 until some media server has credentials."""
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_plex_service(test_db)
+        await get_configured_media_servers(test_db)
 
     assert exc_info.value.status_code == 400
-    assert "Plex not configured" in str(exc_info.value.detail)
+    assert "No media server configured" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
-async def test_get_plex_service_configured(test_db):
-    """Test getting Plex service when configured"""
-    # Add Plex auth token to database
-    token_config = Config(key="plex_auth_token", value="test_token_123")
-    server_config = Config(key="plex_server_name", value="TestServer")
-    test_db.add(token_config)
-    test_db.add(server_config)
+async def test_get_configured_media_servers_returns_every_one(test_db):
+    """Plex and Jellyfin can be set up at the same time, and both come back."""
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="token"),
+            Config(key="jellyfin_url", value="http://jellyfin:8096"),
+            Config(key="jellyfin_api_key", value="key"),
+        ]
+    )
     await test_db.commit()
 
-    with patch("app.api.routes.scan.PlexService") as mock_plex:
-        await get_plex_service(test_db)
-        mock_plex.assert_called_once_with(
-            encrypted_token="test_token_123", server_name="TestServer"
-        )
+    servers = await get_configured_media_servers(test_db)
+
+    assert {server.type for server in servers} == {
+        MediaServerType.PLEX,
+        MediaServerType.JELLYFIN,
+    }
 
 
 @pytest.mark.asyncio
@@ -94,191 +105,108 @@ async def test_get_custom_scoring_rules(test_db):
 
 
 @pytest.mark.asyncio
-async def test_process_duplicate_movies(test_db):
-    """Test processing duplicate movies and storing them"""
-    from unittest.mock import Mock, patch
-
-    from app.services.scoring_engine import ScoringEngine
-
-    # Create two separate movie objects representing duplicates
-    # Plex's native duplicate=True filter returns separate Movie objects
-    mock_movie1 = Mock()
-    mock_movie1.title = "Test Movie"
-    mock_movie1.ratingKey = "12345"
-    mock_movie1.reload = Mock()  # Mock the reload method
-    mock_movie1.media = [
-        Mock(
-            parts=[Mock(file="/movies/TestMovie.720p.mkv", size=2 * 1024**3)],
-            videoResolution="720p",
-            videoCodec="h264",
-            audioCodec="aac",
-            bitrate=5000,
-            width=1280,
-            height=720,
+async def test_process_duplicate_groups_keeps_the_best_file(test_db):
+    """A group becomes a set, with only the highest scoring file kept."""
+    groups = [
+        DuplicateGroup(
+            item_id="12345",
+            title="Test Movie",
+            files=[
+                MediaMetadata(
+                    file_path="/movies/TestMovie.720p.mkv",
+                    file_size=2 * 1024**3,
+                    resolution="720p",
+                    video_codec="h264",
+                    inode=12345,
+                ),
+                MediaMetadata(
+                    file_path="/movies/TestMovie.1080p.mkv",
+                    file_size=8 * 1024**3,
+                    resolution="1080p",
+                    video_codec="hevc",
+                    inode=67890,
+                ),
+            ],
         )
     ]
 
-    mock_movie2 = Mock()
-    mock_movie2.title = "Test Movie"
-    mock_movie2.ratingKey = "12345"  # Same ratingKey = same content, different file
-    mock_movie2.reload = Mock()  # Mock the reload method
-    mock_movie2.media = [
-        Mock(
-            parts=[Mock(file="/movies/TestMovie.1080p.BluRay.mkv", size=8 * 1024**3)],
-            videoResolution="1080p",
-            videoCodec="h264",
-            audioCodec="dts",
-            bitrate=10000,
-            width=1920,
-            height=1080,
-        )
-    ]
+    created, updated, removed = await _process_duplicate_groups(
+        test_db, groups, MediaType.MOVIE, "plex", ScoringEngine(), []
+    )
 
-    # Plex returns multiple Movie objects with the same ratingKey
-    duplicates = {"Test Movie|None": [mock_movie1, mock_movie2]}
+    assert (created, updated, removed) == (1, 0, 0)
 
-    scoring_engine = ScoringEngine()
-    custom_rules = []
-
-    # Mock filesystem access to simulate files existing on disk
-    with patch("app.services.scan_helpers.os.path.exists", return_value=True), patch(
-        "app.services.scan_helpers.os.stat"
-    ) as mock_stat, patch(
-        "app.services.scan_helpers.is_sample_file", return_value=False
-    ):
-        # Mock stat info for each file (different inodes)
-        mock_stat.side_effect = [
-            Mock(st_ino=12345, st_nlink=1),
-            Mock(st_ino=67890, st_nlink=1),
-        ]
-
-        sets_created, sets_updated, sets_removed = await _process_duplicate_movies(
-            test_db, duplicates, scoring_engine, custom_rules
-        )
-
-    assert sets_created == 1
-    assert sets_updated == 0
-    assert sets_removed == 0
-
-    # Check database
-    result = await test_db.execute(select(DuplicateSet))
-    dup_sets = result.scalars().all()
-    assert len(dup_sets) == 1
-
-    dup_set = dup_sets[0]
+    result = await test_db.execute(
+        select(DuplicateSet).options(selectinload(DuplicateSet.files))
+    )
+    dup_set = result.scalars().one()
     assert dup_set.title == "Test Movie"
-    assert dup_set.media_type == MediaType.MOVIE
-    assert dup_set.status == DuplicateStatus.PENDING
-    assert dup_set.space_to_reclaim > 0
+    assert dup_set.item_id == "12345"
+    assert dup_set.media_server == "plex"
 
-    # Check duplicate files
-    result = await test_db.execute(select(DuplicateFile))
-    dup_files = result.scalars().all()
-    assert len(dup_files) == 2
-
-    # Verify scoring - 1080p should be marked to keep
-    keep_file = next((f for f in dup_files if f.keep), None)
-    delete_file = next((f for f in dup_files if not f.keep), None)
-
-    assert keep_file is not None
-    assert delete_file is not None
-    assert "1080p" in keep_file.file_path
-    assert "720p" in delete_file.file_path
-    assert keep_file.score > delete_file.score
+    kept = [f for f in dup_set.files if f.keep]
+    assert len(kept) == 1
+    assert kept[0].file_path.endswith("1080p.mkv")
+    assert dup_set.space_to_reclaim == 2 * 1024**3
 
 
 @pytest.mark.asyncio
-async def test_process_duplicate_movies_skip_existing(test_db):
-    """Test that existing duplicate sets with valid files are not recreated"""
-    from app.services.scoring_engine import ScoringEngine
+async def test_process_duplicate_groups_separates_servers(test_db):
+    """Item ids are per server, so the same id on two servers is two sets."""
+    files = [
+        MediaMetadata(
+            file_path="/movies/a.mkv", file_size=10, resolution="1080p", inode=1
+        ),
+        MediaMetadata(
+            file_path="/movies/b.mkv", file_size=5, resolution="720p", inode=2
+        ),
+    ]
+    group = [DuplicateGroup(item_id="same-id", title="Shared Movie", files=files)]
 
-    # Create existing duplicate set with files
-    existing_set = DuplicateSet(
-        plex_item_id="12345",
-        title="Test Movie",
-        media_type=MediaType.MOVIE,
-        status=DuplicateStatus.PENDING,
-        space_to_reclaim=0,
-    )
-    test_db.add(existing_set)
-    await test_db.flush()
-
-    # Create two temp files for this test
-    import tempfile
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mkv") as tmp1:
-        temp_file_path1 = tmp1.name
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mkv") as tmp2:
-        temp_file_path2 = tmp2.name
-
-    # Add files to the existing set
-    dup_file1 = DuplicateFile(
-        set_id=existing_set.id,
-        file_path=temp_file_path1,
-        file_size=5 * 1024**3,
-        score=50,
-        keep=False,
-    )
-    dup_file2 = DuplicateFile(
-        set_id=existing_set.id,
-        file_path=temp_file_path2,
-        file_size=3 * 1024**3,
-        score=30,
-        keep=True,
-    )
-    test_db.add(dup_file1)
-    test_db.add(dup_file2)
-    await test_db.commit()
-
-    try:
-        # Mock duplicate movies with two different files
-        mock_movie1 = MagicMock()
-        mock_movie1.title = "Test Movie"
-        mock_movie1.ratingKey = "12345"
-        mock_movie1.media = [MagicMock()]
-        mock_movie1.media[0].parts = [MagicMock()]
-        mock_movie1.media[0].parts[0].file = temp_file_path1
-        mock_movie1.media[0].parts[0].size = 5 * 1024**3
-        mock_movie1.media[0].videoResolution = "1080p"
-        mock_movie1.media[0].videoCodec = "h264"
-        mock_movie1.media[0].audioCodec = "aac"
-        mock_movie1.media[0].bitrate = 5000
-        mock_movie1.media[0].width = 1920
-        mock_movie1.media[0].height = 1080
-
-        mock_movie2 = MagicMock()
-        mock_movie2.title = "Test Movie"
-        mock_movie2.ratingKey = "12345"
-        mock_movie2.media = [MagicMock()]
-        mock_movie2.media[0].parts = [MagicMock()]
-        mock_movie2.media[0].parts[0].file = temp_file_path2
-        mock_movie2.media[0].parts[0].size = 3 * 1024**3
-        mock_movie2.media[0].videoResolution = "720p"
-        mock_movie2.media[0].videoCodec = "h264"
-        mock_movie2.media[0].audioCodec = "aac"
-        mock_movie2.media[0].bitrate = 3000
-        mock_movie2.media[0].width = 1280
-        mock_movie2.media[0].height = 720
-
-        duplicates = {"Test Movie|None": [mock_movie1, mock_movie2]}
-
-        scoring_engine = ScoringEngine()
-        sets_created, sets_updated, sets_removed = await _process_duplicate_movies(
-            test_db, duplicates, scoring_engine, []
+    for server in ("plex", "jellyfin"):
+        created, _, _ = await _process_duplicate_groups(
+            test_db, group, MediaType.MOVIE, server, ScoringEngine(), []
         )
+        assert created == 1
 
-        # Should verify existing set and update if needed (no files removed = sets_updated stays 0)
-        assert sets_created == 0
-        assert sets_removed == 0
-    finally:
-        # Clean up temp files
-        import os
+    result = await test_db.execute(select(DuplicateSet))
+    assert sorted(s.media_server for s in result.scalars().all()) == [
+        "jellyfin",
+        "plex",
+    ]
 
-        if os.path.exists(temp_file_path1):
-            os.unlink(temp_file_path1)
-        if os.path.exists(temp_file_path2):
-            os.unlink(temp_file_path2)
+
+@pytest.mark.asyncio
+async def test_process_duplicate_groups_skips_an_unchanged_set(test_db):
+    """Re-scanning the same group neither duplicates nor updates it."""
+    group = [
+        DuplicateGroup(
+            item_id="12345",
+            title="Test Movie",
+            files=[
+                MediaMetadata(
+                    file_path="/movies/a.mkv", file_size=10, resolution="1080p", inode=1
+                ),
+                MediaMetadata(
+                    file_path="/movies/b.mkv", file_size=5, resolution="720p", inode=2
+                ),
+            ],
+        )
+    ]
+    engine = ScoringEngine()
+
+    first = await _process_duplicate_groups(
+        test_db, group, MediaType.MOVIE, "plex", engine, []
+    )
+    second = await _process_duplicate_groups(
+        test_db, group, MediaType.MOVIE, "plex", engine, []
+    )
+
+    assert first == (1, 0, 0)
+    assert second == (0, 0, 0)
+
+    result = await test_db.execute(select(func.count(DuplicateSet.id)))
+    assert result.scalar() == 1
 
 
 @pytest.mark.asyncio
@@ -286,14 +214,14 @@ async def test_scan_status_endpoint(client, test_db):
     """Test scan status endpoint"""
     # Create some test duplicate sets
     set1 = DuplicateSet(
-        plex_item_id="1",
+        item_id="1",
         title="Movie 1",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.PENDING,
         space_to_reclaim=5 * 1024**3,
     )
     set2 = DuplicateSet(
-        plex_item_id="2",
+        item_id="2",
         title="Movie 2",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.PROCESSED,
@@ -318,7 +246,7 @@ async def test_get_duplicates_endpoint(client, test_db, create_duplicate_set):
     """Test getting duplicates endpoint"""
     # Create test duplicate set with files
     dup_set = await create_duplicate_set(
-        plex_item_id="123",
+        item_id="123",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.PENDING,
@@ -359,10 +287,10 @@ async def test_get_duplicates_endpoint(client, test_db, create_duplicate_set):
 async def test_get_duplicates_filtered_by_status(client, test_db, create_duplicate_set):
     """Test filtering duplicates by status"""
     await create_duplicate_set(
-        plex_item_id="1", title="Pending", status=DuplicateStatus.PENDING
+        item_id="1", title="Pending", status=DuplicateStatus.PENDING
     )
     await create_duplicate_set(
-        plex_item_id="2", title="Processed", status=DuplicateStatus.PROCESSED
+        item_id="2", title="Processed", status=DuplicateStatus.PROCESSED
     )
 
     response = await client.get("/api/scan/duplicates?status=pending")
@@ -378,11 +306,9 @@ async def test_get_duplicates_filtered_by_media_type(
     client, test_db, create_duplicate_set
 ):
     """Test filtering duplicates by media type"""
+    await create_duplicate_set(item_id="1", title="Movie", media_type=MediaType.MOVIE)
     await create_duplicate_set(
-        plex_item_id="1", title="Movie", media_type=MediaType.MOVIE
-    )
-    await create_duplicate_set(
-        plex_item_id="2", title="Episode", media_type=MediaType.EPISODE
+        item_id="2", title="Episode", media_type=MediaType.EPISODE
     )
 
     response = await client.get("/api/scan/duplicates?media_type=movie")
@@ -394,188 +320,125 @@ async def test_get_duplicates_filtered_by_media_type(
 
 
 @pytest.mark.asyncio
-async def test_start_scan_no_plex_config(client, test_db):
-    """Test scan fails when Plex not configured"""
+async def test_start_scan_without_a_media_server(client, test_db):
+    """The scan endpoint explains that setup has not been completed."""
     response = await client.post(
-        "/api/scan/start", json={"library_names": ["Movies"], "media_types": ["movie"]}
+        "/api/scan/start", json={"libraries": {"plex": ["Movies"]}}
     )
+
     assert response.status_code == 400
-    assert "Plex not configured" in response.text
+    assert "No media server configured" in response.text
 
 
 @pytest.mark.asyncio
-async def test_start_scan_success(client, test_db):
-    """Test successful scan"""
-    # Configure Plex
-    token_config = Config(key="plex_auth_token", value="test_token")
-    server_config = Config(key="plex_server_name", value="TestServer")
-    test_db.add(token_config)
-    test_db.add(server_config)
+async def test_start_scan_reports_what_the_run_did(client, test_db):
+    """The endpoint reports the runner's totals."""
+    test_db.add(Config(key="plex_auth_token", value="token"))
     await test_db.commit()
 
-    # Mock PlexService
-    with patch("app.api.routes.scan.PlexService") as mock_plex_class:
-        mock_plex = MagicMock()
-        mock_plex_class.return_value = mock_plex
+    totals = ScanTotals(
+        duplicates_found=4, sets_created=2, sets_updated=1, sets_removed=0
+    )
+    with patch(
+        "app.api.routes.scan.run_scan", new_callable=AsyncMock, return_value=totals
+    ):
+        response = await client.post("/api/scan/start", json={})
 
-        # Mock duplicate detection to return empty
-        mock_plex.find_duplicate_movies.return_value = {}
-        mock_plex.get_all_shows.return_value = []
-
-        response = await client.post(
-            "/api/scan/start",
-            json={"library_names": ["Movies"], "media_types": ["movie"]},
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is True
-        assert "duplicates_found" in data
+    assert response.status_code == 200
+    body = response.json()
+    assert body["duplicates_found"] == 4
+    assert body["sets_created"] == 2
+    assert body["sets_updated"] == 1
 
 
 @pytest.mark.asyncio
-async def test_duplicate_detection_accuracy(test_db):
+async def test_start_scan_keeps_the_libraries_it_was_given(client, test_db):
     """
-    Test that duplicate detection correctly identifies which file to keep
-
-    This test verifies that:
-    1. Higher resolution files score better
-    2. Higher bitrate files score better
-    3. The file with the highest score is marked as 'keep=True'
-    4. All other files are marked as 'keep=False'
+    The libraries a scan starts with become each server's stored selection,
+    so a scheduled scan covers the same ground.
     """
-    from unittest.mock import Mock, patch
-
-    from app.services.scoring_engine import ScoringEngine
-
-    # Create 3 separate movie objects for 3 different quality versions
-    # Plex's native duplicate=True filter returns separate Movie objects
-    mock_movie_low = Mock()
-    mock_movie_low.title = "Quality Test Movie"
-    mock_movie_low.ratingKey = "99999"
-    mock_movie_low.reload = Mock()  # Mock the reload method
-    mock_movie_low.media = [
-        Mock(
-            parts=[Mock(file="/movies/QualityTest.720p.HDTV.mkv", size=1.5 * 1024**3)],
-            videoResolution="720",
-            videoCodec="h264",
-            audioCodec="aac",
-            bitrate=3000,
-            width=1280,
-            height=720,
-        )
-    ]
-
-    mock_movie_medium = Mock()
-    mock_movie_medium.title = "Quality Test Movie"
-    mock_movie_medium.ratingKey = "99999"
-    mock_movie_medium.reload = Mock()  # Mock the reload method
-    mock_movie_medium.media = [
-        Mock(
-            parts=[Mock(file="/movies/QualityTest.1080p.WEB-DL.mkv", size=4 * 1024**3)],
-            videoResolution="1080",
-            videoCodec="h264",
-            audioCodec="aac",
-            bitrate=8000,
-            width=1920,
-            height=1080,
-        )
-    ]
-
-    mock_movie_high = Mock()
-    mock_movie_high.title = "Quality Test Movie"
-    mock_movie_high.ratingKey = "99999"
-    mock_movie_high.reload = Mock()  # Mock the reload method
-    mock_movie_high.media = [
-        Mock(
-            parts=[
-                Mock(
-                    file="/movies/QualityTest.1080p.BluRay.REMUX.mkv", size=25 * 1024**3
-                )
-            ],
-            videoResolution="1080",
-            videoCodec="h264",
-            audioCodec="truehd",
-            bitrate=20000,
-            width=1920,
-            height=1080,
-        )
-    ]
-
-    # Plex returns multiple Movie objects with the same ratingKey
-    duplicates = {
-        "Quality Test Movie|None": [mock_movie_low, mock_movie_medium, mock_movie_high]
-    }
-
-    scoring_engine = ScoringEngine()
-
-    # Add custom rule to boost REMUX files
-    custom_rules = [{"pattern": r"REMUX", "score_modifier": 5000, "enabled": True}]
-
-    # Mock filesystem access to simulate files existing on disk
-    with patch("app.services.scan_helpers.os.path.exists", return_value=True), patch(
-        "app.services.scan_helpers.os.stat"
-    ) as mock_stat, patch(
-        "app.services.scan_helpers.is_sample_file", return_value=False
-    ):
-        # Mock stat info for each file (different inodes)
-        mock_stat.side_effect = [
-            Mock(st_ino=11111, st_nlink=1),
-            Mock(st_ino=22222, st_nlink=1),
-            Mock(st_ino=33333, st_nlink=1),
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="token"),
+            Config(key="jellyfin_libraries", value="Films"),
         ]
+    )
+    await test_db.commit()
 
-        sets_created, sets_updated, sets_removed = await _process_duplicate_movies(
-            test_db, duplicates, scoring_engine, custom_rules
+    with patch(
+        "app.api.routes.scan.run_scan",
+        new_callable=AsyncMock,
+        return_value=ScanTotals(),
+    ):
+        response = await client.post(
+            "/api/scan/start",
+            json={"libraries": {"plex": ["Movies", "TV Shows"], "jellyfin": []}},
         )
 
-    assert sets_created == 1
-    assert sets_updated == 0
-    assert sets_removed == 0
+    assert response.status_code == 200
+    assert await selected_libraries(test_db, MediaServerType.PLEX) == [
+        "Movies",
+        "TV Shows",
+    ]
+    assert await selected_libraries(test_db, MediaServerType.JELLYFIN) == []
 
-    # Fetch the created duplicate set
-    result = await test_db.execute(
-        select(DuplicateSet).where(DuplicateSet.plex_item_id == "99999")
+
+@pytest.mark.asyncio
+async def test_scoring_picks_the_best_of_several_versions(test_db):
+    """Across resolution, codec and bitrate the best file is the one kept."""
+    groups = [
+        DuplicateGroup(
+            item_id="900",
+            title="Quality Test",
+            files=[
+                MediaMetadata(
+                    file_path="/movies/QualityTest.2160p.hevc.mkv",
+                    file_size=20 * 1024**3,
+                    resolution="2160p",
+                    video_codec="hevc",
+                    bitrate=40000,
+                    width=3840,
+                    height=2160,
+                    inode=1,
+                ),
+                MediaMetadata(
+                    file_path="/movies/QualityTest.1080p.h264.mkv",
+                    file_size=8 * 1024**3,
+                    resolution="1080p",
+                    video_codec="h264",
+                    bitrate=12000,
+                    width=1920,
+                    height=1080,
+                    inode=2,
+                ),
+                MediaMetadata(
+                    file_path="/movies/QualityTest.720p.h264.mkv",
+                    file_size=2 * 1024**3,
+                    resolution="720p",
+                    video_codec="h264",
+                    bitrate=4000,
+                    width=1280,
+                    height=720,
+                    inode=3,
+                ),
+            ],
+        )
+    ]
+
+    await _process_duplicate_groups(
+        test_db, groups, MediaType.MOVIE, "plex", ScoringEngine(), []
     )
-    dup_set = result.scalar_one()
 
-    # Fetch all files in the set
     result = await test_db.execute(
-        select(DuplicateFile).where(DuplicateFile.set_id == dup_set.id)
+        select(DuplicateSet).options(selectinload(DuplicateSet.files))
     )
-    files = result.scalars().all()
+    dup_set = result.scalars().one()
 
-    assert len(files) == 3
-
-    # Find which file is marked to keep
-    files_to_keep = [f for f in files if f.keep]
-    files_to_delete = [f for f in files if not f.keep]
-
-    # Should have exactly 1 file to keep and 2 to delete
-    assert len(files_to_keep) == 1, "Exactly one file should be marked to keep"
-    assert len(files_to_delete) == 2, "Two files should be marked for deletion"
-
-    # The file to keep should be the REMUX (highest quality)
-    keep_file = files_to_keep[0]
-    assert "REMUX" in keep_file.file_path, "REMUX file should be selected to keep"
-    assert keep_file.score == max(
-        f.score for f in files
-    ), "Kept file should have highest score"
-
-    # Verify the lower quality files are marked for deletion
-    assert all("REMUX" not in f.file_path for f in files_to_delete)
-
-    # Verify scoring order: high > medium > low
-    file_scores = {f.file_path: f.score for f in files}
-    remux_score = file_scores["/movies/QualityTest.1080p.BluRay.REMUX.mkv"]
-    webdl_score = file_scores["/movies/QualityTest.1080p.WEB-DL.mkv"]
-    hdtv_score = file_scores["/movies/QualityTest.720p.HDTV.mkv"]
-
-    assert remux_score > webdl_score > hdtv_score, "Scores should be ordered by quality"
-
-    # Verify space to reclaim is calculated correctly (sum of files to delete)
-    expected_space = sum(f.file_size for f in files_to_delete)
-    assert dup_set.space_to_reclaim == expected_space
+    kept = [f for f in dup_set.files if f.keep]
+    assert len(kept) == 1
+    assert kept[0].file_path.endswith("2160p.hevc.mkv")
+    assert kept[0].score == max(f.score for f in dup_set.files)
+    assert dup_set.space_to_reclaim == 10 * 1024**3
 
 
 @pytest.mark.asyncio
@@ -583,7 +446,7 @@ async def test_preview_deletion_endpoint(client, test_db, create_duplicate_set):
     """Test the deletion preview endpoint"""
     # Create a duplicate set with files
     dup_set = await create_duplicate_set(
-        plex_item_id="preview_test",
+        item_id="preview_test",
         title="Preview Test Movie",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.PENDING,
@@ -644,64 +507,54 @@ async def test_preview_deletion_endpoint(client, test_db, create_duplicate_set):
 
 
 @pytest.mark.asyncio
-async def test_delete_duplicate_set_dry_run(client, test_db, create_duplicate_set):
-    """Test deletion with dry_run=True (default)"""
-    # Configure required services in database
-    from tests.conftest import encrypt_test_password
+async def test_delete_duplicate_set_dry_run(
+    client, test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """A dry run reports the deletion without deleting or closing the set"""
+    drop, keep = tmp_path / "delete.720p.mkv", tmp_path / "delete.1080p.mkv"
+    drop.write_bytes(b"d" * 3)
+    keep.write_bytes(b"k" * 8)
 
-    plex_token_config = Config(
-        key="plex_auth_token", value=encrypt_test_password("test_token")
-    )
-    plex_server_config = Config(key="plex_server_name", value="Test Server")
-    plex_libraries_config = Config(key="plex_libraries", value="Movies,TV Shows")
-    test_db.add(plex_token_config)
-    test_db.add(plex_server_config)
-    test_db.add(plex_libraries_config)
-    await test_db.commit()
+    dup_set = await create_duplicate_set(title="Delete Test Movie")
+    await create_duplicate_file(dup_set.id, file_path=str(drop), file_size=3)
+    await create_duplicate_file(dup_set.id, file_path=str(keep), file_size=8, keep=True)
 
-    # Create duplicate set
-    dup_set = await create_duplicate_set(
-        plex_item_id="delete_test",
-        title="Delete Test Movie",
-        media_type=MediaType.MOVIE,
-        status=DuplicateStatus.PENDING,
-        space_to_reclaim=5 * 1024**3,
-    )
-
-    file1 = DuplicateFile(
-        set_id=dup_set.id,
-        file_path="/movies/delete.720p.mkv",
-        file_size=3 * 1024**3,
-        score=10000,
-        keep=False,
-    )
-    file2 = DuplicateFile(
-        set_id=dup_set.id,
-        file_path="/movies/delete.1080p.mkv",
-        file_size=8 * 1024**3,
-        score=20000,
-        keep=True,
-    )
-    test_db.add(file1)
-    test_db.add(file2)
-    await test_db.commit()
-
-    # Test dry run (should not actually delete)
     response = await client.post(
         f"/api/scan/duplicates/{dup_set.id}/delete", json={"dry_run": True}
     )
 
     assert response.status_code == 200
     data = response.json()
-
     assert data["success"] is True
     assert data["dry_run"] is True
     assert data["files_deleted"] == 1
-    assert data["space_reclaimed"] == 3 * 1024**3
+    assert data["space_reclaimed"] == 3
     assert "[DRY-RUN]" in data["message"]
-    assert len(data["errors"]) == 0
+    assert data["errors"] == []
 
-    # Verify set is NOT marked as processed in dry-run mode
+    assert drop.exists()
+    await test_db.refresh(dup_set)
+    assert dup_set.status == DuplicateStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_delete_reports_a_file_it_could_not_find(
+    client, test_db, create_duplicate_set, create_duplicate_file
+):
+    """A file nothing removed is not reported deleted, and the set stays open"""
+    dup_set = await create_duplicate_set(title="Ghost", media_server="disk")
+    await create_duplicate_file(dup_set.id, file_path="/nowhere/Ghost.mkv", keep=True)
+    await create_duplicate_file(dup_set.id, file_path="/nowhere/Ghost 720p.mkv")
+
+    response = await client.post(
+        f"/api/scan/duplicates/{dup_set.id}/delete", json={"dry_run": False}
+    )
+
+    data = response.json()
+    assert data["success"] is False
+    assert data["files_deleted"] == 0
+    assert data["space_reclaimed"] == 0
+    assert "File not found for deletion" in data["errors"][0]
     await test_db.refresh(dup_set)
     assert dup_set.status == DuplicateStatus.PENDING
 
@@ -721,7 +574,7 @@ async def test_delete_duplicate_set_not_found(client, test_db):
 async def test_delete_already_processed_set(client, test_db, create_duplicate_set):
     """Test that deletion fails for already processed sets"""
     dup_set = await create_duplicate_set(
-        plex_item_id="processed_test",
+        item_id="processed_test",
         title="Already Processed",
         status=DuplicateStatus.PROCESSED,
     )
@@ -740,7 +593,7 @@ async def test_delete_no_files_marked_for_deletion(
 ):
     """Test deletion fails when all files are marked to keep"""
     dup_set = await create_duplicate_set(
-        plex_item_id="no_delete_test",
+        item_id="no_delete_test",
         title="No Deletion Needed",
         status=DuplicateStatus.PENDING,
     )
@@ -776,7 +629,7 @@ async def test_delete_no_files_marked_for_deletion(
 async def test_update_file_keep_flag_success(client, test_db, create_duplicate_set):
     """Test successfully toggling a file's keep flag"""
     dup_set = await create_duplicate_set(
-        plex_item_id="toggle_test",
+        item_id="toggle_test",
         title="Toggle Test",
         status=DuplicateStatus.PENDING,
     )
@@ -824,7 +677,7 @@ async def test_update_file_keep_flag_prevents_all_delete(
 ):
     """Test that we can't mark all files for deletion"""
     dup_set = await create_duplicate_set(
-        plex_item_id="prevent_all_delete",
+        item_id="prevent_all_delete",
         title="Prevent All Delete",
         status=DuplicateStatus.PENDING,
     )
@@ -862,7 +715,7 @@ async def test_update_file_keep_flag_prevents_all_delete(
 async def test_update_file_keep_flag_not_found(client, test_db, create_duplicate_set):
     """Test updating a non-existent file"""
     dup_set = await create_duplicate_set(
-        plex_item_id="not_found_test",
+        item_id="not_found_test",
         title="Not Found Test",
         status=DuplicateStatus.PENDING,
     )
@@ -894,7 +747,7 @@ async def test_update_file_keep_flag_processed_set(
 ):
     """Test that we can't modify files in processed sets"""
     dup_set = await create_duplicate_set(
-        plex_item_id="processed_set",
+        item_id="processed_set",
         title="Processed Set",
         status=DuplicateStatus.PROCESSED,
     )
@@ -924,7 +777,7 @@ async def test_update_file_keep_recalculates_space(
 ):
     """Test that space_to_reclaim is recalculated correctly"""
     dup_set = await create_duplicate_set(
-        plex_item_id="space_test",
+        item_id="space_test",
         title="Space Calculation Test",
         status=DuplicateStatus.PENDING,
     )
@@ -964,3 +817,68 @@ async def test_update_file_keep_recalculates_space(
     data = response.json()
     # Now only file3 (2 GB) should be reclaimable
     assert data["space_to_reclaim"] == file3.file_size
+
+
+@pytest.mark.asyncio
+async def test_delete_all_nothing_pending(client):
+    """Delete-all succeeds with zero counts when there is nothing pending"""
+    response = await client.post(
+        "/api/scan/duplicates/delete-all", json={"dry_run": True}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["sets_processed"] == 0
+    assert data["files_deleted"] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_all_dry_run_spans_every_pending_set(client, test_db, tmp_path):
+    """Delete-all covers every pending set at once and keeps dry runs harmless"""
+    for n in (1, 2):
+        dup_set = DuplicateSet(
+            item_id=f"item-{n}",
+            title=f"Movie {n}",
+            media_type=MediaType.MOVIE,
+            status=DuplicateStatus.PENDING,
+        )
+        test_db.add(dup_set)
+        await test_db.flush()
+        drop = tmp_path / f"drop{n}.mkv"
+        drop.write_bytes(b"d" * 1024)
+        test_db.add_all(
+            [
+                DuplicateFile(
+                    set_id=dup_set.id,
+                    file_path=str(tmp_path / f"keep{n}.mkv"),
+                    file_size=2048,
+                    score=90,
+                    keep=True,
+                ),
+                DuplicateFile(
+                    set_id=dup_set.id,
+                    file_path=str(drop),
+                    file_size=1024,
+                    score=10,
+                    keep=False,
+                ),
+            ]
+        )
+    await test_db.commit()
+
+    response = await client.post(
+        "/api/scan/duplicates/delete-all", json={"dry_run": True}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dry_run"] is True
+    assert data["sets_processed"] == 2
+    assert data["files_deleted"] == 2
+    assert "[DRY-RUN]" in data["message"]
+
+    # Nothing removed, nothing marked processed
+    assert (tmp_path / "drop1.mkv").exists()
+    statuses = (await test_db.execute(select(DuplicateSet.status))).scalars().all()
+    assert all(s == DuplicateStatus.PENDING for s in statuses)

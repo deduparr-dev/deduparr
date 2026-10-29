@@ -18,7 +18,7 @@
 
 ## 🎯 What is Deduparr?
 
-**Deduparr** is a Docker-based web application that finds and manages duplicate media files across your entire media stack. It seamlessly integrates with Plex, Radarr, Sonarr, and qBittorrent to provide intelligent, safe duplicate management with a modern web interface.
+**Deduparr** is a Docker-based web application that finds and manages duplicate media files across your entire media stack. It reads your libraries from Plex, Jellyfin, or both, and integrates with Radarr, Sonarr and qBittorrent to provide intelligent, safe duplicate management with a modern web interface.
 
 ### The Problem
 
@@ -42,7 +42,7 @@ All with a beautiful web UI and dry-run mode for safety!
 
 ## ✨ Features
 
-- 🔍 **Smart Duplicate Detection** - Scan media libraries with Plex API or deep filesystem scans
+- 🔍 **Smart Duplicate Detection** - Scan libraries through Plex or Jellyfin, or with deep filesystem scans
 - ✅ **Safe Review System** - Dry-run mode by default, preview before deletion
 - 🗑️ **Multi-Stage Deletion** - Removes from qBittorrent, Radarr/Sonarr, disk, and refreshes media library
 - 📊 **Dashboard & Analytics** - Track duplicates found, space reclaimed, and activity history
@@ -69,7 +69,7 @@ All with a beautiful web UI and dry-run mode for safety!
 <p align="center">
   <img src="docs/screenshots/settings.png" alt="Settings" width="800"/>
   <br/>
-  <em>Settings - Configure Plex, Radarr, Sonarr, and qBittorrent connections</em>
+  <em>Settings - Configure Plex, Jellyfin, Radarr, Sonarr, and qBittorrent connections</em>
 </p>
 
 ---
@@ -88,7 +88,7 @@ All with a beautiful web UI and dry-run mode for safety!
 ### Prerequisites
 
 - Docker and Docker Compose
-- Plex Media Server
+- Plex Media Server or Jellyfin (either, or both)
 - Radarr and/or Sonarr
 - qBittorrent
 
@@ -140,8 +140,9 @@ The setup wizard will guide you through initial configuration.
 
 On first run, the setup wizard guides you through configuration:
 
-1. **Plex Authentication** - OAuth sign-in
-2. **Server Selection** - Choose your Plex server
+1. **Media Server** - Choose Plex, Jellyfin, or both
+2. **Credentials** - Plex signs in with OAuth; Jellyfin takes a server URL and
+   an administrator API key
 3. **Library Selection** - Pick which libraries to scan
 4. **Service Configuration** - Connect qBittorrent, Radarr, and/or Sonarr
 5. **Complete** - Start using Deduparr!

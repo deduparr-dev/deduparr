@@ -2,7 +2,9 @@
 Database configuration and initialization
 """
 
+import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base
@@ -78,19 +80,11 @@ async def init_db():
             conn.close()
             print(f"✅ Created SQLite database at {db_path}")
 
+    # Alembic owns the schema; it creates it on a fresh database and upgrades an
+    # existing one. It is synchronous, so it runs in a worker thread.
+    await asyncio.to_thread(_upgrade_schema)
+
     async with engine.begin() as conn:
-        # Import all models here to ensure they're registered
-        from app.models import (  # noqa: F401
-            Config,
-            DeletionHistory,
-            DuplicateFile,
-            DuplicateSet,
-            ScoringRule,
-        )
-
-        # Create tables
-        await conn.run_sync(Base.metadata.create_all)
-
         # Apply SQLite optimizations
         if settings.database_type == "sqlite":
             await conn.execute(text("PRAGMA journal_mode = WAL"))
@@ -109,3 +103,15 @@ async def get_db():
             yield session
         finally:
             await session.close()
+
+
+def _upgrade_schema() -> None:
+    """Run every pending Alembic migration."""
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
+
+    backend_dir = Path(__file__).resolve().parents[2]
+    config = AlembicConfig(str(backend_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_dir / "alembic"))
+    command.upgrade(config, "head")
+    print("✅ Database schema is up to date")

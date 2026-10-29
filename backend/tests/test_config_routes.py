@@ -40,7 +40,7 @@ async def test_update_config_creates_new(test_db):
 @pytest.mark.asyncio
 async def test_update_config_modifies_existing(test_db):
     """Test that updating an existing config modifies it"""
-    config = Config(key="plex_auth_token", value="old_token")
+    config = Config(key="enable_deep_scan", value="false")
     test_db.add(config)
     await test_db.commit()
 
@@ -48,12 +48,82 @@ async def test_update_config_modifies_existing(test_db):
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         response = await client.put(
-            "/api/config/plex_auth_token", json={"value": "new_token"}
+            "/api/config/enable_deep_scan", json={"value": "true"}
         )
         assert response.status_code == 200
         data = response.json()
-        assert data["key"] == "plex_auth_token"
-        assert data["value"] == "new_token"
+        assert data["key"] == "enable_deep_scan"
+        assert data["value"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_update_config_encrypts_a_secret(test_db):
+    """
+    A secret written through the config API is not stored in the clear.
+
+    Only the setup wizard used to encrypt, so anything writing a token here -
+    the frontend, a script, a test fixture - left it readable in the database.
+    """
+    from app.services.shared.security import get_token_manager
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.put(
+            "/api/config/plex_auth_token", json={"value": "a-real-token"}
+        )
+        assert response.status_code == 200
+
+    stored = (
+        await test_db.execute(select(Config).where(Config.key == "plex_auth_token"))
+    ).scalar_one()
+    assert stored.value != "a-real-token"
+    assert get_token_manager().decrypt(stored.value) == "a-real-token"
+
+
+@pytest.mark.asyncio
+async def test_update_config_does_not_double_encrypt(test_db):
+    """Re-saving an already encrypted value leaves it usable."""
+    from app.services.shared.security import get_token_manager
+
+    token_manager = get_token_manager()
+    encrypted = token_manager.encrypt("a-real-token")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.put(
+            "/api/config/plex_auth_token", json={"value": encrypted}
+        )
+        assert response.status_code == 200
+
+    stored = (
+        await test_db.execute(select(Config).where(Config.key == "plex_auth_token"))
+    ).scalar_one()
+    assert token_manager.decrypt(stored.value) == "a-real-token"
+
+
+@pytest.mark.asyncio
+async def test_batch_update_encrypts_secrets_only(test_db):
+    """Batch writes encrypt secrets and leave ordinary settings alone."""
+    from app.services.shared.security import get_token_manager
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/batch",
+            json={"jellyfin_api_key": "admin-key", "enable_deep_scan": "true"},
+        )
+        assert response.status_code == 200
+
+    rows = {
+        row.key: row.value
+        for row in (await test_db.execute(select(Config))).scalars().all()
+    }
+    assert rows["enable_deep_scan"] == "true"
+    assert rows["jellyfin_api_key"] != "admin-key"
+    assert get_token_manager().decrypt(rows["jellyfin_api_key"]) == "admin-key"
 
 
 @pytest.mark.asyncio

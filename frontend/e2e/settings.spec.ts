@@ -1,5 +1,14 @@
 import { test, expect } from "@playwright/test";
-import { getConfig, gotoApp, markConfigured, setConfig } from "./helpers";
+import {
+  getConfig,
+  gotoApp,
+  markConfigured,
+  markJellyfinConfigured,
+  markJellyfinUnconfigured,
+  markServicesConfigured,
+  markServicesUnconfigured,
+  setConfig,
+} from "./helpers";
 
 test.describe("settings", () => {
   test.beforeEach(async ({ request }) => {
@@ -78,5 +87,40 @@ test.describe("settings", () => {
     await toggle.check();
     await expect(page.locator("#notification-email")).toBeVisible();
     await expect(page.locator("#smtp-host")).toBeVisible();
+  });
+});
+
+test.describe("settings connection tests", () => {
+  test.beforeEach(async ({ request }) => {
+    await markConfigured(request);
+    await markJellyfinConfigured(request);
+    await markServicesConfigured(request);
+  });
+
+  test.afterEach(async ({ request }) => {
+    await markServicesUnconfigured(request);
+    await markJellyfinUnconfigured(request);
+  });
+
+  // The saved Jellyfin key is kept out of its field, and the saved qBittorrent
+  // password went back encrypted twice: both tests failed with nothing retyped
+  for (const tab of ["Jellyfin", "Radarr", "Sonarr", "qBittorrent"]) {
+    test(`${tab} tests with what is saved`, async ({ page }) => {
+      await gotoApp(page, "/settings");
+      await page.getByRole("button", { name: tab, exact: true }).click();
+      await page.getByRole("button", { name: "Test Connection" }).click();
+
+      await expect(page.getByText("Connection successful")).toBeVisible();
+    });
+  }
+
+  test("a failed test says why", async ({ page }) => {
+    await gotoApp(page, "/settings");
+    await page.getByRole("button", { name: "Radarr", exact: true }).click();
+    await page.locator("#api-key").fill("not-the-key");
+    await page.getByRole("button", { name: "Test Connection" }).click();
+
+    await expect(page.getByText("Connection failed")).toBeVisible();
+    await expect(page.getByText("API key invalid or unauthorized")).toBeVisible();
   });
 });

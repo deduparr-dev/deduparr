@@ -189,15 +189,17 @@ All colors MUST be HSL.
     /* Warning amber - muted for dark mode */
     --warning: 45 90% 55%;
     --warning-foreground: 0 0% 10%;
-    --warning-light: 45 50% 20%;
-    --warning-border: 45 50% 30%;
+    --warning-light: 45 45% 18%;
+    --warning-border: 45 55% 38%;
 
     /* Destructive red - dark muted for dark mode (easier on eyes) */
-    --destructive: 0 50% 25%;
+    /* Lifted out of the murk: at 50% 25% a delete button read as brown-grey
+       rather than a warning, and white label text on it was barely legible. */
+    --destructive: 0 62% 45%;
     --destructive-foreground: 0 0% 100%;
-    --destructive-light: 0 50% 20%;
-    --destructive-border: 0 50% 35%;
-    --destructive-hover: 0 50% 30%;
+    --destructive-light: 0 45% 18%;
+    --destructive-border: 0 50% 40%;
+    --destructive-hover: 0 62% 38%;
 
     --border: 0 0% 25%;
     --input: 0 0% 25%;

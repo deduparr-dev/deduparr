@@ -55,11 +55,25 @@ sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" manifest.json
 echo "Updating version in frontend/package.json to $VERSION"
 sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" frontend/package.json
 
-# Update package-lock.json
+# Update the version in frontend/package-lock.json
+#
+# This only rewrites the two root version fields. Running
+# `npm install --package-lock-only` instead re-resolves the whole tree, and
+# different npm versions disagree on what belongs in the file: npm 10.8.2
+# strips `libc` platform metadata and re-adds the bundled @emnapi entries under
+# @tailwindcss/oxide-wasm32-wasi, so the lockfile flip-flopped by ~70 lines
+# between each release and the next Dependabot bump.
 echo "Updating frontend/package-lock.json"
-cd frontend
-npx --yes npm@10.8.2 install --package-lock-only
-cd ..
+node -e '
+const fs = require("fs");
+const file = "frontend/package-lock.json";
+const lock = JSON.parse(fs.readFileSync(file, "utf8"));
+lock.version = process.argv[1];
+if (lock.packages && lock.packages[""]) {
+  lock.packages[""].version = process.argv[1];
+}
+fs.writeFileSync(file, JSON.stringify(lock, null, 2) + "\n");
+' "$VERSION"
 
 # Commit version changes
 echo "Committing version bump to $VERSION"

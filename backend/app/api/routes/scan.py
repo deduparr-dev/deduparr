@@ -5,7 +5,7 @@ Scan routes for triggering and managing duplicate detection
 import json
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -14,26 +14,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db
-from app.models import Config, DuplicateSet, ScoringRule
+from app.models import DuplicateSet, ScoringRule
 from app.models.duplicate import DuplicateStatus, MediaType, encode_inode
-from app.services.arr_quality import ArrQualityRanker
-from app.services.deletion_pipeline import DeletionPipeline
-from app.services.disk_scan_service import (
+from app.services.deletion.pipeline import DeletionPipeline
+from app.services.deletion.scheduled import ScheduledDeletionService
+from app.services.scan.disk_scan import (
     DiskScanConfig,
     DiskScanService,
     DuplicateDetectionStrategy,
     HardlinkHandling,
 )
-from app.services.plex_service import PlexService
-from app.services.scan_helpers import (
-    collect_media_metadata,
-    validate_duplicate_files,
-    create_duplicate_set,
-    cleanup_stale_set,
-    verify_and_update_existing_set,
+from app.services.media_server import (
+    MediaServer,
+    MediaServerType,
+    get_media_servers,
+    save_selected_libraries,
 )
-from app.services.scan_orchestrator import ScanOrchestrator
-from app.services.scoring_engine import ScoringEngine
+from app.services.scan.runner import run_scan
+from app.services.scan.scoring_engine import ScoringEngine
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +41,9 @@ router = APIRouter()
 class ScanRequest(BaseModel):
     """Request to start a duplicate scan"""
 
-    library_names: List[str]
-    # media_types removed - auto-detected from library type
+    # The libraries to scan on each server, kept as the selection scheduled
+    # scans use as well. Left out, the stored selection is scanned.
+    libraries: Optional[Dict[MediaServerType, List[str]]] = None
 
 
 class ScanResponse(BaseModel):
@@ -74,7 +73,9 @@ class DuplicateSetResponse(BaseModel):
     """Duplicate set information"""
 
     id: int
-    plex_item_id: str
+    # Which server reported this set, so the UI can tell two servers apart
+    media_server: str
+    item_id: str
     title: str
     media_type: str
     found_at: str
@@ -100,29 +101,26 @@ class DeleteResponse(BaseModel):
     errors: List[str] = []
 
 
-async def get_plex_service(db: AsyncSession) -> PlexService:
-    """Get configured Plex service"""
-    result = await db.execute(select(Config).where(Config.key == "plex_auth_token"))
-    token_config = result.scalar_one_or_none()
+class DeleteAllResponse(BaseModel):
+    """Response from deleting every pending duplicate set"""
 
-    result = await db.execute(select(Config).where(Config.key == "plex_server_name"))
-    server_config = result.scalar_one_or_none()
+    success: bool
+    message: str
+    dry_run: bool
+    sets_processed: int
+    files_deleted: int
+    errors: List[str] = []
 
-    if not token_config:
+
+async def get_configured_media_servers(db: AsyncSession) -> List[MediaServer]:
+    """Every media server this instance is set up against, or a 400."""
+    servers = await get_media_servers(db)
+    if not servers:
         raise HTTPException(
-            status_code=400, detail="Plex not configured. Complete setup first."
+            status_code=400,
+            detail="No media server configured. Complete setup first.",
         )
-
-    # Convert to plain string to detach from SQLAlchemy session
-    encrypted_token = str(token_config.value) if token_config.value else None
-    server_name = (
-        str(server_config.value) if server_config and server_config.value else None
-    )
-
-    return PlexService(
-        encrypted_token=encrypted_token,
-        server_name=server_name,
-    )
+    return servers
 
 
 async def get_custom_scoring_rules(db: AsyncSession) -> List[dict]:
@@ -146,355 +144,36 @@ async def start_scan(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Start scanning for duplicates in specified libraries
+    Scan every configured media server over the libraries chosen for it.
 
-    This will:
-    1. Connect to Plex and scan libraries
-    2. Find duplicate media items (using orchestrator for optional deep scan)
-    3. Score each version using the scoring engine
-    4. Store results in database with status=PENDING
-    5. Verify existing sets and remove stale file references
+    A selection sent along replaces the stored one first, so scheduled scans
+    cover the same libraries as the last manual one.
     """
-    logger.info(f"Starting scan for libraries: {scan_request.library_names}")
+    await get_configured_media_servers(db)
+    if scan_request.libraries is not None:
+        await save_selected_libraries(db, scan_request.libraries)
+    totals = await run_scan(db)
 
-    # Let HTTPExceptions (like 400 from get_plex_service) bubble up naturally
-    # FastAPI will handle them correctly
-    plex_service = await get_plex_service(db)
-    orchestrator = ScanOrchestrator(plex_service, db)
-    scoring_engine = ScoringEngine()
-    custom_rules = await get_custom_scoring_rules(db)
-
-    total_duplicates = 0
-    total_sets_created = 0
-    total_sets_updated = 0
-    total_sets_removed = 0
-
-    try:
-        for library_name in scan_request.library_names:
-            logger.info(f"Scanning library: {library_name}")
-
-            # Get library to detect type
-            library = plex_service.get_library(library_name)
-            logger.info(f"Detected library type: {library.type} for '{library_name}'")
-
-            # Scan based on library type (orchestrator handles deep scan automatically)
-            if library.type == "movie":
-                movie_dupes = await orchestrator.scan_movies(library_name)
-
-                # Clean up stale duplicate sets that Plex no longer reports
-                await _cleanup_stale_duplicate_sets(db, movie_dupes, MediaType.MOVIE)
-
-                sets_created, sets_updated, sets_removed = (
-                    await _process_duplicate_movies(
-                        db, movie_dupes, scoring_engine, custom_rules
-                    )
-                )
-                # Count actual media files, not Movie objects
-                total_duplicates += sum(
-                    len(movie.media)
-                    for movies in movie_dupes.values()
-                    for movie in movies
-                )
-                total_sets_created += sets_created
-                total_sets_updated += sets_updated
-                total_sets_removed += sets_removed
-
-            elif library.type == "show":
-                # Scan for duplicate episodes
-                try:
-                    logger.info(f"Starting episode duplicate scan for '{library_name}'")
-                    episode_dupes = await orchestrator.scan_episodes(library_name)
-                    logger.info(
-                        f"Found {len(episode_dupes)} duplicate episode groups in '{library_name}'"
-                    )
-
-                    # Clean up stale duplicate sets that Plex no longer reports
-                    await _cleanup_stale_duplicate_sets(
-                        db, episode_dupes, MediaType.EPISODE
-                    )
-
-                    sets_created, sets_updated, sets_removed = (
-                        await _process_duplicate_episodes(
-                            db, episode_dupes, scoring_engine, custom_rules
-                        )
-                    )
-                    logger.info(
-                        f"Processed episodes: {sets_created} created, "
-                        f"{sets_updated} updated, {sets_removed} removed"
-                    )
-
-                    # Count actual media files, not Episode objects
-                    total_duplicates += sum(
-                        len(episode.media)
-                        for episodes in episode_dupes.values()
-                        for episode in episodes
-                    )
-                    total_sets_created += sets_created
-                    total_sets_updated += sets_updated
-                    total_sets_removed += sets_removed
-                except Exception as e:
-                    logger.error(
-                        f"Could not scan episodes in {library_name}: {e}", exc_info=True
-                    )
-            else:
-                logger.warning(
-                    f"Unsupported library type '{library.type}' for '{library_name}' - skipping"
-                )
-
-        await db.commit()
-
-        # Get current total from database
-        total_result = await db.execute(
-            select(func.count(DuplicateSet.id)).where(
-                DuplicateSet.status == DuplicateStatus.PENDING
-            )
-        )
-        current_total = total_result.scalar() or 0
-
-        return ScanResponse(
-            success=True,
-            message=f"Scan completed for {len(scan_request.library_names)} libraries",
-            duplicates_found=total_duplicates,
-            sets_created=total_sets_created,
-            sets_updated=total_sets_updated,
-            sets_removed=total_sets_removed,
-            total_sets=current_total,
-        )
-
-    except Exception as e:
-        # Only catch unexpected errors during the scan process itself
-        logger.error(f"Scan failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Scan failed: {str(e)}")
-
-
-async def _cleanup_stale_duplicate_sets(
-    db: AsyncSession,
-    current_duplicates: dict,
-    media_type: MediaType,
-) -> int:
-    """
-    Clean up duplicate sets that are in the database but no longer reported by Plex.
-    This happens when:
-    - Files are deleted outside of Deduparr
-    - Plex no longer considers them duplicates (e.g., after manual unmatching/splitting)
-    - Files have been deleted through Plex or *arr
-
-    Only cleans up PENDING sets - we preserve APPROVED/REJECTED/PROCESSED sets
-    for activity history and user decisions.
-
-    Args:
-        db: Database session
-        current_duplicates: Dictionary of duplicates currently found by Plex (keyed by plex_item_id)
-        media_type: Type of media (MOVIE or EPISODE)
-
-    Returns:
-        Number of stale sets cleaned up
-    """
-    # Get all PENDING duplicate sets of this media type from database
-    result = await db.execute(
-        select(DuplicateSet)
-        .options(selectinload(DuplicateSet.files))
-        .where(
-            DuplicateSet.media_type == media_type,
-            DuplicateSet.status == DuplicateStatus.PENDING,
+    total_result = await db.execute(
+        select(func.count(DuplicateSet.id)).where(
+            DuplicateSet.status == DuplicateStatus.PENDING
         )
     )
-    db_sets = result.scalars().all()
 
-    # Build set of plex_item_ids currently reported by Plex
-    current_plex_ids = set()
-    for items in current_duplicates.values():
-        if items:  # Skip empty lists
-            # For movies/episodes, use the first item's ratingKey
-            current_plex_ids.add(str(items[0].ratingKey))
-
-    cleaned = 0
-    for db_set in db_sets:
-        if db_set.plex_item_id not in current_plex_ids:
-            # This duplicate set is no longer reported by Plex
-            logger.info(
-                f"Cleaning up stale PENDING duplicate set: {db_set.title} (plex_item_id={db_set.plex_item_id}, "
-                f"no longer reported as duplicate by Plex)"
-            )
-            await db.delete(db_set)
-            cleaned += 1
-
-    if cleaned > 0:
-        await db.flush()
-        logger.info(
-            f"Cleaned up {cleaned} stale PENDING duplicate sets for {media_type.value}"
-        )
-
-    return cleaned
-
-
-async def _process_duplicate_movies(
-    db: AsyncSession,
-    duplicates: dict,
-    scoring_engine: ScoringEngine,
-    custom_rules: List[dict],
-) -> Tuple[int, int, int]:
-    """Process and store duplicate movie sets
-
-    Returns:
-        tuple[int, int, int]: (sets_created, sets_updated, sets_removed)
-    """
-    arr_ranker = await ArrQualityRanker.from_config(db)
-    sets_created = 0
-    sets_updated = 0
-    sets_removed = 0
-
-    for title_key, movies in duplicates.items():
-        if not movies:
-            continue
-
-        first_movie = movies[0]
-        plex_item_id = str(first_movie.ratingKey)
-
-        existing = await db.execute(
-            select(DuplicateSet)
-            .options(selectinload(DuplicateSet.files))
-            .where(
-                DuplicateSet.plex_item_id == plex_item_id,
-                DuplicateSet.media_type == MediaType.MOVIE,
-            )
-        )
-        existing_set = existing.scalar_one_or_none()
-
-        files_metadata = await collect_media_metadata(movies, "movie", logger)
-
-        validation_error = validate_duplicate_files(
-            files_metadata, first_movie.title, logger
-        )
-        if validation_error:
-            logger.info(f"Skipping '{first_movie.title}' - {validation_error.lower()}")
-            await cleanup_stale_set(db, existing_set, validation_error, logger)
-            if existing_set:
-                sets_removed += 1
-            continue
-
-        if existing_set:
-            # Verify and update existing set - detect externally removed files
-            set_valid, files_removed = await verify_and_update_existing_set(
-                db,
-                existing_set,
-                files_metadata,
-                scoring_engine,
-                custom_rules,
-                logger,
-                arr_ranker,
-            )
-            if set_valid:
-                if files_removed > 0:
-                    sets_updated += 1
-                    logger.info(
-                        f"Updated duplicate set for movie: {first_movie.title} "
-                        f"(removed {files_removed} stale file(s))"
-                    )
-            else:
-                sets_removed += 1
-            continue
-
-        await create_duplicate_set(
-            db,
-            plex_item_id,
-            first_movie.title,
-            MediaType.MOVIE,
-            files_metadata,
-            scoring_engine,
-            custom_rules,
-            logger,
-            arr_ranker,
-        )
-        sets_created += 1
-
-    return sets_created, sets_updated, sets_removed
-
-
-async def _process_duplicate_episodes(
-    db: AsyncSession,
-    duplicates: dict,
-    scoring_engine: ScoringEngine,
-    custom_rules: List[dict],
-) -> Tuple[int, int, int]:
-    """Process and store duplicate episode sets
-
-    Returns:
-        tuple[int, int, int]: (sets_created, sets_updated, sets_removed)
-    """
-    arr_ranker = await ArrQualityRanker.from_config(db)
-    sets_created = 0
-    sets_updated = 0
-    sets_removed = 0
-
-    for episode_key, episodes in duplicates.items():
-        if not episodes:
-            continue
-
-        first_episode = episodes[0]
-        plex_item_id = str(first_episode.ratingKey)
-
-        existing = await db.execute(
-            select(DuplicateSet)
-            .options(selectinload(DuplicateSet.files))
-            .where(
-                DuplicateSet.plex_item_id == plex_item_id,
-                DuplicateSet.media_type == MediaType.EPISODE,
-            )
-        )
-        existing_set = existing.scalar_one_or_none()
-
-        files_metadata = await collect_media_metadata(episodes, "episode", logger)
-
-        episode_title = f"{first_episode.grandparentTitle} - {first_episode.title}"
-        validation_error = validate_duplicate_files(
-            files_metadata, episode_title, logger
-        )
-        if validation_error:
-            logger.info(f"Skipping '{episode_title}' - {validation_error.lower()}")
-            await cleanup_stale_set(db, existing_set, validation_error, logger)
-            if existing_set:
-                sets_removed += 1
-            continue
-
-        if existing_set:
-            # Verify and update existing set - detect externally removed files
-            set_valid, files_removed = await verify_and_update_existing_set(
-                db,
-                existing_set,
-                files_metadata,
-                scoring_engine,
-                custom_rules,
-                logger,
-                arr_ranker,
-            )
-            if set_valid:
-                if files_removed > 0:
-                    sets_updated += 1
-                    logger.info(
-                        f"Updated duplicate set for episode: {first_episode.grandparentTitle} "
-                        f"S{first_episode.seasonNumber:02d}E{first_episode.episodeNumber:02d} "
-                        f"(removed {files_removed} stale file(s))"
-                    )
-            else:
-                sets_removed += 1
-            continue
-
-        full_title = f"{first_episode.grandparentTitle} - S{first_episode.seasonNumber:02d}E{first_episode.episodeNumber:02d} - {first_episode.title}"
-        await create_duplicate_set(
-            db,
-            plex_item_id,
-            full_title,
-            MediaType.EPISODE,
-            files_metadata,
-            scoring_engine,
-            custom_rules,
-            logger,
-            arr_ranker,
-        )
-        sets_created += 1
-
-    return sets_created, sets_updated, sets_removed
+    return ScanResponse(
+        success=True,
+        message=(
+            f"Scanned {len(totals.libraries_scanned)} librar"
+            f"{'y' if len(totals.libraries_scanned) == 1 else 'ies'}: "
+            f"{totals.sets_created} new, {totals.sets_updated} updated, "
+            f"{totals.sets_removed} removed"
+        ),
+        duplicates_found=totals.duplicates_found,
+        sets_created=totals.sets_created,
+        sets_updated=totals.sets_updated,
+        sets_removed=totals.sets_removed,
+        total_sets=total_result.scalar() or 0,
+    )
 
 
 @router.get("/duplicates", response_model=List[DuplicateSetResponse])
@@ -531,7 +210,8 @@ async def get_duplicates(
     return [
         DuplicateSetResponse(
             id=dup_set.id,
-            plex_item_id=dup_set.plex_item_id,
+            media_server=dup_set.media_server,
+            item_id=dup_set.item_id,
             title=dup_set.title,
             media_type=dup_set.media_type.value,
             found_at=dup_set.found_at.isoformat(),
@@ -578,6 +258,42 @@ async def get_scan_status(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.post("/duplicates/delete-all", response_model=DeleteAllResponse)
+async def delete_all_duplicate_sets(
+    delete_request: DeleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Delete the non-kept files of every PENDING duplicate set in one pass.
+
+    Which file survives is whatever the scan already marked as keep, so the
+    criteria are the scoring rules and the optional *arr quality profile
+    preference. Runs the same pipeline as the scheduled deletion.
+
+    Args:
+        delete_request: Contains dry_run flag (default True for safety)
+    """
+    summary = await ScheduledDeletionService(db).run_scheduled_deletion(
+        dry_run=delete_request.dry_run,
+        send_email=False,
+    )
+
+    verb = "Would delete" if summary["dry_run"] else "Deleted"
+    message = (
+        f"{'[DRY-RUN] ' if summary['dry_run'] else ''}{verb} "
+        f"{summary['files_deleted']} file(s) across {summary['sets_processed']} duplicate set(s)"
+    )
+
+    return DeleteAllResponse(
+        success=not summary["errors"],
+        message=message,
+        dry_run=summary["dry_run"],
+        sets_processed=summary["sets_processed"],
+        files_deleted=summary["files_deleted"],
+        errors=summary["errors"],
+    )
+
+
 @router.post("/duplicates/{set_id}/delete", response_model=DeleteResponse)
 async def delete_duplicate_set(
     set_id: int,
@@ -609,91 +325,31 @@ async def delete_duplicate_set(
             status_code=400, detail="This duplicate set has already been processed"
         )
 
-    files_to_delete = [f for f in duplicate_set.files if not f.keep]
-    files_to_keep = [f for f in duplicate_set.files if f.keep]
-
-    if not files_to_delete:
+    if all(f.keep for f in duplicate_set.files):
         raise HTTPException(
             status_code=400, detail="No files marked for deletion in this set"
         )
 
-    # Log which files are being kept vs deleted for clarity
-    logger.info(f"Processing duplicate set '{duplicate_set.title}' (ID: {set_id})")
-    for file in files_to_keep:
-        logger.info(f"  KEEPING (score {file.score}): {file.file_path}")
-    for file in files_to_delete:
-        logger.info(f"  DELETING (score {file.score}): {file.file_path}")
-
-    pipeline = DeletionPipeline(db, dry_run=delete_request.dry_run)
-
-    deleted_count = 0
-    total_space = 0
-    errors = []
-    warnings = []
-
-    # Delete all files WITHOUT triggering individual rescans
-    for file in files_to_delete:
-        try:
-            history = await pipeline.delete_file(
-                file.id,
-                skip_qbit=False,
-                skip_rescan=True,  # Skip rescan during deletion
-            )
-            deleted_count += 1
-            total_space += file.file_size
-
-            # Collect warnings from deletion history
-            if history.error and history.is_complete:
-                # Deletion succeeded but with warnings about unconfigured services
-                warnings.append(history.error)
-
-            logger.info(
-                f"{'[DRY-RUN] Would delete' if delete_request.dry_run else 'Deleted'} file: {file.file_path}"
-            )
-        except Exception as e:
-            error_msg = f"Failed to delete {file.file_path}: {str(e)}"
-            logger.error(error_msg)
-            errors.append(error_msg)
-
-    # After ALL deletions complete, trigger ONE rescan using the kept file
-    if deleted_count > 0 and files_to_keep:
-        kept_file = files_to_keep[0]  # There's only one kept file per set
-        try:
-            # The deletion pipeline saves arr_media_id in history, pass the set ID
-            # so rescan_for_kept_file can query it from deletion history
-            await pipeline.rescan_for_kept_file(
-                duplicate_set.media_type, kept_file.file_path, duplicate_set.id
-            )
-            logger.info(
-                f"Triggered *arr rescan to import kept file: {kept_file.file_path}"
-            )
-        except Exception as e:
-            # Rescan failure is non-critical
-            logger.warning(f"Failed to trigger *arr rescan (non-critical): {e}")
-
-    if not delete_request.dry_run and deleted_count > 0:
-        duplicate_set.status = DuplicateStatus.PROCESSED
+    outcome = await DeletionPipeline(db, dry_run=delete_request.dry_run).delete_set(
+        duplicate_set
+    )
+    if not delete_request.dry_run:
         await db.commit()
 
-    # Build message with warnings if any
-    base_message = (
+    message = (
         f"{'[DRY-RUN] Would delete' if delete_request.dry_run else 'Deleted'} "
-        f"{deleted_count} file(s) from duplicate set '{duplicate_set.title}'"
+        f"{outcome.files_deleted} file(s) from duplicate set '{duplicate_set.title}'"
     )
-
-    if warnings and not delete_request.dry_run:
-        # Get unique warnings
-        unique_warnings = list(set(warnings))
-        warning_text = "; ".join(unique_warnings)
-        base_message += f". Note: {warning_text}"
+    if outcome.warnings and not delete_request.dry_run:
+        message += f". Note: {'; '.join(dict.fromkeys(outcome.warnings))}"
 
     return DeleteResponse(
-        success=len(errors) == 0,
-        message=base_message,
+        success=not outcome.errors,
+        message=message,
         dry_run=delete_request.dry_run,
-        files_deleted=deleted_count,
-        space_reclaimed=total_space,
-        errors=errors,
+        files_deleted=outcome.files_deleted,
+        space_reclaimed=outcome.space_reclaimed,
+        errors=outcome.errors,
     )
 
 
@@ -952,7 +608,7 @@ async def dev_disk_scan(
             continue
 
         # Create MediaMetadata objects for scoring
-        from app.services.scan_helpers import MediaMetadata
+        from app.services.scan.helpers import MediaMetadata
 
         metadata_list = []
         for f in files:
@@ -991,7 +647,8 @@ async def dev_disk_scan(
 
         # Create duplicate set
         dup_set = DuplicateSet(
-            plex_item_id=f"dev-{key}",
+            media_server="disk",
+            item_id=f"dev-{key}",
             title=title,
             media_type=media_type,
             status=DuplicateStatus.PENDING,

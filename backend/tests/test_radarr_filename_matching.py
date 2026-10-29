@@ -9,7 +9,7 @@ FULL PATH, not just filename, to avoid deleting the wrong file.
 import pytest
 from unittest.mock import AsyncMock
 
-from app.services.radarr_service import RadarrService
+from app.services.arr.radarr_service import RadarrService
 from app.models.config import Config
 
 

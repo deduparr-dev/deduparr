@@ -1,0 +1,154 @@
+"""
+Shared helper functions for *arr services (Radarr/Sonarr)
+Extracts common rescan and path management logic
+"""
+
+import logging
+import os
+from typing import Optional, Union
+
+from app.services.arr.client import (
+    ArrFile,
+    Episode,
+    MediaItem,
+    RadarrClient,
+    SonarrClient,
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def rescan_media_item(
+    client: Union[RadarrClient, SonarrClient],
+    media_id: Optional[int],
+    kept_file_path: str,
+    logger_instance: logging.Logger,
+) -> None:
+    """
+    Have Radarr/Sonarr rescan a movie or series from disk, or every one of
+    them when media_id is None.
+
+    A rescan imports the files in the item's folder the *arr does not track
+    yet - the kept file - and drops the ones gone from disk. A kept file in
+    another folder gets the item pointed at that folder first.
+
+    Raises:
+        ValueError: The kept file sits directly in a root folder. The *arr
+            refuses a root folder as a movie or series path, and the kept file
+            is not moved behind the user's back.
+    """
+    if isinstance(client, RadarrClient):
+        arr, kind, command, id_param = "Radarr", "movie", "RescanMovie", "movieId"
+    else:
+        arr, kind, command, id_param = "Sonarr", "series", "RescanSeries", "seriesId"
+
+    if media_id is None:
+        await client.post_command(command)
+        logger_instance.info(f"Asked {arr} to rescan every {kind} from disk")
+        return
+
+    item = await (
+        client.get_movie(media_id)
+        if isinstance(client, RadarrClient)
+        else client.get_series(media_id)
+    )
+    current_path = item.get("path", "")
+    folder = os.path.dirname(kept_file_path)
+
+    # Root folders picked in the *arr's folder browser carry a trailing slash
+    for root in await client.get_root_folder():
+        if root.get("path", "").rstrip("/") == folder.rstrip("/"):
+            raise ValueError(
+                f"{arr} cannot import {kept_file_path}: it sits directly in the "
+                f"root folder {root['path']}. Move it into {current_path} and "
+                f"refresh the {kind} in {arr}."
+            )
+
+    if current_path and not _within(current_path, folder):
+        logger_instance.info(
+            f"{arr} keeps this {kind} in {current_path}; pointing it at {folder}"
+        )
+        item["path"] = folder
+        await (
+            client.update_movie(item)
+            if isinstance(client, RadarrClient)
+            else client.update_series(item)
+        )
+
+    await client.post_command(command, **{id_param: media_id})
+    logger_instance.info(f"Asked {arr} to rescan {kind} {media_id} from disk")
+
+
+def _within(folder: str, path: str) -> bool:
+    """Whether path is folder itself or inside it, as a season folder is."""
+    folder = folder.rstrip("/")
+    return path == folder or path.startswith(folder + "/")
+
+
+async def find_movie_by_file_path(
+    client: RadarrClient, file_path: str, logger_instance: logging.Logger
+) -> Optional[MediaItem]:
+    """The movie whose file Radarr keeps at exactly this path, if any"""
+    try:
+        for movie in await client.get_movie():
+            if (movie.get("movieFile") or ArrFile()).get("path") == file_path:
+                logger_instance.info(
+                    f"Found movie '{movie.get('title')}' for file {file_path}"
+                )
+                return movie
+
+        logger_instance.warning(f"Movie not found in Radarr for file path: {file_path}")
+        return None
+    except Exception as e:
+        logger_instance.error(f"Error finding movie for {file_path}: {e}")
+        raise
+
+
+async def find_episode_by_file_path(
+    client: SonarrClient, file_path: str, logger_instance: logging.Logger
+) -> Optional[Episode]:
+    """
+    The episode whose file Sonarr keeps at exactly this path, if any.
+
+    Sonarr can hold a file no episode points at, after a manual import or an
+    episode's deletion. That file comes back as an episode without an ID, so
+    the deletion pipeline can still delete it.
+    """
+    try:
+        for series in await client.get_series():
+            series_id = series.get("id")
+            if not series_id:
+                continue
+            for episode_file in await client.get_episode_files_by_series_id(series_id):
+                if episode_file.get("path") != file_path:
+                    continue
+
+                episode_ids = episode_file.get("episodeIds") or []
+                if episode_ids:
+                    episode = await client.get_episode(episode_ids[0])
+                    episode["episodeFile"] = episode_file
+                    logger_instance.info(
+                        f"Found episode '{episode.get('title', 'Unknown Episode')}' "
+                        f"for file {file_path}"
+                    )
+                    return episode
+
+                season = episode_file.get("seasonNumber", 0)
+                logger_instance.warning(
+                    f"Found orphaned episode file {episode_file.get('id')} in Sonarr "
+                    f"(series {series_id}, season {season}, no episodes): {file_path}"
+                )
+                return Episode(
+                    seriesId=series_id,
+                    seasonNumber=season,
+                    episodeFile=episode_file,
+                    title=f"Orphaned S{season:02d} file",
+                )
+
+        logger_instance.warning(
+            f"Episode not found in Sonarr for file path: {file_path}"
+        )
+        return None
+    except Exception as e:
+        logger_instance.error(f"Error finding episode for {file_path}: {e}")
+        raise

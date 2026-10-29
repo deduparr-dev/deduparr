@@ -5,51 +5,64 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Check, X, Film, Tv, Download, AlertCircle } from "lucide-react";
-import { setupAPI } from "@/services/api";
+import { Loader2, Check, X, Film, Tv, Download, AlertCircle, Server } from "lucide-react";
+import {
+  MEDIA_SERVER_NAMES,
+  runConnectionTest,
+  setupAPI,
+  type ConnectionTestResult,
+  type MediaLibrary,
+  type ServiceTestResponse,
+} from "@/services/api";
 import { useQueryClient } from "@tanstack/react-query";
 
-interface ConnectionTestResult {
-  success: boolean;
-  error?: string;
-  version?: string;
-  server_name?: string;
-  username?: string;
-  email?: string;
-}
-
-// TODO: Remove when multi-server support is implemented
-// interface PlexServer {
-//   name: string;
-//   client_identifier: string;
-//   product: string;
-//   platform: string;
-//   owned: boolean;
-// }
-
-interface PlexLibrary {
-  key: string;
-  title: string;
-  type: string;
-  agent: string;
-}
-
 interface SelectedLibrary {
-  key: string;
+  /** "plex" or "jellyfin": the selection is per server, not a shared name */
+  server: string;
   title: string;
 }
 
 type WizardStep =
-  "welcome" | "plex-auth" | "plex-server" | "libraries" | "required-services" | "complete";
+  | "welcome"
+  | "media-server"
+  | "plex-auth"
+  | "plex-server"
+  | "jellyfin"
+  | "libraries"
+  | "required-services"
+  | "complete";
 
-function ProgressIndicator({ currentStep }: { currentStep: WizardStep }) {
-  const steps = ["plex-auth", "plex-server", "libraries", "required-services"];
+/** Which media servers the user chose to set up. At least one is required. */
+interface ServerChoice {
+  plex: boolean;
+  jellyfin: boolean;
+}
+
+/** The steps this run of the wizard will walk, given what was chosen. */
+function stepsFor(choice: ServerChoice): WizardStep[] {
+  return [
+    "media-server",
+    ...(choice.plex ? (["plex-auth", "plex-server"] as WizardStep[]) : []),
+    ...(choice.jellyfin ? (["jellyfin"] as WizardStep[]) : []),
+    "libraries",
+    "required-services",
+  ];
+}
+
+function ProgressIndicator({
+  currentStep,
+  choice,
+}: {
+  currentStep: WizardStep;
+  choice: ServerChoice;
+}) {
+  const steps = stepsFor(choice);
   const currentIndex = steps.indexOf(currentStep);
 
   if (currentStep === "welcome" || currentStep === "complete") return null;
 
   return (
-    <div className="mb-8 flex items-center justify-center gap-2">
+    <div data-testid="wizard-progress" className="mb-8 flex items-center justify-center gap-2">
       {steps.map((step, index) => (
         <div key={step} className="flex items-center gap-2">
           <div
@@ -83,12 +96,6 @@ function TestResultDisplay({ result }: { result?: ConnectionTestResult }) {
           {result.success ? "Connection successful" : "Connection failed"}
         </p>
         {result.error && <p className="text-xs text-muted-foreground mt-1">{result.error}</p>}
-        {result.username && (
-          <p className="text-xs text-muted-foreground mt-1">User: {result.username}</p>
-        )}
-        {result.email && (
-          <p className="text-xs text-muted-foreground mt-1">Email: {result.email}</p>
-        )}
         {result.server_name && (
           <p className="text-xs text-muted-foreground mt-1">Server: {result.server_name}</p>
         )}
@@ -107,10 +114,18 @@ export default function SetupWizard() {
   const [isPending, startTransition] = useTransition();
   const [isLoadingLibraries, startLibrariesTransition] = useTransition();
 
+  // Nothing is pre-selected: Deduparr does not assume which media server the
+  // user runs, and either one on its own is enough.
+  const [choice, setChoice] = useState<ServerChoice>({ plex: false, jellyfin: false });
+
+  // Jellyfin state
+  const [jellyfinUrl, setJellyfinUrl] = useState<string>("");
+  const [jellyfinApiKey, setJellyfinApiKey] = useState<string>("");
+
   // Plex OAuth state
   const [plexAuthToken, setPlexAuthToken] = useState<string>("");
   const [plexServerName, setPlexServerName] = useState<string>("");
-  const [plexLibraries, setPlexLibraries] = useState<PlexLibrary[]>([]);
+  const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
   const [selectedLibraries, setSelectedLibraries] = useState<SelectedLibrary[]>([]);
   const [pinCode, setPinCode] = useState<string>("");
   const plexAuthWindowRef = useRef<Window | null>(null);
@@ -129,6 +144,15 @@ export default function SetupWizard() {
   const [error, setError] = useState<string>("");
   const [testResults, setTestResults] = useState<Record<string, ConnectionTestResult>>({});
 
+  /** A result only holds for the details it was tested with. */
+  function forgetTest(service: string) {
+    setTestResults((prev) => {
+      const next = { ...prev };
+      delete next[service];
+      return next;
+    });
+  }
+
   function closeAuthWindow() {
     if (plexAuthWindowRef.current && !plexAuthWindowRef.current.closed) {
       plexAuthWindowRef.current.close();
@@ -145,6 +169,21 @@ export default function SetupWizard() {
   }
 
   function handleGetStarted() {
+    setError("");
+    setCurrentStep("media-server");
+  }
+
+  /** Continue from the server choice into the first server's own step. */
+  function handleServerChoice() {
+    setError("");
+    if (choice.plex) {
+      startPlexAuth();
+    } else {
+      setCurrentStep("jellyfin");
+    }
+  }
+
+  function startPlexAuth() {
     setError("");
 
     startTransition(async () => {
@@ -197,20 +236,15 @@ export default function SetupWizard() {
 
           // Fetch available servers
           try {
-            const response = await fetch(`/api/setup/plex/servers`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ auth_token: result.encrypted_token }),
-            });
-            const data = await response.json();
+            const { servers } = await setupAPI.getPlexServers(result.encrypted_token);
 
-            if (data.servers && data.servers.length > 0) {
+            if (servers.length > 0) {
               // Auto-select first server (or only server)
-              const firstServer = data.servers[0];
+              const firstServer = servers[0];
               setPlexServerName(firstServer.name);
 
-              // Move to libraries step and load them
-              setCurrentStep("libraries");
+              // Jellyfin, when chosen too, is set up before the libraries of both
+              setCurrentStep(choice.jellyfin ? "jellyfin" : "libraries");
               loadPlexLibraries(result.encrypted_token, firstServer.name);
             } else {
               setError("No Plex servers found for your account");
@@ -237,10 +271,11 @@ export default function SetupWizard() {
 
     startLibrariesTransition(async () => {
       try {
-        console.log("Loading Plex libraries for server:", serverName);
-        const libs = await setupAPI.getPlexLibrariesWithAuth(authToken, serverName);
-        console.log("Received libraries:", libs);
-        setPlexLibraries(libs);
+        const plexLibs = await setupAPI.getPlexLibrariesWithAuth(authToken, serverName);
+        setLibraries((prev) => [
+          ...prev.filter((lib) => lib.server !== "plex"),
+          ...plexLibs.map((lib) => ({ ...lib, count: 0, server: "plex" })),
+        ]);
       } catch (err) {
         console.error("Failed to load libraries:", err);
         const errorMessage = err instanceof Error ? err.message : "Failed to load Plex libraries";
@@ -249,59 +284,95 @@ export default function SetupWizard() {
     });
   }
 
-  async function testPlexConnection() {
-    if (selectedLibraries.length === 0) {
-      setError("Please select at least one library");
-      return;
-    }
+  function testPlexConnection() {
+    runTest("plex", () => setupAPI.testPlex(plexAuthToken, plexServerName));
+  }
 
-    setTestResults((prev) => ({
-      ...prev,
-      plex: { success: false, loading: true },
-    }));
+  /** Run a connection test and keep its outcome under the service's name. */
+  function runTest(service: string, test: () => Promise<ServiceTestResponse>) {
+    setError("");
+    startTransition(async () => {
+      const result = await runConnectionTest(test);
+      setTestResults((prev) => ({ ...prev, [service]: result }));
+    });
+  }
 
-    try {
-      const result = await setupAPI.testPlex();
-      setTestResults((prev) => ({
-        ...prev,
-        plex: {
-          success: result.success,
-          error: result.success ? undefined : result.message,
-        },
-      }));
-      if (result.success) {
-        setCurrentStep("required-services");
+  function handleTestJellyfin() {
+    runTest("jellyfin", () => setupAPI.testJellyfin({ url: jellyfinUrl, api_key: jellyfinApiKey }));
+  }
+
+  const scannableLibraries = libraries.filter(
+    (library) => library.type === "movie" || library.type === "show"
+  );
+
+  function isSelected(server: string, title: string) {
+    return selectedLibraries.some((lib) => lib.server === server && lib.title === title);
+  }
+
+  function toggleLibrary(server: string, title: string, selected: boolean) {
+    setSelectedLibraries((prev) =>
+      selected
+        ? [...prev, { server, title }]
+        : prev.filter((lib) => !(lib.server === server && lib.title === title))
+    );
+  }
+
+  function loadJellyfinLibraries() {
+    setError("");
+    setCurrentStep("libraries");
+
+    startLibrariesTransition(async () => {
+      try {
+        const jellyfinLibs = await setupAPI.getJellyfinLibraries({
+          url: jellyfinUrl,
+          api_key: jellyfinApiKey,
+        });
+        setLibraries((prev) => [
+          ...prev.filter((lib) => lib.server !== "jellyfin"),
+          ...jellyfinLibs,
+        ]);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load Jellyfin libraries");
       }
-    } catch {
-      setTestResults((prev) => ({
-        ...prev,
-        plex: {
-          success: false,
-          error: "Connection failed",
-        },
-      }));
-    }
+    });
   }
 
   function testService(service: "radarr" | "sonarr" | "qbittorrent") {
-    startTransition(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      setTestResults((prev) => ({
-        ...prev,
-        [service]: { success: true, version: "4.5.2.1234" },
-      }));
-    });
+    const tests = {
+      radarr: () => setupAPI.testRadarr({ url: radarrUrl, api_key: radarrApiKey }),
+      sonarr: () => setupAPI.testSonarr({ url: sonarrUrl, api_key: sonarrApiKey }),
+      qbittorrent: () =>
+        setupAPI.testQBittorrent({ url: qbitUrl, username: qbitUsername, password: qbitPassword }),
+    };
+    runTest(service, tests[service]);
   }
 
   function completeSetup() {
     startTransition(async () => {
       try {
         // Build config object, only including non-empty values
-        const config: Record<string, string> = {
-          plex_auth_token: plexAuthToken,
-          plex_server_name: plexServerName,
-          plex_libraries: selectedLibraries.map((lib) => lib.title).join(","),
-        };
+        const config: Record<string, string> = {};
+
+        // The selection is stored per server, under the key that names it
+        for (const server of ["plex", "jellyfin"]) {
+          const chosen = selectedLibraries
+            .filter((lib) => lib.server === server)
+            .map((lib) => lib.title);
+          if (chosen.length > 0) {
+            config[`${server}_libraries`] = chosen.join(",");
+          }
+        }
+
+        // Only the servers that were actually set up are saved, since their
+        // presence is what marks a server as configured.
+        if (choice.plex && plexAuthToken) {
+          config.plex_auth_token = plexAuthToken;
+          config.plex_server_name = plexServerName;
+        }
+        if (choice.jellyfin && jellyfinUrl && jellyfinApiKey) {
+          config.jellyfin_url = jellyfinUrl;
+          config.jellyfin_api_key = jellyfinApiKey;
+        }
 
         // Add optional services only if configured
         if (radarrUrl && radarrApiKey) {
@@ -318,29 +389,14 @@ export default function SetupWizard() {
           config.qbittorrent_password = qbitPassword;
         }
 
-        // Save configuration to database
-        const response = await fetch("/api/setup/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config }),
-        });
+        await setupAPI.saveConfig(config);
+        await setupAPI.completeSetup();
 
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.detail || "Failed to save configuration");
-        }
-
-        // Mark setup as complete
-        await fetch("/api/setup/complete", {
-          method: "POST",
-        });
-
-        // Invalidate all queries to refresh data after setup
-        queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
-        queryClient.invalidateQueries({ queryKey: ["plexLibraries"] });
+        // The app sends anyone without a media server back here, so it has
+        // to see the new configuration before the dashboard loads.
+        await queryClient.invalidateQueries({ queryKey: ["config"] });
+        queryClient.invalidateQueries({ queryKey: ["mediaLibraries"] });
         queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
-
-        // Redirect to dashboard immediately
         navigate("/");
       } catch (error) {
         console.error("Setup failed:", error);
@@ -352,7 +408,7 @@ export default function SetupWizard() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-muted/30 to-muted/50 py-6 md:py-12 px-4">
       <div className="max-w-4xl mx-auto">
-        <ProgressIndicator currentStep={currentStep} />
+        <ProgressIndicator currentStep={currentStep} choice={choice} />
 
         {error && (
           <Card className="mb-4 md:mb-6 p-3 md:p-4 bg-destructive-light border-destructive-border">
@@ -372,9 +428,8 @@ export default function SetupWizard() {
               </div>
               <h1 className="text-2xl md:text-3xl font-bold">Welcome to deduparr!</h1>
               <p className="text-sm md:text-lg text-muted-foreground">
-                Your media server lets you see duplicates, Radarr/Sonarr deletes them, and
-                qBittorrent is needed if you want to remove the corresponding items from your
-                library as well.
+                Your media server shows Deduparr what you have more than one copy of. Radarr and
+                Sonarr do the deleting, and qBittorrent removes the matching downloads as well.
               </p>
 
               <Card className="p-4 md:p-6 bg-card border-border text-left">
@@ -382,11 +437,11 @@ export default function SetupWizard() {
                 <div className="space-y-2 text-xs md:text-sm">
                   <div className="flex items-start gap-2">
                     <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
-                    <span>A Plex account (free or Plex Pass)</span>
+                    <span>Plex or Jellyfin - either one, or both</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
-                    <span>Access to your Plex server</span>
+                    <span>A Plex account, or a Jellyfin server URL and admin API key</span>
                   </div>
                   <div className="flex items-start gap-2 opacity-60">
                     <Check className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
@@ -471,7 +526,7 @@ export default function SetupWizard() {
                 <div className="flex flex-col items-center gap-4">
                   <Button
                     size="lg"
-                    onClick={handleGetStarted}
+                    onClick={startPlexAuth}
                     disabled={isPending}
                     className="w-full sm:w-auto"
                   >
@@ -508,7 +563,10 @@ export default function SetupWizard() {
                       )}
                     </Button>
                     {testResults.plex?.success && (
-                      <Button onClick={() => setCurrentStep("libraries")} className="flex-1">
+                      <Button
+                        onClick={() => setCurrentStep(choice.jellyfin ? "jellyfin" : "libraries")}
+                        className="flex-1"
+                      >
                         Next: Libraries
                       </Button>
                     )}
@@ -519,6 +577,176 @@ export default function SetupWizard() {
           )}
 
           {/* Libraries Step */}
+          {currentStep === "media-server" && (
+            <div className="max-w-2xl mx-auto space-y-4 md:space-y-6">
+              <div className="text-center">
+                <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-primary to-secondary text-primary-foreground flex items-center justify-center shadow-lg">
+                  <Server className="w-8 h-8 md:w-10 md:h-10" />
+                </div>
+                <h2 className="text-xl md:text-2xl font-bold mb-2">Choose your media server</h2>
+                <p className="text-sm md:text-base text-muted-foreground">
+                  Deduparr reads your libraries from here. Pick both if you run both over the same
+                  media.
+                </p>
+              </div>
+
+              <div className="space-y-2 md:space-y-3">
+                <label
+                  htmlFor="choose-plex"
+                  className="flex items-start gap-3 p-4 rounded-lg border border-border bg-card cursor-pointer hover:bg-accent/50 transition-colors"
+                >
+                  <Checkbox
+                    id="choose-plex"
+                    checked={choice.plex}
+                    onCheckedChange={(checked) =>
+                      setChoice((prev) => ({ ...prev, plex: checked === true }))
+                    }
+                    className="mt-0.5"
+                  />
+                  <div>
+                    <div className="font-medium text-foreground">Plex</div>
+                    <p className="text-xs md:text-sm text-muted-foreground mt-1">
+                      Signs in through plex.tv, so no server URL or token is needed.
+                    </p>
+                  </div>
+                </label>
+
+                <label
+                  htmlFor="choose-jellyfin"
+                  className="flex items-start gap-3 p-4 rounded-lg border border-border bg-card cursor-pointer hover:bg-accent/50 transition-colors"
+                >
+                  <Checkbox
+                    id="choose-jellyfin"
+                    checked={choice.jellyfin}
+                    onCheckedChange={(checked) =>
+                      setChoice((prev) => ({ ...prev, jellyfin: checked === true }))
+                    }
+                    className="mt-0.5"
+                  />
+                  <div>
+                    <div className="font-medium text-foreground">Jellyfin</div>
+                    <p className="text-xs md:text-sm text-muted-foreground mt-1">
+                      Needs the server URL and an API key from an administrator account.
+                    </p>
+                  </div>
+                </label>
+              </div>
+
+              {!choice.plex && !choice.jellyfin && (
+                <div className="flex items-start gap-2 text-sm text-muted-foreground">
+                  <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+                  <span>Select at least one media server to continue.</span>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setCurrentStep("welcome")}
+                  className="flex-1"
+                >
+                  Back
+                </Button>
+                <Button
+                  data-testid="server-choice-continue"
+                  onClick={handleServerChoice}
+                  disabled={(!choice.plex && !choice.jellyfin) || isPending}
+                  className="flex-1"
+                >
+                  {isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Starting...
+                    </>
+                  ) : (
+                    "Continue"
+                  )}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {currentStep === "jellyfin" && (
+            <div className="max-w-2xl mx-auto space-y-4 md:space-y-6">
+              <div className="text-center">
+                <div className="w-16 h-16 md:w-20 md:h-20 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-primary to-secondary text-primary-foreground flex items-center justify-center shadow-lg">
+                  <Server className="w-8 h-8 md:w-10 md:h-10" />
+                </div>
+                <h2 className="text-xl md:text-2xl font-bold mb-2">Connect Jellyfin</h2>
+                <p className="text-sm md:text-base text-muted-foreground">
+                  Create an API key under Dashboard &rarr; API Keys on an administrator account.
+                </p>
+              </div>
+
+              <div className="space-y-3 md:space-y-4">
+                <div>
+                  <Label htmlFor="jellyfin-url">Server URL</Label>
+                  <Input
+                    id="jellyfin-url"
+                    value={jellyfinUrl}
+                    onChange={(e) => {
+                      setJellyfinUrl(e.target.value);
+                      forgetTest("jellyfin");
+                    }}
+                    placeholder="http://jellyfin:8096"
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="jellyfin-api-key">API Key</Label>
+                  <Input
+                    id="jellyfin-api-key"
+                    type="password"
+                    value={jellyfinApiKey}
+                    onChange={(e) => {
+                      setJellyfinApiKey(e.target.value);
+                      forgetTest("jellyfin");
+                    }}
+                    placeholder="Administrator API key"
+                    className="mt-1"
+                  />
+                </div>
+
+                <Button
+                  variant="outline"
+                  data-testid="jellyfin-test"
+                  onClick={handleTestJellyfin}
+                  disabled={!jellyfinUrl || !jellyfinApiKey || isPending}
+                  className="w-full sm:w-auto"
+                >
+                  {isPending ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Testing...
+                    </>
+                  ) : (
+                    "Test Connection"
+                  )}
+                </Button>
+
+                <TestResultDisplay result={testResults.jellyfin} />
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setCurrentStep(choice.plex ? "plex-server" : "media-server")}
+                  className="flex-1"
+                >
+                  Back
+                </Button>
+                <Button
+                  data-testid="jellyfin-continue"
+                  onClick={loadJellyfinLibraries}
+                  disabled={!testResults.jellyfin?.success}
+                  className="flex-1"
+                >
+                  Continue
+                </Button>
+              </div>
+            </div>
+          )}
+
           {currentStep === "libraries" && (
             <div className="max-w-2xl mx-auto space-y-4 md:space-y-6">
               <div className="text-center">
@@ -527,7 +755,7 @@ export default function SetupWizard() {
                 </div>
                 <h2 className="text-xl md:text-2xl font-bold mb-2">Select Libraries to Scan</h2>
                 <p className="text-sm md:text-base text-muted-foreground">
-                  Choose which Plex libraries to scan for duplicates
+                  Choose which libraries to scan for duplicates
                 </p>
               </div>
 
@@ -535,64 +763,55 @@ export default function SetupWizard() {
                 <div className="flex flex-col items-center justify-center py-12 space-y-4">
                   <Loader2 className="w-10 h-10 md:w-12 md:h-12 animate-spin text-primary" />
                   <p className="text-base md:text-lg font-medium text-foreground">
-                    Loading your Plex libraries...
+                    Loading your libraries...
                   </p>
                   <p className="text-xs md:text-sm text-muted-foreground">
                     This may take a few moments
                   </p>
                 </div>
-              ) : plexLibraries.length === 0 ? (
+              ) : libraries.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 space-y-4">
                   <AlertCircle className="w-10 h-10 md:w-12 md:h-12 text-destructive" />
                   <p className="text-base md:text-lg font-medium text-foreground">
                     No libraries found
                   </p>
                   <p className="text-xs md:text-sm text-muted-foreground">
-                    Make sure your Plex server has movie or TV show libraries
+                    Make sure your media server has movie or TV show libraries
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2 md:space-y-3">
-                  {plexLibraries
-                    .filter((library) => library.type === "movie" || library.type === "show")
-                    .map((library) => (
-                      <label
-                        key={library.key}
-                        className="flex items-center p-3 md:p-4 border-2 rounded-lg cursor-pointer hover:border-muted-foreground transition-colors"
-                      >
-                        <Checkbox
-                          id={library.key}
-                          checked={selectedLibraries.some((lib) => lib.key === library.key)}
-                          onCheckedChange={(checked) => {
-                            if (checked) {
-                              setSelectedLibraries([
-                                ...selectedLibraries,
-                                { key: library.key, title: library.title },
-                              ]);
-                            } else {
-                              setSelectedLibraries(
-                                selectedLibraries.filter((lib) => lib.key !== library.key)
-                              );
-                            }
-                          }}
-                        />
-                        <div className="ml-3 flex-1">
-                          <span className="font-semibold text-sm md:text-base">
-                            {library.title}
-                          </span>
-                          <span className="text-xs md:text-sm text-muted-foreground ml-2">
-                            ({library.type})
-                          </span>
-                        </div>
-                      </label>
-                    ))}
+                  {scannableLibraries.map((library) => (
+                    <label
+                      key={`${library.server}:${library.key}`}
+                      htmlFor={`library-${library.server}-${library.key}`}
+                      className="flex items-center p-3 md:p-4 border-2 rounded-lg cursor-pointer hover:border-muted-foreground transition-colors"
+                    >
+                      <Checkbox
+                        id={`library-${library.server}-${library.key}`}
+                        checked={isSelected(library.server, library.title)}
+                        onCheckedChange={(checked) =>
+                          toggleLibrary(library.server, library.title, checked === true)
+                        }
+                      />
+                      <div className="ml-3 flex-1">
+                        <span className="font-semibold text-sm md:text-base">{library.title}</span>
+                        <span className="text-xs md:text-sm text-muted-foreground ml-2">
+                          ({library.type})
+                        </span>
+                        <span className="text-xs text-muted-foreground ml-2">
+                          on {MEDIA_SERVER_NAMES[library.server] ?? library.server}
+                        </span>
+                      </div>
+                    </label>
+                  ))}
                 </div>
               )}
 
-              {!isLoadingLibraries && plexLibraries.length > 0 && (
+              {!isLoadingLibraries && libraries.length > 0 && (
                 <Card className="p-3 md:p-4 bg-card border-border">
                   <p className="text-xs md:text-sm text-muted-foreground">
-                    Tip: You can change library selection later in Settings
+                    Tip: You can change this selection on the Scan page
                   </p>
                 </Card>
               )}
@@ -600,7 +819,7 @@ export default function SetupWizard() {
               <div className="flex flex-col sm:flex-row gap-3">
                 <Button
                   variant="outline"
-                  onClick={() => setCurrentStep("plex-server")}
+                  onClick={() => setCurrentStep(choice.jellyfin ? "jellyfin" : "plex-server")}
                   className="flex-1"
                   disabled={isLoadingLibraries}
                 >
@@ -639,16 +858,15 @@ export default function SetupWizard() {
                     <p className="font-semibold mb-1">These services are optional:</p>
                     <ul className="space-y-1 text-muted-foreground">
                       <li>
-                        • <strong>Without these services:</strong> View duplicates and delete
-                        manually
+                        • <strong>Without them:</strong> Deduparr deletes the files itself
                       </li>
                       <li>
-                        • <strong>With qBittorrent:</strong> Automatically remove library items from
-                        qBittorrent
+                        • <strong>With qBittorrent:</strong> a deleted file's torrent is removed
+                        when nothing else needs it
                       </li>
                       <li>
-                        • <strong>With Radarr/Sonarr:</strong> Remove from library to prevent
-                        re-acquisition
+                        • <strong>With Radarr/Sonarr:</strong> files are deleted through them, so
+                        they are not downloaded again
                       </li>
                       <li>• You can configure these later in Settings</li>
                     </ul>
@@ -671,7 +889,10 @@ export default function SetupWizard() {
                       id="radarr-url"
                       type="url"
                       value={radarrUrl}
-                      onChange={(e) => setRadarrUrl(e.target.value)}
+                      onChange={(e) => {
+                        setRadarrUrl(e.target.value);
+                        forgetTest("radarr");
+                      }}
                       placeholder="http://localhost:7878"
                       className="mt-2 text-sm"
                     />
@@ -684,7 +905,10 @@ export default function SetupWizard() {
                       id="radarr-key"
                       type="password"
                       value={radarrApiKey}
-                      onChange={(e) => setRadarrApiKey(e.target.value)}
+                      onChange={(e) => {
+                        setRadarrApiKey(e.target.value);
+                        forgetTest("radarr");
+                      }}
                       placeholder="Enter your Radarr API key"
                       className="mt-2 text-sm"
                     />
@@ -715,7 +939,10 @@ export default function SetupWizard() {
                       id="sonarr-url"
                       type="url"
                       value={sonarrUrl}
-                      onChange={(e) => setSonarrUrl(e.target.value)}
+                      onChange={(e) => {
+                        setSonarrUrl(e.target.value);
+                        forgetTest("sonarr");
+                      }}
                       placeholder="http://localhost:8989"
                       className="mt-2 text-sm"
                     />
@@ -728,7 +955,10 @@ export default function SetupWizard() {
                       id="sonarr-key"
                       type="password"
                       value={sonarrApiKey}
-                      onChange={(e) => setSonarrApiKey(e.target.value)}
+                      onChange={(e) => {
+                        setSonarrApiKey(e.target.value);
+                        forgetTest("sonarr");
+                      }}
                       placeholder="Enter your Sonarr API key"
                       className="mt-2 text-sm"
                     />
@@ -759,7 +989,10 @@ export default function SetupWizard() {
                       id="qbit-url"
                       type="url"
                       value={qbitUrl}
-                      onChange={(e) => setQbitUrl(e.target.value)}
+                      onChange={(e) => {
+                        setQbitUrl(e.target.value);
+                        forgetTest("qbittorrent");
+                      }}
                       placeholder="http://localhost:8080"
                       className="mt-2 text-sm"
                     />
@@ -771,7 +1004,10 @@ export default function SetupWizard() {
                     <Input
                       id="qbit-user"
                       value={qbitUsername}
-                      onChange={(e) => setQbitUsername(e.target.value)}
+                      onChange={(e) => {
+                        setQbitUsername(e.target.value);
+                        forgetTest("qbittorrent");
+                      }}
                       placeholder="admin"
                       className="mt-2 text-sm"
                     />
@@ -784,7 +1020,10 @@ export default function SetupWizard() {
                       id="qbit-pass"
                       type="password"
                       value={qbitPassword}
-                      onChange={(e) => setQbitPassword(e.target.value)}
+                      onChange={(e) => {
+                        setQbitPassword(e.target.value);
+                        forgetTest("qbittorrent");
+                      }}
                       placeholder="Enter your qBittorrent password"
                       className="mt-2 text-sm"
                     />

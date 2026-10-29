@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { configAPI } from "./services/api";
 import { Layout } from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Scan from "./pages/Scan";
@@ -15,18 +16,17 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 function AppRoutes() {
-  // Check if Plex is configured
+  // Deduparr needs a media server, not Plex specifically
   const { data: config } = useQuery({
     queryKey: ["config"],
-    queryFn: async () => {
-      const response = await fetch("/api/config/");
-      if (!response.ok) return null;
-      return response.json();
-    },
+    queryFn: () => configAPI.getAll(),
     retry: false,
   });
 
-  const plexConfigured = !!config?.plex_auth_token;
+  // Mirrors the backend: a server counts as configured once its credentials
+  // are present, so Jellyfin on its own is enough.
+  const mediaServerConfigured =
+    !!config?.plex_auth_token || !!(config?.jellyfin_url && config?.jellyfin_api_key);
 
   return (
     <Routes>
@@ -40,7 +40,7 @@ function AppRoutes() {
       */}
       <Route
         element={
-          !plexConfigured && config !== undefined ? (
+          !mediaServerConfigured && config !== undefined ? (
             <Navigate to="/setup" replace />
           ) : (
             <Layout>

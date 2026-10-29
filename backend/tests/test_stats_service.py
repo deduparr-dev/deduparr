@@ -32,7 +32,7 @@ async def test_get_dashboard_stats_with_duplicates(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate1 = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie 1",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -42,7 +42,7 @@ async def test_get_dashboard_stats_with_duplicates(test_db):
     test_db.add(duplicate1)
 
     duplicate2 = DuplicateSet(
-        plex_item_id="movie2",
+        item_id="movie2",
         title="Test Movie 2",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -52,7 +52,7 @@ async def test_get_dashboard_stats_with_duplicates(test_db):
     test_db.add(duplicate2)
 
     duplicate3 = DuplicateSet(
-        plex_item_id="show1-e1",
+        item_id="show1-e1",
         title="Test Show S01E01",
         media_type=MediaType.EPISODE,
         found_at=now,
@@ -80,7 +80,7 @@ async def test_get_dashboard_stats_with_deletions(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -112,7 +112,7 @@ async def test_get_dashboard_stats_with_deletions(test_db):
         deleted_from_qbit=True,
         deleted_from_arr=True,
         deleted_from_disk=True,
-        plex_refreshed=True,
+        media_server_refreshed=True,
         error=None,
     )
     test_db.add(history1)
@@ -123,7 +123,7 @@ async def test_get_dashboard_stats_with_deletions(test_db):
         deleted_from_qbit=True,
         deleted_from_arr=False,
         deleted_from_disk=False,
-        plex_refreshed=False,
+        media_server_refreshed=False,
         error="Failed to delete from Radarr",
     )
     test_db.add(history2)
@@ -139,13 +139,61 @@ async def test_get_dashboard_stats_with_deletions(test_db):
 
 
 @pytest.mark.asyncio
+async def test_a_deletion_succeeded_once_the_file_is_gone(test_db):
+    """
+    Whatever else a stage reported is a note, as in the deletion's own result.
+
+    Counting only deletions that also went through qBittorrent made every
+    deletion without it a failure, and a failed refresh marked a deleted file
+    Failed on the dashboard.
+    """
+    duplicate = DuplicateSet(
+        item_id="movie1",
+        title="Test Movie",
+        media_type=MediaType.MOVIE,
+        status=DuplicateStatus.PROCESSED,
+    )
+    test_db.add(duplicate)
+    await test_db.flush()
+
+    outcomes = [
+        (True, True, "qBittorrent not configured"),
+        (True, False, "Jellyfin refresh failed: timed out"),
+        (False, False, "Could not delete /media/movie.mkv: Read-only file system"),
+    ]
+    for index, (deleted, refreshed, error) in enumerate(outcomes):
+        file = DuplicateFile(
+            set_id=duplicate.id, file_path=f"/media/{index}.mkv", file_size=1
+        )
+        test_db.add(file)
+        await test_db.flush()
+        test_db.add(
+            DeletionHistory(
+                duplicate_file_id=file.id,
+                deleted_at=datetime.now(timezone.utc) - timedelta(minutes=index),
+                deleted_from_disk=deleted,
+                media_server_refreshed=refreshed,
+                error=error,
+            )
+        )
+    await test_db.commit()
+
+    service = StatsService(test_db)
+    stats = await service.get_dashboard_stats()
+    deletions = await service.get_recent_deletions()
+
+    assert (stats.successful_deletions, stats.failed_deletions) == (2, 1)
+    assert [deletion.is_complete for deletion in deletions] == [True, True, False]
+
+
+@pytest.mark.asyncio
 async def test_get_recent_activity(test_db):
     """Test getting recent duplicate activity"""
     now = datetime.now(timezone.utc)
 
     for i in range(15):
         duplicate = DuplicateSet(
-            plex_item_id=f"item{i}",
+            item_id=f"item{i}",
             title=f"Test Item {i}",
             media_type=MediaType.MOVIE if i % 2 == 0 else MediaType.EPISODE,
             found_at=now - timedelta(minutes=i),
@@ -181,7 +229,7 @@ async def test_get_recent_deletions(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -207,7 +255,7 @@ async def test_get_recent_deletions(test_db):
             deleted_from_qbit=True,
             deleted_from_arr=True,
             deleted_from_disk=i % 2 == 0,
-            plex_refreshed=i % 2 == 0,
+            media_server_refreshed=i % 2 == 0,
             error="Test error" if i % 3 == 0 else None,
         )
         test_db.add(history)
@@ -219,8 +267,8 @@ async def test_get_recent_deletions(test_db):
 
     assert len(deletions) == 10
     assert deletions[0].file_path == "/media/file0.mkv"
-    assert deletions[0].is_complete is False  # has error
-    assert deletions[1].is_complete is False  # missing plex_refreshed
+    assert deletions[0].is_complete is True  # deleted, its error a note
+    assert deletions[1].is_complete is False  # still on disk
     assert deletions[1].error is None
 
 
@@ -241,7 +289,7 @@ async def test_count_by_status(test_db):
     for status in DuplicateStatus:
         for i in range(2 if status == DuplicateStatus.PENDING else 1):
             duplicate = DuplicateSet(
-                plex_item_id=f"{status.value}_{i}",
+                item_id=f"{status.value}_{i}",
                 title=f"Test {status.value} {i}",
                 media_type=MediaType.MOVIE,
                 found_at=now,
@@ -266,7 +314,7 @@ async def test_sum_space_to_reclaim(test_db):
     now = datetime.now(timezone.utc)
 
     duplicate1 = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Pending Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -276,7 +324,7 @@ async def test_sum_space_to_reclaim(test_db):
     test_db.add(duplicate1)
 
     duplicate2 = DuplicateSet(
-        plex_item_id="movie2",
+        item_id="movie2",
         title="Approved Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -286,7 +334,7 @@ async def test_sum_space_to_reclaim(test_db):
     test_db.add(duplicate2)
 
     duplicate3 = DuplicateSet(
-        plex_item_id="movie3",
+        item_id="movie3",
         title="Processed Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -311,7 +359,7 @@ async def test_timezone_aware_timestamp_serialization(test_db):
 
     # Create a duplicate set with timezone-aware timestamp
     duplicate = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -351,7 +399,7 @@ async def test_deletion_timezone_aware_timestamp_serialization(test_db):
 
     # Create a duplicate set and file with deletion history
     duplicate = DuplicateSet(
-        plex_item_id="movie1",
+        item_id="movie1",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         found_at=now,
@@ -376,7 +424,7 @@ async def test_deletion_timezone_aware_timestamp_serialization(test_db):
         deleted_from_qbit=True,
         deleted_from_arr=True,
         deleted_from_disk=True,
-        plex_refreshed=True,
+        media_server_refreshed=True,
     )
     test_db.add(deletion)
     await test_db.commit()

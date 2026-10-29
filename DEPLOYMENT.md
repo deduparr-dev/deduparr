@@ -96,7 +96,7 @@ Deduparr provides multiple Docker image tags for different deployment scenarios:
 |-----|-------------|----------|---------|
 | `latest` | Latest stable release | **Production** (recommended) | Only on version tag releases (v0.1.2, etc.) |
 | `0.1.2`, `0.1` | Specific versions (semver) | Production (pinned) | Never (immutable) |
-| `dev` | Development branch | Testing latest features | Nightly builds (midnight UTC) |
+| `dev` | Development branch | Testing latest features | Every push to `develop`, and nightly (midnight UTC) |
 | `sha-<commit>` | Specific commit SHA from `develop` | Testing/debugging dev builds | Never (immutable) |
 
 **Recommendations:**
@@ -187,9 +187,9 @@ labels:
 4. **Fallback Disk Cleanup** - Requires `:rw` for:
    - Manually added files (not in *arr)
    - Associated files (`.srt`, `.nfo`, fanart)
-   - Subdirectories (`Sample/`, `Subs/`, `Proof/`, `Extras/`)
-   - Empty directories
-5. **Plex Refresh** - Updates Plex library
+   - Subdirectories (`Sample/`, `Subs/`, `Proof/`, `Extras/`) once no other video shares the folder
+   - Empty directories, up to (never including) the library folder
+5. **Media Server Refresh** - Updates Plex or Jellyfin
 
 **Note:** Stage 4 only runs as fallback for files missed by API deletion. All deletions require manual approval (dry-run by default).
 

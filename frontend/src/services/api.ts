@@ -37,9 +37,12 @@ export interface DeletionActivity {
   error: string | null;
 }
 
+/** Library titles to scan, per media server ("plex", "jellyfin") */
+export type LibrarySelection = Record<string, string[]>;
+
 export interface ScanRequest {
-  library_names: string[];
-  // media_types removed - auto-detected from library type
+  /** Becomes each server's stored selection; left out, the stored one is scanned */
+  libraries?: LibrarySelection;
 }
 
 export interface ScanResponse {
@@ -47,7 +50,8 @@ export interface ScanResponse {
   message: string;
   duplicates_found: number;
   sets_created: number;
-  sets_already_exist: number;
+  sets_updated: number;
+  sets_removed: number;
   total_sets: number;
 }
 
@@ -62,7 +66,9 @@ export interface DuplicateFile {
 
 export interface DuplicateSet {
   id: number;
-  plex_item_id: string;
+  /** Which media server reported this set: "plex", "jellyfin" or "disk" */
+  media_server: string;
+  item_id: string;
   title: string;
   media_type: string;
   found_at: string;
@@ -88,6 +94,35 @@ export interface DeleteResponse {
   files_deleted: number;
   space_reclaimed: number;
   errors: string[];
+}
+
+export interface DeleteAllResponse {
+  success: boolean;
+  message: string;
+  dry_run: boolean;
+  sets_processed: number;
+  files_deleted: number;
+  errors: string[];
+}
+
+export interface MediaLibrary {
+  key: string;
+  title: string;
+  type: string;
+  count: number;
+  /** Which media server reported this library: "plex" or "jellyfin" */
+  server: string;
+}
+
+/** How each media server is named on screen */
+export const MEDIA_SERVER_NAMES: Record<string, string> = {
+  plex: "Plex",
+  jellyfin: "Jellyfin",
+};
+
+export interface JellyfinConfig {
+  url: string;
+  api_key: string;
 }
 
 export interface PlexLibrary {
@@ -161,10 +196,11 @@ export interface LogsResponse {
   limit: number;
 }
 
-export interface PlexConfig {
+export interface AppConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
   plex_libraries?: string;
+  jellyfin_libraries?: string;
   radarr_url?: string;
   radarr_api_key?: string;
   sonarr_url?: string;
@@ -174,6 +210,8 @@ export interface PlexConfig {
   qbittorrent_password?: string;
   enable_deep_scan?: string; // "true" or "false" string from backend
   prefer_arr_quality_profile?: string; // "true" or "false" string from backend
+  jellyfin_url?: string;
+  jellyfin_api_key?: string;
   email_notifications_enabled?: string; // "true" or "false" string from backend
   notification_email?: string;
   smtp_host?: string;
@@ -181,14 +219,6 @@ export interface PlexConfig {
   smtp_user?: string;
   smtp_password?: string;
   smtp_from_email?: string;
-}
-
-export interface SetupStatus {
-  plex_configured: boolean;
-  radarr_configured: boolean;
-  sonarr_configured: boolean;
-  qbittorrent_configured: boolean;
-  is_complete: boolean;
 }
 
 export interface PlexAuthResponse {
@@ -203,12 +233,61 @@ export interface PlexAuthCheckResponse {
 
 export interface ServiceTestResponse {
   success: boolean;
-  message: string;
+  /** Present on failure; the backend also fills `message` for some tests */
+  error?: string;
+  message?: string;
+  server_name?: string;
+  version?: string;
+  platform?: string;
+  available_servers?: string[];
+}
+
+/** A connection test's outcome, as the UI shows it */
+export interface ConnectionTestResult {
+  success: boolean;
+  error?: string;
+  server_name?: string;
+  version?: string;
+}
+
+/** Run a connection test, keeping whatever reason the API gave for a failure. */
+export async function runConnectionTest(
+  test: () => Promise<ServiceTestResponse>
+): Promise<ConnectionTestResult> {
+  try {
+    const response = await test();
+    return response.success
+      ? { success: true, server_name: response.server_name, version: response.version }
+      : { success: false, error: response.error ?? response.message ?? "Connection failed" };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Connection failed" };
+  }
 }
 
 export interface ServiceConfig {
   url: string;
   api_key: string;
+}
+
+export interface EmailTestConfig {
+  smtp_host: string;
+  smtp_port: number;
+  smtp_user: string;
+  smtp_password: string;
+  notification_email: string;
+}
+
+export interface PlexServer {
+  name: string;
+  client_identifier: string;
+  product: string;
+  platform: string;
+  owned: boolean;
+}
+
+interface SaveResponse {
+  status: string;
+  message: string;
 }
 
 export interface QBittorrentConfig {
@@ -217,11 +296,23 @@ export interface QBittorrentConfig {
   password: string;
 }
 
+/** Why a request failed: the API's own explanation when it sent one. */
+async function requestError(response: Response): Promise<Error> {
+  const text = await response.text();
+  try {
+    const { detail } = JSON.parse(text) as { detail?: unknown };
+    if (typeof detail === "string") return new Error(detail);
+  } catch {
+    // Not JSON, so the text itself is the explanation
+  }
+  return new Error(text || response.statusText || `Request failed (${response.status})`);
+}
+
 async function fetchAPI<T>(endpoint: string): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${endpoint}`);
 
   if (!response.ok) {
-    throw new Error(`API request failed: ${response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -237,8 +328,7 @@ async function postAPI<T, U>(endpoint: string, data: U): Promise<T> {
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API request failed: ${error || response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -254,8 +344,7 @@ async function putAPI<T, U>(endpoint: string, data: U): Promise<T> {
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API request failed: ${error || response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -271,8 +360,7 @@ async function patchAPI<T, U>(endpoint: string, data: U): Promise<T> {
   });
 
   if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`API request failed: ${error || response.statusText}`);
+    throw await requestError(response);
   }
 
   return response.json() as Promise<T>;
@@ -318,6 +406,10 @@ export const scanAPI = {
     postAPI<DeleteResponse, DeleteRequest>(`/api/scan/duplicates/${setId}/delete`, {
       dry_run: dryRun,
     }),
+  deleteAllDuplicateSets: (dryRun: boolean) =>
+    postAPI<DeleteAllResponse, DeleteRequest>("/api/scan/duplicates/delete-all", {
+      dry_run: dryRun,
+    }),
   updateFileKeep: (setId: number, fileId: number, keep: boolean) =>
     patchAPI<UpdateFileKeepResponse, { keep: boolean }>(
       `/api/scan/duplicates/${setId}/files/${fileId}`,
@@ -342,9 +434,7 @@ export interface SchedulerConfig {
 }
 
 export const configAPI = {
-  getAll: () => fetchAPI<PlexConfig>("/api/config/"),
-  // Use GET endpoint that reads credentials from DB
-  getPlexLibraries: () => fetchAPI<PlexLibrary[]>("/api/setup/plex/libraries"),
+  getAll: () => fetchAPI<AppConfig>("/api/config/"),
 
   // Deep scan configuration
   getDeepScanSetting: () => fetchAPI<DeepScanSetting>("/api/config/deep-scan"),
@@ -369,32 +459,44 @@ export const configAPI = {
 };
 
 export const setupAPI = {
-  getStatus: () => fetchAPI<SetupStatus>("/api/setup/status"),
-
   // Plex OAuth
   initiatePlexAuth: () => fetchAPI<PlexAuthResponse>("/api/setup/plex/auth/initiate"),
   checkPlexAuth: (pinId: string) =>
     fetchAPI<PlexAuthCheckResponse>(`/api/setup/plex/auth/check/${pinId}`),
 
+  getPlexServers: (authToken: string) =>
+    postAPI<{ servers: PlexServer[] }, { auth_token: string }>("/api/setup/plex/servers", {
+      auth_token: authToken,
+    }),
+
   // Service testing
-  testPlex: () => fetchAPI<ServiceTestResponse>("/api/setup/test/plex"),
+  testPlex: (authToken: string, serverName: string) =>
+    postAPI<ServiceTestResponse, { auth_token: string; server_name: string }>(
+      "/api/setup/test/plex",
+      { auth_token: authToken, server_name: serverName }
+    ),
+  testJellyfin: (config: JellyfinConfig) =>
+    postAPI<ServiceTestResponse, JellyfinConfig>("/api/setup/test/jellyfin", config),
+  // Libraries from every configured media server, each tagged with its origin
+  getMediaLibraries: () => fetchAPI<MediaLibrary[]>("/api/setup/libraries"),
+  // During setup the credentials are not stored yet, so they are passed in
+  getJellyfinLibraries: (config: JellyfinConfig) =>
+    postAPI<MediaLibrary[], JellyfinConfig>("/api/setup/jellyfin/libraries", config),
   testRadarr: (config: ServiceConfig) =>
     postAPI<ServiceTestResponse, ServiceConfig>("/api/setup/test/radarr", config),
   testSonarr: (config: ServiceConfig) =>
     postAPI<ServiceTestResponse, ServiceConfig>("/api/setup/test/sonarr", config),
   testQBittorrent: (config: QBittorrentConfig) =>
     postAPI<ServiceTestResponse, QBittorrentConfig>("/api/setup/test/qbittorrent", config),
+  testEmail: (config: EmailTestConfig) =>
+    postAPI<ServiceTestResponse, EmailTestConfig>("/api/setup/test/email", config),
 
-  // Service configuration
-  configureRadarr: (config: ServiceConfig) =>
-    putAPI<ServiceTestResponse, ServiceConfig>("/api/setup/configure/radarr", config),
-  configureSonarr: (config: ServiceConfig) =>
-    putAPI<ServiceTestResponse, ServiceConfig>("/api/setup/configure/sonarr", config),
-  configureQBittorrent: (config: QBittorrentConfig) =>
-    putAPI<ServiceTestResponse, QBittorrentConfig>("/api/setup/configure/qbittorrent", config),
+  // Keys left out keep their stored values; secrets are encrypted on save
+  saveConfig: (config: Record<string, string>) =>
+    postAPI<SaveResponse, { config: Record<string, string> }>("/api/setup/save", { config }),
+  completeSetup: () => postAPI<SaveResponse, Record<string, never>>("/api/setup/complete", {}),
 
   // Plex libraries
-  getPlexLibraries: () => fetchAPI<PlexLibrary[]>("/api/setup/plex/libraries"),
   getPlexLibrariesWithAuth: (authToken: string, serverName: string) =>
     postAPI<PlexLibrary[], { auth_token: string; server_name: string }>(
       "/api/setup/plex/libraries",

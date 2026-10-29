@@ -4,56 +4,52 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Film,
-  Tv,
-  Download,
-  Check,
-  X,
-  Loader2,
-  Settings as SettingsIcon,
   AlertCircle,
+  Check,
+  Download,
+  Film,
+  Loader2,
   Mail,
+  Server,
+  Settings as SettingsIcon,
+  Tv,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { configAPI } from "@/services/api";
+import {
+  configAPI,
+  runConnectionTest,
+  setupAPI,
+  type ConnectionTestResult,
+  type PlexServer,
+  type ServiceConfig,
+  type ServiceTestResponse,
+} from "@/services/api";
 import { toast } from "@/components/ui/use-toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-
-interface PlexServer {
-  name: string;
-  client_identifier: string;
-  product: string;
-  platform: string;
-  owned: boolean;
-}
 
 const tabs = [
   { id: "general", name: "General", icon: SettingsIcon },
   { id: "plex", name: "Plex", icon: Film },
+  { id: "jellyfin", name: "Jellyfin", icon: Server },
   { id: "radarr", name: "Radarr", icon: Film },
   { id: "sonarr", name: "Sonarr", icon: Tv },
   { id: "qbittorrent", name: "qBittorrent", icon: Download },
 ];
 
-interface TestResult {
-  success: boolean;
-  loading?: boolean;
-  error?: string;
-  version?: string;
-  server_name?: string;
+type RecordTest = (service: string, result: ConnectionTestResult) => void;
+
+/** A Test button's pending state, and how to run its test. */
+function useConnectionTest(service: string, recordTest: RecordTest) {
+  const [isTesting, startTest] = useTransition();
+  function run(test: () => Promise<ServiceTestResponse>) {
+    startTest(async () => recordTest(service, await runConnectionTest(test)));
+  }
+  return [isTesting, run] as const;
 }
 
-function TestResultBadge({
-  service,
-  testResults,
-}: {
-  service: string;
-  testResults: Record<string, TestResult>;
-}) {
-  const result = testResults[service];
-  if (!result) return null;
-
-  if (result.loading) {
+function TestResultBadge({ result, testing }: { result?: ConnectionTestResult; testing: boolean }) {
+  if (testing) {
     return (
       <div className="mt-4 p-4 rounded-lg bg-card border border-border">
         <div className="flex items-center gap-2 text-sm">
@@ -64,6 +60,7 @@ function TestResultBadge({
       </div>
     );
   }
+  if (!result) return null;
 
   return (
     <div
@@ -123,8 +120,8 @@ function GeneralSettings({
   setScanIntervalHours,
   scheduledDeletionEnabled,
   setScheduledDeletionEnabled,
-  testResults,
-  setTestResults,
+  emailResult,
+  recordTest,
 }: {
   deepScanEnabled: boolean;
   setDeepScanEnabled: (value: boolean) => void;
@@ -152,9 +149,11 @@ function GeneralSettings({
   setScanIntervalHours: (value: number) => void;
   scheduledDeletionEnabled: boolean;
   setScheduledDeletionEnabled: (value: boolean) => void;
-  testResults: Record<string, TestResult>;
-  setTestResults: React.Dispatch<React.SetStateAction<Record<string, TestResult>>>;
+  emailResult?: ConnectionTestResult;
+  recordTest: RecordTest;
 }) {
+  const [isTesting, runTest] = useConnectionTest("email", recordTest);
+
   return (
     <div className="space-y-6">
       <div>
@@ -322,9 +321,9 @@ function GeneralSettings({
                 </p>
               </div>
 
-              {testResults.email && !testResults.email.loading && (
+              {emailResult && !isTesting && (
                 <div className="flex items-center gap-2 text-sm mt-3">
-                  {testResults.email.success ? (
+                  {emailResult.success ? (
                     <>
                       <Check className="w-4 h-4 text-primary" />
                       <span className="text-foreground">Test email sent successfully</span>
@@ -333,7 +332,7 @@ function GeneralSettings({
                     <>
                       <X className="w-4 h-4 text-destructive" />
                       <span className="text-destructive">
-                        {testResults.email.error || "Connection failed"}
+                        {emailResult.error || "Connection failed"}
                       </span>
                     </>
                   )}
@@ -342,50 +341,28 @@ function GeneralSettings({
 
               <div className="flex items-center gap-3 pt-2">
                 <Button
-                  onClick={async () => {
-                    setTestResults((prev) => ({
-                      ...prev,
-                      email: { success: false, loading: true },
-                    }));
-                    try {
-                      const response = await fetch("/api/setup/test/email", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          smtp_host: smtpHost,
-                          smtp_port: smtpPort,
-                          smtp_user: smtpUser,
-                          smtp_password: smtpPassword,
-                          notification_email: notificationEmail,
-                        }),
-                      });
-
-                      const result = await response.json();
-                      setTestResults((prev) => ({
-                        ...prev,
-                        email: {
-                          success: result.success,
-                          error: result.success ? undefined : result.error,
-                        },
-                      }));
-                    } catch (error) {
-                      setTestResults((prev) => ({
-                        ...prev,
-                        email: {
-                          success: false,
-                          error: error instanceof Error ? error.message : "Connection failed",
-                        },
-                      }));
-                    }
-                  }}
+                  onClick={() =>
+                    runTest(() =>
+                      setupAPI.testEmail({
+                        smtp_host: smtpHost,
+                        smtp_port: Number(smtpPort),
+                        smtp_user: smtpUser,
+                        smtp_password: smtpPassword,
+                        notification_email: notificationEmail,
+                      })
+                    )
+                  }
                   disabled={
-                    !smtpHost || !smtpPort || !smtpUser || !smtpPassword || !notificationEmail
+                    isTesting ||
+                    !smtpHost ||
+                    !smtpPort ||
+                    !smtpUser ||
+                    !smtpPassword ||
+                    !notificationEmail
                   }
                   className="flex-shrink-0"
                 >
-                  {testResults.email?.loading ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : null}
+                  {isTesting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
                   Test Email
                 </Button>
               </div>
@@ -513,36 +490,29 @@ interface PlexSettingsProps {
   initialConfig: Awaited<ReturnType<typeof configAPI.getAll>>;
   selectedServer: string;
   setSelectedServer: (value: string) => void;
-  setTestResults: React.Dispatch<React.SetStateAction<Record<string, TestResult>>>;
-  testResults: Record<string, TestResult>;
+  result?: ConnectionTestResult;
+  recordTest: RecordTest;
 }
 
 function PlexSettings({
   initialConfig,
   selectedServer,
   setSelectedServer,
-  setTestResults,
-  testResults,
+  result,
+  recordTest,
 }: PlexSettingsProps) {
   const authenticated = !!initialConfig.plex_auth_token;
   const encryptedToken = initialConfig.plex_auth_token || "";
+  const [isTesting, runTest] = useConnectionTest("plex", recordTest);
 
   const { data: serversData } = useQuery({
     queryKey: ["plexServers", encryptedToken],
-    queryFn: async () => {
-      if (!encryptedToken) return { servers: [] };
-      const response = await fetch(`/api/setup/plex/servers`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ auth_token: encryptedToken }),
-      });
-      return response.json();
-    },
+    queryFn: () => setupAPI.getPlexServers(encryptedToken),
     enabled: !!encryptedToken,
     staleTime: 5 * 60 * 1000,
   });
 
-  const servers: PlexServer[] = serversData?.servers || [];
+  const servers: PlexServer[] = serversData?.servers ?? [];
 
   return (
     <div className="space-y-6">
@@ -599,40 +569,8 @@ function PlexSettings({
 
           {selectedServer && (
             <Button
-              onClick={async () => {
-                setTestResults((prev) => ({
-                  ...prev,
-                  plex: { success: false, loading: true },
-                }));
-                try {
-                  const response = await fetch("/api/setup/test/plex", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      auth_token: encryptedToken,
-                      server_name: selectedServer,
-                    }),
-                  });
-                  const result = await response.json();
-                  setTestResults((prev) => ({
-                    ...prev,
-                    plex: {
-                      success: result.success,
-                      server_name: result.server_name,
-                      version: result.version,
-                      error: result.success ? undefined : result.message,
-                    },
-                  }));
-                } catch {
-                  setTestResults((prev) => ({
-                    ...prev,
-                    plex: {
-                      success: false,
-                      error: "Connection failed",
-                    },
-                  }));
-                }
-              }}
+              onClick={() => runTest(() => setupAPI.testPlex(encryptedToken, selectedServer))}
+              disabled={isTesting}
             >
               Test Connection
             </Button>
@@ -640,10 +578,25 @@ function PlexSettings({
         </>
       )}
 
-      <TestResultBadge service="plex" testResults={testResults} />
+      <TestResultBadge result={result} testing={isTesting} />
     </div>
   );
 }
+
+// The connection test of each service that signs in with a URL and API key
+const SERVICE_TESTS: Record<string, (config: ServiceConfig) => Promise<ServiceTestResponse>> = {
+  jellyfin: setupAPI.testJellyfin,
+  radarr: setupAPI.testRadarr,
+  sonarr: setupAPI.testSonarr,
+};
+
+// The port each service listens on out of the box, for the URL placeholder
+const DEFAULT_PORTS: Record<string, number> = {
+  jellyfin: 8096,
+  radarr: 7878,
+  sonarr: 8989,
+  qbittorrent: 8080,
+};
 
 interface ServiceSettingsProps {
   service: string;
@@ -655,8 +608,10 @@ interface ServiceSettingsProps {
   setUsername?: (value: string) => void;
   password?: string;
   setPassword?: (value: string) => void;
-  setTestResults: React.Dispatch<React.SetStateAction<Record<string, TestResult>>>;
-  testResults: Record<string, TestResult>;
+  /** A key saved but kept out of the field; a blank field tests with it */
+  storedApiKey?: string;
+  result?: ConnectionTestResult;
+  recordTest: RecordTest;
 }
 
 function ServiceSettings({
@@ -669,10 +624,20 @@ function ServiceSettings({
   setUsername,
   password,
   setPassword,
-  setTestResults,
-  testResults,
+  storedApiKey,
+  result,
+  recordTest,
 }: ServiceSettingsProps) {
   const isQBittorrent = service === "qbittorrent";
+  const [isTesting, runTest] = useConnectionTest(service, recordTest);
+
+  function testConnection() {
+    runTest(() =>
+      isQBittorrent
+        ? setupAPI.testQBittorrent({ url, username: username ?? "", password: password ?? "" })
+        : SERVICE_TESTS[service]({ url, api_key: apiKey || storedApiKey || "" })
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -686,11 +651,7 @@ function ServiceSettings({
         <Input
           id="url"
           type="url"
-          placeholder={
-            isQBittorrent
-              ? "http://localhost:8080"
-              : `http://localhost:${service === "radarr" ? "7878" : "8989"}`
-          }
+          placeholder={`http://localhost:${DEFAULT_PORTS[service] ?? 8080}`}
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           className="mt-2"
@@ -729,7 +690,7 @@ function ServiceSettings({
           <Input
             id="api-key"
             type="password"
-            placeholder="API Key"
+            placeholder={storedApiKey ? "Saved - type a new key to replace it" : "API Key"}
             value={apiKey || ""}
             onChange={(e) => setApiKey?.(e.target.value)}
             className="mt-2"
@@ -737,56 +698,18 @@ function ServiceSettings({
         </div>
       )}
 
-      <Button
-        onClick={async () => {
-          setTestResults((prev) => ({
-            ...prev,
-            [service]: { success: false, loading: true },
-          }));
-
-          try {
-            const endpoint = isQBittorrent
-              ? "/api/setup/test/qbittorrent"
-              : `/api/setup/test/${service}`;
-            const response = await fetch(endpoint, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(
-                isQBittorrent ? { url, username, password } : { url, api_key: apiKey }
-              ),
-            });
-
-            const result = await response.json();
-            setTestResults((prev) => ({
-              ...prev,
-              [service]: {
-                success: result.success,
-                version: result.version,
-                error: result.success ? undefined : result.message,
-              },
-            }));
-          } catch (error) {
-            setTestResults((prev) => ({
-              ...prev,
-              [service]: {
-                success: false,
-                error: error instanceof Error ? error.message : "Connection failed",
-              },
-            }));
-          }
-        }}
-      >
+      <Button onClick={testConnection} disabled={isTesting}>
         Test Connection
       </Button>
 
-      <TestResultBadge service={service} testResults={testResults} />
+      <TestResultBadge result={result} testing={isTesting} />
     </div>
   );
 }
 
 export default function Settings() {
   const { data: plexConfig, isPending: plexPending } = useQuery({
-    queryKey: ["plexConfig"],
+    queryKey: ["config"],
     queryFn: () => configAPI.getAll(),
     staleTime: 10 * 60 * 1000,
   });
@@ -828,7 +751,14 @@ function SettingsContent({
   const queryClient = useQueryClient();
   const [isPending, startTransition] = useTransition();
   const [activeTab, setActiveTab] = useState("general");
-  const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
+  const [jellyfinUrl, setJellyfinUrl] = useState(initialConfig.jellyfin_url || "");
+  // The stored key is encrypted, so it is not a value to put in a field
+  const [jellyfinApiKey, setJellyfinApiKey] = useState("");
+  const [testResults, setTestResults] = useState<Record<string, ConnectionTestResult>>({});
+
+  function recordTest(service: string, result: ConnectionTestResult) {
+    setTestResults((prev) => ({ ...prev, [service]: result }));
+  }
 
   const [deepScanEnabled, setDeepScanEnabled] = useState(initialConfig.enable_deep_scan === "true");
   const [preferArrQualityProfile, setPreferArrQualityProfile] = useState(
@@ -876,11 +806,20 @@ function SettingsContent({
         await configAPI.updateArrQualityProfileSetting(preferArrQualityProfile);
 
         // Build config object, only including non-empty values
+        // Library selections are made on the Scan page, so they are left out
+        // rather than written back from what was loaded here
         const config: Record<string, string> = {
           plex_auth_token: initialConfig.plex_auth_token || "",
           plex_server_name: selectedServer,
-          plex_libraries: initialConfig.plex_libraries || "",
         };
+
+        if (jellyfinUrl) {
+          config.jellyfin_url = jellyfinUrl;
+        }
+        // Blank means "leave the saved key alone", not "clear it"
+        if (jellyfinApiKey) {
+          config.jellyfin_api_key = jellyfinApiKey;
+        }
 
         // Add email notification settings
         if (emailNotificationsEnabled) {
@@ -909,19 +848,10 @@ function SettingsContent({
           config.qbittorrent_password = qbitPassword;
         }
 
-        const response = await fetch("/api/setup/save", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config }),
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.detail || "Failed to save configuration");
-        }
+        await setupAPI.saveConfig(config);
 
         // Invalidate caches to refetch fresh data from backend
-        queryClient.invalidateQueries({ queryKey: ["plexConfig"] });
+        queryClient.invalidateQueries({ queryKey: ["config"] });
         queryClient.invalidateQueries({ queryKey: ["config", "deep-scan"] });
 
         // Save scheduler configuration
@@ -957,6 +887,8 @@ function SettingsContent({
     // Reset all state to initial values
     setDeepScanEnabled(initialConfig.enable_deep_scan === "true");
     setPreferArrQualityProfile(initialConfig.prefer_arr_quality_profile === "true");
+    setJellyfinUrl(initialConfig.jellyfin_url || "");
+    setJellyfinApiKey("");
     setEmailNotificationsEnabled(initialConfig.email_notifications_enabled === "true");
     setNotificationEmail(initialConfig.notification_email || "");
     setSmtpHost(initialConfig.smtp_host || "");
@@ -1047,8 +979,8 @@ function SettingsContent({
               setScanIntervalHours={setScanIntervalHours}
               scheduledDeletionEnabled={scheduledDeletionEnabled}
               setScheduledDeletionEnabled={setScheduledDeletionEnabled}
-              testResults={testResults}
-              setTestResults={setTestResults}
+              emailResult={testResults.email}
+              recordTest={recordTest}
             />
           )}
           {activeTab === "plex" && (
@@ -1056,8 +988,20 @@ function SettingsContent({
               initialConfig={initialConfig}
               selectedServer={selectedServer}
               setSelectedServer={setSelectedServer}
-              setTestResults={setTestResults}
-              testResults={testResults}
+              result={testResults.plex}
+              recordTest={recordTest}
+            />
+          )}
+          {activeTab === "jellyfin" && (
+            <ServiceSettings
+              service="jellyfin"
+              url={jellyfinUrl}
+              setUrl={setJellyfinUrl}
+              apiKey={jellyfinApiKey}
+              setApiKey={setJellyfinApiKey}
+              storedApiKey={initialConfig.jellyfin_api_key}
+              result={testResults.jellyfin}
+              recordTest={recordTest}
             />
           )}
           {activeTab === "radarr" && (
@@ -1067,8 +1011,8 @@ function SettingsContent({
               setUrl={setRadarrUrl}
               apiKey={radarrApiKey}
               setApiKey={setRadarrApiKey}
-              setTestResults={setTestResults}
-              testResults={testResults}
+              result={testResults.radarr}
+              recordTest={recordTest}
             />
           )}
           {activeTab === "sonarr" && (
@@ -1078,8 +1022,8 @@ function SettingsContent({
               setUrl={setSonarrUrl}
               apiKey={sonarrApiKey}
               setApiKey={setSonarrApiKey}
-              setTestResults={setTestResults}
-              testResults={testResults}
+              result={testResults.sonarr}
+              recordTest={recordTest}
             />
           )}
           {activeTab === "qbittorrent" && (
@@ -1091,8 +1035,8 @@ function SettingsContent({
               setUsername={setQbitUsername}
               password={qbitPassword}
               setPassword={setQbitPassword}
-              setTestResults={setTestResults}
-              testResults={testResults}
+              result={testResults.qbittorrent}
+              recordTest={recordTest}
             />
           )}
         </div>

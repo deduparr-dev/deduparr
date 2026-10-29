@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.models import DuplicateSet, DuplicateStatus
-from app.services.deletion_pipeline import DeletionPipeline
+from app.services.deletion.pipeline import DeletionPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,6 @@ class ScheduledDeletionService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.deletion_pipeline = DeletionPipeline(db)
 
     async def run_scheduled_deletion(
         self,
@@ -62,57 +61,32 @@ class ScheduledDeletionService:
 
         logger.info(f"Found {len(pending_sets)} pending sets to delete")
 
+        pipeline = DeletionPipeline(self.db, dry_run=dry_run)
+
         sets_processed = 0
         files_deleted = 0
         errors = []
 
         for duplicate_set in pending_sets:
-            try:
-                set_errors: list[str] = []
-                # Get files marked for deletion (keep=False means delete)
-                files_to_delete = [f for f in duplicate_set.files if not f.keep]
-
-                if not files_to_delete:
-                    logger.warning(
-                        f"Set {duplicate_set.id} ({duplicate_set.title}) "
-                        "has no files marked for deletion - skipping"
-                    )
-                    continue
-
-                logger.info(
-                    f"Deleting {len(files_to_delete)} files from set {duplicate_set.id} "
-                    f"({duplicate_set.title})"
+            if all(f.keep for f in duplicate_set.files):
+                logger.warning(
+                    f"Set {duplicate_set.id} ({duplicate_set.title}) "
+                    "has no files marked for deletion - skipping"
                 )
+                continue
 
-                if dry_run:
-                    # Simulate deletion
-                    logger.info(
-                        f"[DRY RUN] Would delete: {[f.file_path for f in files_to_delete]}"
-                    )
-                    files_deleted += len(files_to_delete)
-                    sets_processed += 1
-                else:
-                    # Actually delete files
-                    for file in files_to_delete:
-                        try:
-                            await self.deletion_pipeline.delete_file(file.id)
-                            files_deleted += 1
-                        except Exception as e:
-                            error_msg = f"Failed to delete {file.file_path}: {str(e)}"
-                            logger.error(error_msg)
-                            set_errors.append(error_msg)
-
-                    # Mark set as processed if all deletions completed
-                    if not set_errors:
-                        duplicate_set.status = DuplicateStatus.PROCESSED
-                        sets_processed += 1
-                    else:
-                        errors.extend(set_errors)
-
+            try:
+                outcome = await pipeline.delete_set(duplicate_set)
             except Exception as e:
                 error_msg = f"Error processing set {duplicate_set.id}: {str(e)}"
                 logger.error(error_msg, exc_info=True)
                 errors.append(error_msg)
+                continue
+
+            files_deleted += outcome.files_deleted
+            errors.extend(outcome.errors)
+            if not outcome.errors:
+                sets_processed += 1
 
         # Commit changes
         if not dry_run:
@@ -142,7 +116,7 @@ class ScheduledDeletionService:
 
     async def _send_deletion_email(self, summary: dict) -> None:
         """Send email summary of scheduled deletion"""
-        from app.services.email_helpers import get_email_service_from_config
+        from app.services.notifications.helpers import get_email_service_from_config
 
         # Get configured email service
         email_service, to_email, error = await get_email_service_from_config(self.db)

@@ -11,12 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.services.setup_service import SetupService
-from app.services.plex_service import PlexAuthService
+from app.services.media_server.plex_service import PlexAuthService
 
-# Import token manager at module level so tests can patch it via
-# "app.api.routes.setup.get_token_manager". The actual decryption is used
-# only inside the endpoint.
-from app.services.security import get_token_manager
+from app.services.shared.security import decrypt_if_encrypted
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,6 +24,13 @@ class PlexConnectionTest(BaseModel):
 
     auth_token: str
     server_name: str
+
+
+class JellyfinConnectionTest(BaseModel):
+    """Request model for testing Jellyfin connection"""
+
+    url: str
+    api_key: str
 
 
 class RadarrConnectionTest(BaseModel):
@@ -94,6 +98,16 @@ class ConnectionTestResponse(BaseModel):
     available_servers: Optional[List[str]] = None
     # Optional free-form message returned by some test endpoints
     message: Optional[str] = None
+
+
+class MediaLibraryResponse(BaseModel):
+    """One library, and which media server reported it"""
+
+    key: str
+    title: str
+    type: str
+    count: int = 0
+    server: str
 
 
 class PlexLibraryResponse(BaseModel):
@@ -195,6 +209,52 @@ async def test_plex_connection(
     return result
 
 
+@router.post("/test/jellyfin", response_model=ConnectionTestResponse)
+async def test_jellyfin_connection(
+    request: JellyfinConnectionTest, db: AsyncSession = Depends(get_db)
+):
+    """
+    Test a Jellyfin server before saving it.
+
+    Args:
+        request: Server URL and an administrator API key
+
+    Returns:
+        Connection test result
+    """
+    setup_service = SetupService(db)
+    return await setup_service.test_jellyfin_connection(request.url, request.api_key)
+
+
+@router.post("/jellyfin/libraries", response_model=List[MediaLibraryResponse])
+async def get_jellyfin_libraries(
+    request: JellyfinConnectionTest, db: AsyncSession = Depends(get_db)
+):
+    """
+    List a Jellyfin server's libraries from credentials that are not saved yet.
+
+    Args:
+        request: Server URL and an administrator API key
+    """
+    setup_service = SetupService(db)
+    try:
+        return await setup_service.get_jellyfin_libraries(request.url, request.api_key)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/libraries", response_model=List[MediaLibraryResponse])
+async def get_media_libraries(db: AsyncSession = Depends(get_db)):
+    """
+    Libraries from every configured media server.
+
+    Each entry names the server it came from, so both can be shown when Plex
+    and Jellyfin are set up together.
+    """
+    setup_service = SetupService(db)
+    return await setup_service.get_media_libraries()
+
+
 @router.post("/test/radarr", response_model=ConnectionTestResponse)
 async def test_radarr_connection(
     request: RadarrConnectionTest, db: AsyncSession = Depends(get_db)
@@ -264,25 +324,15 @@ async def test_email_connection(
     Returns:
         Connection test result
     """
-    from app.services.email_service import EmailService
+    from app.services.notifications.service import EmailService
 
     try:
-        # Decrypt password if it looks encrypted (has the itsdangerous format)
-        smtp_password = request.smtp_password
-        if "." in smtp_password and len(smtp_password) > 50:
-            # Looks like an encrypted token, decrypt it
-            try:
-                token_manager = get_token_manager()
-                smtp_password = token_manager.decrypt(smtp_password)
-            except Exception:
-                # If decryption fails, use as-is (might be a plain password)
-                pass
-
         email_service = EmailService(
             smtp_host=request.smtp_host,
             smtp_port=request.smtp_port,
             smtp_user=request.smtp_user,
-            smtp_password=smtp_password,
+            # Settings sends a saved password back encrypted
+            smtp_password=decrypt_if_encrypted(request.smtp_password),
         )
 
         # Send test email

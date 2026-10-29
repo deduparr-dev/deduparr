@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.email_helpers import get_email_service_from_config
+from app.services.notifications.helpers import get_email_service_from_config
 
 logger = logging.getLogger(__name__)
 

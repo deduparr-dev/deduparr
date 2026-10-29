@@ -153,6 +153,41 @@ async def endpoint(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Model))
 ```
 
+### Media Servers
+
+Deduparr reads libraries from Plex, Jellyfin, or both at once. Everything above
+`app/services/media_server/` works against one contract and never touches a
+server SDK:
+
+- `base.py` - the `MediaServer` protocol and `DuplicateGroup`, which carries an
+  item id, a title and the `MediaMetadata` of each file
+- `plex_adapter.py` / `jellyfin_adapter.py` - one per server
+- `file_probe.py` - sample detection and the stat/inode probe both adapters and
+  the disk scanner share
+- `__init__.py` - `get_media_servers(db)`, and `selected_libraries()` for the
+  per-server `plex_libraries` / `jellyfin_libraries` selection
+
+**A server counts as configured when its credentials are present**, so there is
+no separate "which server" setting to drift out of step. Duplicate sets are
+keyed on `(media_server, item_id)`: the same title on both servers stays two
+sets, and one server's scan never discards the other's findings.
+
+Authentication is deliberately outside the protocol, because the two differ:
+
+- **Plex** uses the plex.tv OAuth PIN flow described below
+- **Jellyfin** uses a server URL and an API key, which **must belong to an
+  administrator** - library paths and scan triggers are admin-only endpoints,
+  and item queries need a user id only an admin key can look up
+
+The Jellyfin adapter uses the official `jellyfin-apiclient-python` SDK. That
+SDK is synchronous, so every call goes through `asyncio.to_thread`. Two of its
+quirks are worth knowing: `get_system_info()` reads `System/Configuration` and
+carries no version (`get_system_info_new()` reads `System/Info`), and Jellyfin
+routes and binds query parameters case-insensitively, which the SDK relies on.
+
+`e2e/fake-jellyfin/` is a stand-in server so the suite can drive the adapter
+without a Jellyfin install.
+
 ### Plex OAuth Authentication Flow
 
 Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token entry, this project uses **plex.tv OAuth with PIN login ONLY** with enterprise-grade security:
@@ -171,36 +206,62 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
 - **Secure Logging**: Sensitive data sanitized in logs (shows only first/last few chars)
 
 **Critical:** 
-- Never use direct Plex server URLs
-- Never support manual token entry - OAuth only
+- For **Plex**, never use direct server URLs and never support manual token
+  entry - OAuth only. This rule is specific to Plex; Jellyfin is configured
+  with a URL and an admin API key, which is the only thing it offers.
 - Always authenticate via plex.tv token first
-- All tokens/API keys encrypted using `services/security.py`
+- All tokens/API keys encrypted using `services/shared/security.py`
 - Use `get_token_manager()` for all encryption/decryption operations (works for any service)
 - Encryption key is file-based at `/app/data/.encryption_key` (auto-generated, persists via Docker volume)
 - `security.py` is service-agnostic - use it for Plex, Radarr, Sonarr, qBittorrent, etc.
 
 ### Database Models Structure
 
+The schema is owned by **Alembic** (`backend/alembic/`), applied on startup by
+`init_db()`. Add a migration for any model change; `create_all` no longer
+decides the schema.
+
 Five core models with specific relationships:
 
-- `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`)
+- `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`).
+  `media_server` + `item_id` say which server reported it and its id there
 - `DuplicateFile`: Individual file in duplicate set (has one `DeletionHistory`)
-- `DeletionHistory`: Tracks multi-stage deletion (qBittorrent → *arr → disk → Plex refresh)
+- `DeletionHistory`: Tracks multi-stage deletion (*arr → qBittorrent → disk → media server refresh)
 - `ScoringRule`: User-defined regex patterns for scoring
 - `Config`: Key-value settings store
+
+`DeletionHistory.media_server_refreshed` records the final stage for whichever
+server owns the set.
 
 All models use timezone-aware UTC timestamps via `datetime.now(timezone.utc)`. Enums defined as `str, enum.Enum` for JSON serialization.
 
 ### Multi-Stage Deletion Pipeline
 
-Deletion is a transaction-like process with four stages tracked in `DeletionHistory`:
+`DeletionPipeline` (`services/deletion/pipeline.py`) deletes one file in these
+stages, tracked in `DeletionHistory`:
 
-1. `deleted_from_qbit`: Remove item from qBittorrent
-2. `deleted_from_arr`: Delete from Radarr/Sonarr via API
-3. `deleted_from_disk`: Physical file deletion
-4. `plex_refreshed`: Trigger Plex library scan
+1. `deleted_from_arr`: delete through Radarr/Sonarr, which removes the file
+2. `deleted_from_qbit`: remove the torrent holding the file, with its data -
+   unless the kept file has a torrent, or the torrent holds other videos too
+   (a season pack)
+3. *arr rescan, once per set: `RescanMovie`/`RescanSeries` re-reads the item
+   from disk, importing the kept file - or the whole library when the *arr
+   tracks neither file, as it may hold one under its own mount. A kept file
+   directly in a root folder cannot be imported; it is never moved, and the
+   result says so
+4. `deleted_from_disk`: delete the file if still on disk, then the side files
+   named after it (.nfo, subtitles, artwork), and the release's
+   Sample/Subs/Proof/Extras folders once no other video shares the directory,
+   then the folders left empty - up to the library folder the media server
+   reports, never it, and none when the server cannot list its libraries
+5. `media_server_refreshed`: refresh the item on the server that reported it
 
-The `is_complete` property verifies all stages succeeded without errors. Implement rollback logic if any stage fails.
+A file is only ever identified by more than its name, since other titles share
+names like `S01E01.mkv`: on disk by the media server's path, or that path's
+tail under the media directory at the reported size; in qBittorrent by full
+path, or by name and size. A file counts as deleted only once it is gone from
+disk; anything less is an error and the set stays pending for a retry. The
+dashboard counts deletions the same way (`DeletionHistory.is_complete`).
 
 ## Development Workflows
 
@@ -344,34 +405,38 @@ async def test_function(test_db):
 ### *arr APIs (httpx-based clients)
 
 **Direct httpx implementation** (migrated from PyArr):
-- **RadarrClient** (`app.services.arr_client.RadarrClient`): Radarr API v3 client
-- **SonarrClient** (`app.services.arr_client.SonarrClient`): Sonarr API v3/v5 client
+- **RadarrClient** (`app.services.arr.client.RadarrClient`): Radarr API v3 client
+- **SonarrClient** (`app.services.arr.client.SonarrClient`): Sonarr API v3/v5 client
 - Both use `httpx.AsyncClient` for async HTTP requests
 - Error handling via `ArrConnectionError` exception
 - API keys stored in `Config` model (encrypted)
+- Responses are typed with the TypedDicts in `client.py` (`MediaItem`,
+  `ArrFile`, `Episode`, `QualityProfile`, ...) for the fields Deduparr reads
 - Key methods:
   - `get_system_status()`: Get version/status info
-  - `get_movie()` / `get_series()`: Retrieve media items
+  - `get_movie()` / `get_series()`: One item by ID, or all of them
   - `get_root_folder()`: Get configured root folders
-  - `del_movie_file()` / `del_episode_file()`: Delete files
-  - `post_command()`: Execute commands (RescanMovie, RefreshSeries, etc.)
-  - `update_movie()` / `update_series()`: Update media item metadata
+  - `delete_movie_file()` / `delete_episode_file()`: Delete files
+  - `post_command()`: Execute commands (RescanMovie, RescanSeries)
+  - `update_movie()` / `update_series()`: Send an item back changed, e.g. a new path
 
 **Usage Pattern:**
 ```python
-from app.services.arr_client import RadarrClient, ArrConnectionError
+from app.services.arr.client import RadarrClient, ArrConnectionError
 
 client = RadarrClient(base_url="http://localhost:7878", api_key="xxx")
 try:
     movies = await client.get_movie()
-    await client.post_command("DownloadedMoviesScan", path="/movies")
+    await client.post_command("RescanMovie", movieId=movies[0]["id"])
 except ArrConnectionError as e:
     logger.error(f"Radarr API error: {e}")
 ```
 
 ### qBittorrent (`qbittorrent-api`)
 
-Not yet implemented. Will remove torrents by hash after verifying file path matches.
+`QBittorrentService` (`services/download/qbittorrent_service.py`) finds the
+torrent holding a file and removes it by hash; the deletion pipeline above says
+when.
 
 ## Common Gotchas
 
@@ -414,6 +479,10 @@ Not yet implemented. Will remove torrents by hash after verifying file path matc
 - Type-safe codebase (no `any` types in TypeScript or Python)
 - Comprehensive test suite (pytest with async support)
 
+**Also implemented:**
+- Jellyfin support, alongside or instead of Plex (#470)
+- Bulk deletion of every pending set (#442)
+
 **Partially Implemented ⏳:**
 - Settings page (UI exists, needs backend integration)
 - Setup wizard (UI exists, needs OAuth flow refinement)
@@ -422,7 +491,6 @@ Not yet implemented. Will remove torrents by hash after verifying file path matc
 - Plex smart collections support
 - Kometa integration
 - Preview thumbnails from Plex
-- Bulk actions (approve all, reject all)
 - "Keep both" option with reason logging
 - Export/import configuration
 - Scheduled scans (automation)

@@ -50,7 +50,7 @@ async def test_config_model(test_db: AsyncSession):
 async def test_duplicate_set_model(test_db: AsyncSession, create_duplicate_set):
     """Test DuplicateSet model"""
     dup_set = await create_duplicate_set(
-        plex_item_id="12345",
+        item_id="12345",
         title="Test Movie",
         media_type=MediaType.MOVIE,
         status=DuplicateStatus.PENDING,
@@ -154,7 +154,7 @@ async def test_deletion_history_model(
         deleted_from_qbit=True,
         deleted_from_arr=True,
         deleted_from_disk=True,
-        plex_refreshed=True,
+        media_server_refreshed=True,
         qbit_torrent_hash="abc123",
         arr_type="radarr",
     )
@@ -184,7 +184,7 @@ async def test_deletion_history_incomplete(
         deleted_from_qbit=True,
         deleted_from_arr=False,
         deleted_from_disk=False,
-        plex_refreshed=False,
+        media_server_refreshed=False,
         error="Failed to delete from Radarr",
     )
 

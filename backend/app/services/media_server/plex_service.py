@@ -4,11 +4,10 @@ Uses OAuth PIN authentication via plex.tv with token encryption and CSRF protect
 """
 
 import logging
-import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Union
+from typing import List, Optional, Union
 
 import plexapi
 import requests
@@ -16,17 +15,16 @@ from plexapi.exceptions import NotFound, Unauthorized
 from plexapi.library import LibrarySection
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
-from plexapi.video import Episode, Movie
 from typing_extensions import TypedDict
 
 from app.core.config import settings
-from app.services.plex_exceptions import (
+from app.services.media_server.plex_exceptions import (
     PlexConnectionError,
     PlexPinExpiredError,
     TokenExpiredError,
     UnauthorizedError,
 )
-from app.services.security import (
+from app.services.shared.security import (
     InvalidTokenError,
     get_token_manager,
     pin_cache,
@@ -37,33 +35,6 @@ from app.services.security import (
 plexapi.X_PLEX_PRODUCT = "Deduparr"
 
 logger = logging.getLogger(__name__)
-
-
-def is_sample_file(file_path: str) -> bool:
-    """
-    Check if a file path represents a sample file using comprehensive pattern matching.
-
-    Checks for:
-    - "sample" anywhere in path (case-insensitive)
-    - /Sample/, /SAMPLE/, /SaMpLe/ directory patterns
-    - -sample., _sample., .sample. filename patterns
-
-    Args:
-        file_path: Full file path to check
-
-    Returns:
-        True if file appears to be a sample, False otherwise
-    """
-    if not file_path:
-        return False
-
-    file_path_lower = file_path.lower()
-
-    # Check for "sample" anywhere in the path (handles all case variations)
-    if "sample" in file_path_lower:
-        return True
-
-    return False
 
 
 class PlexAuthData(TypedDict):
@@ -119,29 +90,6 @@ class PlexLibraryData(TypedDict):
     title: str
     type: str
     count: int
-
-
-class PlexMediaInfo(TypedDict, total=False):
-    """Media information extracted from media server"""
-
-    title: str
-    year: Optional[int]
-    rating_key: str
-    file_path: Optional[str]
-    file_size: int
-    duration: Optional[int]
-    container: Optional[str]
-    video_codec: Optional[str]
-    video_resolution: Optional[str]
-    bitrate: Optional[int]
-    audio_codec: Optional[str]
-    width: Optional[int]
-    height: Optional[int]
-    season: int
-    episode: int
-    show_title: str
-    inode: Optional[int]  # For hardlink detection
-    is_hardlink: bool  # Whether this file is a hardlink
 
 
 class PlexAuthService:
@@ -518,17 +466,20 @@ class PlexService:
                 raise ValueError("Plex authentication required. Please sign in.")
 
             try:
-                token_manager = get_token_manager()
-                decrypted = token_manager.decrypt(self.encrypted_token)
-                # Check if decryption returned None
+                decrypted = get_token_manager().decrypt(self.encrypted_token)
                 if not decrypted:
                     raise ValueError("Decryption returned empty token")
                 self._decrypted_token = decrypted
             except Exception as e:
-                logger.error(f"Failed to decrypt Plex token: {str(e)}")
-                raise ValueError(
-                    "Failed to decrypt authentication token. Please re-authenticate with Plex."
+                # Before the config API encrypted secrets, a token written
+                # through it was stored in the clear. Use it and ask for a
+                # re-save, as the *arr services do, rather than locking the
+                # user out of their own instance.
+                logger.warning(
+                    f"Plex token decryption failed ({e}), treating as plain text. "
+                    f"Re-save configuration to encrypt it."
                 )
+                self._decrypted_token = self.encrypted_token
 
         return self._decrypted_token
 
@@ -675,10 +626,6 @@ class PlexService:
             logger.error(f"Plex connection test failed: {str(e)}")
             return {"success": False, "error": str(e)}
 
-    async def get_available_servers(self) -> List[PlexServerData]:
-        """Get list of available Plex servers for this account"""
-        return await PlexAuthService.get_servers(self.encrypted_token)
-
     def get_libraries(
         self, library_type: Optional[str] = None
     ) -> List[PlexLibraryData]:
@@ -732,339 +679,6 @@ class PlexService:
             logger.error(f"Failed to get library '{library_name}': {str(e)}")
             raise
 
-    def filter_hardlinks(
-        self, duplicates: Dict[str, List[Union[Movie, Episode]]]
-    ) -> Dict[str, List[Union[Movie, Episode]]]:
-        """
-        Filter out hardlinks from duplicate sets
-
-        Hardlinks are when multiple file paths point to the same physical file on disk.
-        This is common with *arr apps that organize media into different folder structures.
-
-        Args:
-            duplicates: Dict mapping keys to lists of duplicate media items
-
-        Returns:
-            Filtered dict with hardlinks removed (only keeps true duplicates)
-        """
-        filtered_duplicates: Dict[str, List[Union[Movie, Episode]]] = {}
-        total_inaccessible = 0
-        total_items = 0
-
-        logger.info(f"Filtering hardlinks from {len(duplicates)} duplicate groups")
-
-        for key, items in duplicates.items():
-            if len(items) < 2:
-                logger.debug(f"Skipping '{key}' - only {len(items)} item(s)")
-                continue
-
-            total_items += len(items)
-
-            # Get media info for all items
-            items_with_info = []
-            items_without_inode = []
-
-            for item in items:
-                info = self.get_media_info(item)
-                if info.get("file_path"):
-                    if info.get("inode"):
-                        items_with_info.append((item, info))
-                    else:
-                        # File path exists but no inode (file not accessible)
-                        items_without_inode.append(item)
-                        total_inaccessible += 1
-
-            # Group by inode to find hardlinks
-            inode_groups: Dict[int, List[Union[Movie, Episode]]] = {}
-
-            for item, info in items_with_info:
-                inode = info.get("inode")
-                if inode:
-                    if inode not in inode_groups:
-                        inode_groups[inode] = []
-                    inode_groups[inode].append(item)
-
-            # Only keep first item from each inode group (they're the same physical file)
-            unique_items = []
-            hardlink_count = 0
-
-            for inode, inode_items in inode_groups.items():
-                if len(inode_items) > 1:
-                    # These are hardlinks - keep only the first one
-                    hardlink_count += len(inode_items) - 1
-                    logger.info(
-                        f"Found {len(inode_items)} hardlinked files for inode {inode} - keeping 1"
-                    )
-                unique_items.append(inode_items[0])
-
-            # Add items without inode info (couldn't check - assume not hardlinks)
-            unique_items.extend(items_without_inode)
-
-            # Only include if there are still 2+ unique files after filtering hardlinks
-            if len(unique_items) >= 2:
-                filtered_duplicates[key] = unique_items
-                if hardlink_count > 0:
-                    logger.info(
-                        f"Filtered {hardlink_count} hardlinks from '{key}', {len(unique_items)} true duplicates remain"
-                    )
-            elif hardlink_count > 0:
-                logger.info(
-                    f"All {len(items)} files for '{key}' were hardlinks - not true duplicates, skipping"
-                )
-
-        # Log summary if files were inaccessible
-        if total_inaccessible > 0:
-            logger.warning(
-                f"Hardlink detection: {total_inaccessible}/{total_items} files were not accessible. "
-                f"Mount Plex media directories into the container to enable hardlink filtering for all files."
-            )
-
-        logger.info(
-            f"Hardlink filtering result: {len(filtered_duplicates)} groups remain after filtering"
-        )
-        return filtered_duplicates
-
-    def find_duplicate_movies(self, library_name: str) -> Dict[str, List[Movie]]:
-        """
-        Find duplicate movies in a library using Plex's native duplicate detection
-
-        Uses Plex's API to find duplicates, then groups them properly.
-        Note: Hardlink detection only works if media files are accessible.
-
-        Args:
-            library_name: Name of the movie library
-
-        Returns:
-            Dict mapping movie key to list of duplicate Movie objects
-        """
-        try:
-            library = self.get_library(library_name)
-
-            logger.info(f"Scanning library '{library_name}' for duplicates...")
-
-            # First, let's check for movies with multiple versions (editions)
-            all_movies = library.all()
-            logger.info(f"Found {len(all_movies)} total movies in library")
-
-            duplicates: Dict[str, List[Movie]] = {}
-            multi_version_movies = []
-
-            # Find movies with multiple media items (editions/versions)
-            for movie in all_movies:
-                # Filter out sample files when counting media versions
-                non_sample_media = [
-                    media
-                    for media in movie.media
-                    if media.parts
-                    and media.parts[0].file
-                    and not is_sample_file(media.parts[0].file)
-                ]
-
-                if len(non_sample_media) > 1:
-                    multi_version_movies.append(movie)
-                    key = f"{movie.title}|{movie.year}" if movie.year else movie.title
-
-                    logger.info(
-                        f"Found multi-version: '{movie.title} ({movie.year})' has {len(non_sample_media)} versions"
-                    )
-                    for i, media in enumerate(non_sample_media, 1):
-                        part = media.parts[0] if media.parts else None
-                        if part:
-                            logger.debug(
-                                f"  Version {i}: {media.videoResolution} {media.bitrate//1000 if media.bitrate else '?'}kbps - {part.file}"
-                            )
-
-                    # For multi-version movies, treat them as duplicates
-                    # We'll add the movie once, but the scan route will handle multiple media items
-                    if key not in duplicates:
-                        duplicates[key] = []
-                    # Add the movie to the duplicates list
-                    duplicates[key].append(movie)
-
-            logger.info(
-                f"Found {len(duplicates)} movies with multiple versions/editions"
-            )
-
-            # Also check Plex's native duplicate detection for separate movie entries
-            plex_duplicates = library.search(duplicate=True)
-            logger.info(
-                f"Plex API reports {len(plex_duplicates)} items marked as duplicates"
-            )
-
-            # Group Plex-detected duplicates by title+year
-            # Filter out movies that only have sample files (no real duplicates)
-            for movie in plex_duplicates:
-                # Count non-sample media files
-                non_sample_media = [
-                    media
-                    for media in movie.media
-                    if media.parts
-                    and media.parts[0].file
-                    and not is_sample_file(media.parts[0].file)
-                ]
-
-                # Only add if there are multiple non-sample versions
-                # A single movie with only a sample file is not a true duplicate
-                if len(non_sample_media) < 2:
-                    logger.debug(
-                        f"Skipping '{movie.title}' from Plex duplicates - only {len(non_sample_media)} non-sample media file(s)"
-                    )
-                    continue
-                key = f"{movie.title}|{movie.year}" if movie.year else movie.title
-                if key not in duplicates:
-                    duplicates[key] = []
-                if movie not in duplicates[key]:
-                    duplicates[key].append(movie)
-
-            logger.info(f"Total duplicate groups: {len(duplicates)}")
-
-            logger.info(
-                f"Returning {len(duplicates)} duplicate groups (hardlink filtering skipped - files not accessible)"
-            )
-
-            return duplicates
-        except Exception as e:
-            logger.error(f"Failed to find duplicate movies: {str(e)}")
-            raise
-
-    def find_duplicate_episodes(self, library_name: str) -> Dict[str, List[Episode]]:
-        """
-        Find duplicate episodes in a TV show library
-
-        Like movies, episodes with multiple versions show as ONE episode object
-        with multiple media files in episode.media[] array. This scans all episodes
-        and returns those with 2+ media versions.
-
-        Args:
-            library_name: Name of the TV show library
-
-        Returns:
-            Dict mapping episode identifier to list containing the single Episode object with multi-versions
-        """
-        try:
-            library = self.get_library(library_name)
-
-            # Get ALL episodes in the library
-            all_episodes = library.search(libtype="episode")
-
-            logger.info(f"Scanning library '{library_name}' for duplicate episodes...")
-            logger.info(f"Found {len(all_episodes)} total episodes in library")
-
-            # Find episodes with multiple media versions (duplicates)
-            multi_version_episodes: Dict[str, List[Episode]] = {}
-
-            for episode in all_episodes:
-                # Filter out sample files first
-                non_sample_media = [
-                    m
-                    for m in episode.media
-                    if not any(
-                        is_sample_file(part.file) for part in m.parts if part.file
-                    )
-                ]
-
-                # Check if this episode has multiple versions (after filtering samples)
-                if len(non_sample_media) >= 2:
-                    show_title = (
-                        episode.grandparentTitle
-                        if hasattr(episode, "grandparentTitle")
-                        else "Unknown Show"
-                    )
-                    key = f"{show_title}|S{episode.seasonNumber:02d}E{episode.episodeNumber:02d}"
-                    # Store the episode (not multiple episodes, just one episode with multi-versions)
-                    multi_version_episodes[key] = [episode]
-
-            logger.info(
-                f"Found {len(multi_version_episodes)} episodes with multiple versions"
-            )
-
-            for key, episodes in list(multi_version_episodes.items())[
-                :5
-            ]:  # Show first 5
-                ep = episodes[0]
-                logger.debug(f"  '{key}': {len(ep.media)} versions")
-
-            logger.info(
-                f"Returning {len(multi_version_episodes)} multi-version episodes"
-            )
-
-            return multi_version_episodes
-        except Exception as e:
-            logger.error(f"Failed to find duplicate episodes: {str(e)}", exc_info=True)
-            raise
-
-    def get_media_info(self, media: Union[Movie, Episode]) -> PlexMediaInfo:
-        """
-        Extract media information from a Plex media object
-
-        Args:
-            media: Plex media object (Movie, Episode, etc.)
-
-        Returns:
-            Dict with media information including hardlink detection
-        """
-        try:
-            # Get the first media part (file)
-            media_parts = media.media
-            if not media_parts:
-                return {}
-
-            media_item = media_parts[0]
-            part = media_item.parts[0] if media_item.parts else None
-
-            file_path = part.file if part else None
-            file_size = part.size if part else 0
-
-            # Get inode for hardlink detection
-            inode = None
-            nlink = 1
-
-            if file_path:
-                if os.path.exists(file_path):
-                    try:
-                        stat_info = os.stat(file_path)
-                        inode = stat_info.st_ino
-                        nlink = stat_info.st_nlink
-                    except OSError as e:
-                        logger.warning(f"Failed to get inode for {file_path}: {e}")
-                else:
-                    logger.warning(f"File not accessible: {file_path}")
-                    logger.warning(
-                        f"File not accessible: {file_path} - "
-                        f"Hardlink detection disabled. "
-                        f"Mount Plex media directories to enable hardlink filtering."
-                    )
-
-            info: PlexMediaInfo = {
-                "title": media.title,
-                "year": getattr(media, "year", None),
-                "rating_key": media.ratingKey,
-                "file_path": file_path,
-                "file_size": file_size,
-                "duration": media.duration,
-                "container": media_item.container if media_item else None,
-                "video_codec": media_item.videoCodec if media_item else None,
-                "video_resolution": media_item.videoResolution if media_item else None,
-                "bitrate": media_item.bitrate if media_item else None,
-                "audio_codec": media_item.audioCodec if media_item else None,
-                "width": media_item.width if media_item else None,
-                "height": media_item.height if media_item else None,
-                "inode": inode,
-                "is_hardlink": nlink
-                > 1,  # If nlink > 1, this file has multiple hardlinks
-            }
-
-            # Add episode-specific info if applicable
-            if hasattr(media, "seasonNumber"):
-                info["season"] = media.seasonNumber
-                info["episode"] = media.episodeNumber
-                info["show_title"] = media.grandparentTitle
-
-            return info
-        except Exception as e:
-            logger.error(f"Failed to extract media info: {str(e)}")
-            return {}
-
     def refresh_library(self, library_name: str) -> bool:
         """
         Trigger a Plex library refresh/scan
@@ -1084,7 +698,7 @@ class PlexService:
             logger.error(f"Failed to refresh library '{library_name}': {str(e)}")
             return False
 
-    def refresh_item(self, plex_item_id: str) -> bool:
+    def refresh_item(self, item_id: str) -> bool:
         """
         Refresh metadata for a specific Plex item (movie or episode).
 
@@ -1092,7 +706,7 @@ class PlexService:
         which is much faster and more efficient than scanning the entire library.
 
         Args:
-            plex_item_id: Plex ratingKey of the item to refresh
+            item_id: Plex ratingKey of the item to refresh
 
         Returns:
             True if successful, False otherwise
@@ -1100,47 +714,13 @@ class PlexService:
         try:
             server = self._get_server()
             # Fetch the item by its ratingKey
-            item = server.fetchItem(int(plex_item_id))
+            item = server.fetchItem(int(item_id))
             # Call the item's refresh() method to update its metadata
             item.refresh()
             logger.info(
-                f"Triggered metadata refresh for Plex item {plex_item_id} ('{item.title}')"
+                f"Triggered metadata refresh for Plex item {item_id} ('{item.title}')"
             )
             return True
         except Exception as e:
-            logger.error(f"Failed to refresh Plex item {plex_item_id}: {str(e)}")
+            logger.error(f"Failed to refresh Plex item {item_id}: {str(e)}")
             return False
-
-    def get_collection_items(
-        self, library_name: str, collection_name: str
-    ) -> Union[List[Movie], List[Episode]]:
-        """
-        Get all items from a Plex collection (smart or manual)
-
-        Args:
-            library_name: Name of the library
-            collection_name: Name of the collection
-
-        Returns:
-            List of media items in the collection
-        """
-        try:
-            library = self.get_library(library_name)
-
-            # Search for the collection
-            collections = library.search(title=collection_name, libtype="collection")
-            if not collections:
-                raise ValueError(
-                    f"Collection '{collection_name}' not found in '{library_name}'"
-                )
-
-            collection = collections[0]
-            items = collection.items()
-
-            logger.info(
-                f"Retrieved {len(items)} items from collection '{collection_name}'"
-            )
-            return items
-        except Exception as e:
-            logger.error(f"Failed to get collection items: {str(e)}")
-            raise

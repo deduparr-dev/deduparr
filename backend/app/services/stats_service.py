@@ -181,16 +181,11 @@ class StatsService:
         total_result = await self.db.execute(total_stmt)
         total = total_result.scalar() or 0
 
+        # As DeletionHistory.is_complete: the file is gone
         successful_stmt = (
             select(func.count())
             .select_from(DeletionHistory)
-            .where(
-                DeletionHistory.deleted_from_qbit.is_(True),
-                DeletionHistory.deleted_from_arr.is_(True),
-                DeletionHistory.deleted_from_disk.is_(True),
-                DeletionHistory.media_server_refreshed.is_(True),
-                DeletionHistory.error.is_(None),
-            )
+            .where(DeletionHistory.deleted_from_disk.is_(True))
         )
         successful_result = await self.db.execute(successful_stmt)
         successful = successful_result.scalar() or 0

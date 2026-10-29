@@ -139,6 +139,54 @@ async def test_get_dashboard_stats_with_deletions(test_db):
 
 
 @pytest.mark.asyncio
+async def test_a_deletion_succeeded_once_the_file_is_gone(test_db):
+    """
+    Whatever else a stage reported is a note, as in the deletion's own result.
+
+    Counting only deletions that also went through qBittorrent made every
+    deletion without it a failure, and a failed refresh marked a deleted file
+    Failed on the dashboard.
+    """
+    duplicate = DuplicateSet(
+        item_id="movie1",
+        title="Test Movie",
+        media_type=MediaType.MOVIE,
+        status=DuplicateStatus.PROCESSED,
+    )
+    test_db.add(duplicate)
+    await test_db.flush()
+
+    outcomes = [
+        (True, True, "qBittorrent not configured"),
+        (True, False, "Jellyfin refresh failed: timed out"),
+        (False, False, "Could not delete /media/movie.mkv: Read-only file system"),
+    ]
+    for index, (deleted, refreshed, error) in enumerate(outcomes):
+        file = DuplicateFile(
+            set_id=duplicate.id, file_path=f"/media/{index}.mkv", file_size=1
+        )
+        test_db.add(file)
+        await test_db.flush()
+        test_db.add(
+            DeletionHistory(
+                duplicate_file_id=file.id,
+                deleted_at=datetime.now(timezone.utc) - timedelta(minutes=index),
+                deleted_from_disk=deleted,
+                media_server_refreshed=refreshed,
+                error=error,
+            )
+        )
+    await test_db.commit()
+
+    service = StatsService(test_db)
+    stats = await service.get_dashboard_stats()
+    deletions = await service.get_recent_deletions()
+
+    assert (stats.successful_deletions, stats.failed_deletions) == (2, 1)
+    assert [deletion.is_complete for deletion in deletions] == [True, True, False]
+
+
+@pytest.mark.asyncio
 async def test_get_recent_activity(test_db):
     """Test getting recent duplicate activity"""
     now = datetime.now(timezone.utc)
@@ -219,8 +267,8 @@ async def test_get_recent_deletions(test_db):
 
     assert len(deletions) == 10
     assert deletions[0].file_path == "/media/file0.mkv"
-    assert deletions[0].is_complete is False  # has error
-    assert deletions[1].is_complete is False  # missing media_server_refreshed
+    assert deletions[0].is_complete is True  # deleted, its error a note
+    assert deletions[1].is_complete is False  # still on disk
     assert deletions[1].error is None
 
 

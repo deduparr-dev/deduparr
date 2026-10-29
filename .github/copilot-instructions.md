@@ -254,7 +254,8 @@ A file is only ever identified by more than its name, since other titles share
 names like `S01E01.mkv`: on disk by the media server's path, or that path's
 tail under the media directory at the reported size; in qBittorrent by full
 path, or by name and size. A file counts as deleted only once it is gone from
-disk; anything less is an error and the set stays pending for a retry.
+disk; anything less is an error and the set stays pending for a retry. The
+dashboard counts deletions the same way (`DeletionHistory.is_complete`).
 
 ## Development Workflows
 

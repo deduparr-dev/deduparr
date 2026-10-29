@@ -15,26 +15,13 @@ from typing import Dict, List, Optional, Set
 
 from typing_extensions import TypedDict
 
+from app.services.media_server.file_probe import (
+    DEFAULT_SAMPLE_PATTERNS,
+    VIDEO_EXTENSIONS,
+    is_sample_file,
+)
+
 logger = logging.getLogger(__name__)
-
-
-# Default patterns - can be extended via configuration
-DEFAULT_VIDEO_EXTENSIONS = {
-    ".mkv",
-    ".mp4",
-    ".avi",
-    ".mov",
-    ".wmv",
-    ".flv",
-    ".webm",
-    ".m4v",
-    ".mpg",
-    ".mpeg",
-    ".m2ts",
-    ".ts",
-    ".vob",
-    ".ogv",
-}
 
 
 DEFAULT_QUALITY_MARKERS = [
@@ -153,21 +140,6 @@ DEFAULT_QUALITY_MARKERS = [
 ]
 
 
-DEFAULT_SAMPLE_PATTERNS = [
-    "sample",
-    "trailer",
-    "preview",
-    "rarbg.com",
-    "etrg.mp4",
-    "-sample.",
-    "_sample.",
-    ".sample.",
-    "featurette",
-    "deleted",
-    "extra",
-]
-
-
 DEFAULT_RELEASE_GROUP_PATTERN = r"-[a-zA-Z0-9]+$"
 
 
@@ -216,9 +188,11 @@ class DiskScanConfig:
     checksum_chunk_size: int = 8192
 
     # Patterns and extensions (customizable)
-    video_extensions: Set[str] = field(default_factory=lambda: DEFAULT_VIDEO_EXTENSIONS)
+    video_extensions: Set[str] = field(default_factory=lambda: set(VIDEO_EXTENSIONS))
     quality_markers: List[str] = field(default_factory=lambda: DEFAULT_QUALITY_MARKERS)
-    sample_patterns: List[str] = field(default_factory=lambda: DEFAULT_SAMPLE_PATTERNS)
+    sample_patterns: List[str] = field(
+        default_factory=lambda: list(DEFAULT_SAMPLE_PATTERNS)
+    )
     release_group_pattern: str = DEFAULT_RELEASE_GROUP_PATTERN
 
     # Scanning options
@@ -237,26 +211,6 @@ class DiskFileInfo(TypedDict):
     checksum: Optional[str]
     confidence_score: float  # 0.0 to 1.0, higher = more confident it's a duplicate
     detection_method: str  # "name", "size", "checksum", "name_and_size", "combined"
-
-
-def is_sample_file(file_path: str, patterns: Optional[List[str]] = None) -> bool:
-    """
-    Check if a file path represents a sample file.
-
-    Args:
-        file_path: Full file path to check
-        patterns: Custom sample patterns (uses defaults if None)
-
-    Returns:
-        True if file appears to be a sample, False otherwise
-    """
-    if not file_path:
-        return False
-
-    file_path_lower = file_path.lower()
-    check_patterns = patterns or DEFAULT_SAMPLE_PATTERNS
-
-    return any(pattern in file_path_lower for pattern in check_patterns)
 
 
 class DiskScanService:

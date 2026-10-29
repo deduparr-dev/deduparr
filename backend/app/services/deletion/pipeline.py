@@ -5,6 +5,7 @@ Deletion pipeline for orchestrating multi-stage file deletion
 import logging
 import os
 import shutil
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -14,25 +15,38 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.models import DeletionHistory, DuplicateFile, DuplicateSet
-from app.models.duplicate import MediaType
+from app.models.duplicate import DuplicateStatus, MediaType
 from app.services.arr.helpers import refresh_media_item
 from app.services.media_server import (
     MediaServerType,
     get_media_server,
     selected_libraries,
 )
+from app.services.media_server.file_probe import is_video_file
 from app.services.download.qbittorrent_service import QBittorrentService
 from app.services.arr.radarr_service import RadarrService
 from app.services.arr.sonarr_service import SonarrService
 
 logger = logging.getLogger(__name__)
 
+# Folders a release ships beside its video. They go with it once no other
+# video shares the directory.
+RELEASE_SUBDIRS = {"sample", "subs", "proof", "extras"}
+
+
+@dataclass
+class SetDeletion:
+    """What deleting one duplicate set did."""
+
+    files_deleted: int = 0
+    space_reclaimed: int = 0
+    errors: list[str] = field(default_factory=list)
+    # Deleted, but with something worth knowing, such as an unconfigured *arr
+    warnings: list[str] = field(default_factory=list)
+
 
 class DeletionPipeline:
     """Orchestrates multi-stage deletion process"""
-
-    # Class-level cache for file locations (shared across instances)
-    _file_location_cache: dict[str, str] = {}
 
     def __init__(self, db: AsyncSession, dry_run: bool = True):
         """
@@ -49,117 +63,186 @@ class DeletionPipeline:
         self.sonarr_service = SonarrService(db)
 
     def _get_media_root_from_path(self, file_path: str) -> str:
-        """
-        Extract media root from a file path
-
-        For paths like /data/movies/Movie/file.mkv, returns /plexdownloads
-        For paths like /media/movies/Movie/file.mkv, returns /media
-
-        Args:
-            file_path: Full file path
-
-        Returns:
-            Media root directory (first path component after /)
-        """
-        # Split path and get first non-empty component after root /
+        """The top directory of a path (/media for /media/movies/x.mkv)."""
         parts = [p for p in file_path.split("/") if p]
         if parts:
             return f"/{parts[0]}"
-        # Fallback to settings default
         return settings.media_dir
 
-    def _cleanup_associated_files(
-        self, directory: str, base_name: str, exclude_filename: str = None
-    ) -> int:
+    def _locate_file(self, server_path: str, size: int) -> Optional[str]:
         """
-        Clean up associated files (subtitles, NFO, images) in a directory.
+        Where a media server's file is in this container, or None.
 
-        Args:
-            directory: Directory to clean up
-            base_name: Base filename to match (without extension)
-            exclude_filename: Optional filename to exclude from deletion
-
-        Returns:
-            Number of files deleted
+        The media server can mount the library elsewhere, so after the path
+        itself the longest tail of it under the media directory is tried, and
+        only taken at the size the server reported. A file is never looked up
+        by its name alone: other titles have files of the same name.
         """
-        if not os.path.exists(directory):
-            return 0
+        if os.path.isfile(server_path):
+            return server_path
 
-        deleted_count = 0
-        for file in os.listdir(directory):
-            # Skip the main video file if specified
-            if exclude_filename and file == exclude_filename:
-                continue
-
-            file_path = os.path.join(directory, file)
-            # Match files with same base name
-            if file.startswith(base_name) and os.path.isfile(file_path):
-                try:
-                    if self.dry_run:
-                        logger.debug(f"[DRY-RUN] Would delete: {file}")
-                    else:
-                        os.remove(file_path)
-                        deleted_count += 1
-                        logger.debug(f"Deleted associated file: {file}")
-                except (PermissionError, OSError) as e:
-                    logger.debug(f"No write permission for {file}: {e}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete {file}: {e}")
-
-        if deleted_count > 0:
-            logger.info(
-                f"Deleted {deleted_count} associated files in {os.path.basename(directory)}"
-            )
-
-        return deleted_count
-
-    def _find_file_in_media_root(self, plex_path: str) -> Optional[str]:
-        """
-        Find actual file location by checking the exact path first, then searching media root
-        Uses caching for performance on large media libraries.
-
-        Args:
-            plex_path: Path as reported by Plex (e.g., /plexdownloads/Serier/File.mkv)
-
-        Returns:
-            Actual path in container if found, None otherwise
-        """
-        # Check cache first
-        if plex_path in self._file_location_cache:
-            cached_path = self._file_location_cache[plex_path]
-            if os.path.exists(cached_path):
-                logger.debug(f"Cache hit: {plex_path} -> {cached_path}")
-                return cached_path
-            else:
-                # File was moved or deleted, remove from cache
-                logger.debug(f"Cache invalidated (file not found): {plex_path}")
-                del self._file_location_cache[plex_path]
-
-        # First, try the exact path from Plex (most common case)
-        if os.path.exists(plex_path):
-            self._file_location_cache[plex_path] = plex_path
-            logger.debug(f"Found at exact Plex path: {plex_path}")
-            return plex_path
-
-        # If exact path doesn't exist, search configured media directory
-        # This handles cases where Plex mount point differs from container mount
-        filename = os.path.basename(plex_path).lower()
-        logger.debug(f"Exact path not found, searching media_dir for: {filename}")
-        media_root = settings.media_dir
-
-        for root, dirs, files in os.walk(media_root):
-            for file in files:
-                # Case-insensitive filename match
-                if file.lower() == filename:
-                    full_path = os.path.join(root, file)
-                    self._file_location_cache[plex_path] = full_path
-                    logger.debug(f"Found and cached: {plex_path} -> {full_path}")
-                    return full_path
+        parts = [part for part in server_path.split("/") if part]
+        for start in range(len(parts)):
+            candidate = os.path.join(settings.media_dir, *parts[start:])
+            if os.path.isfile(candidate) and os.path.getsize(candidate) == size:
+                logger.debug(f"Found {server_path} at {candidate}")
+                return candidate
 
         logger.warning(
-            f"File not found (checked exact path and {media_root}): {plex_path}"
+            f"File not found (checked its path and {settings.media_dir}): {server_path}"
         )
         return None
+
+    def _remove(self, path: str) -> None:
+        """Delete a file or directory tree, or on a dry run say it would."""
+        if self.dry_run:
+            logger.info(f"[DRY-RUN] Would delete: {path}")
+        elif os.path.isdir(path):
+            shutil.rmtree(path)
+            logger.info(f"Deleted directory: {path}")
+        else:
+            os.remove(path)
+            logger.info(f"Deleted: {path}")
+
+    def _discard(self, path: str) -> None:
+        """Remove something a deleted video left behind, if the mount allows it."""
+        try:
+            self._remove(path)
+        except OSError as e:
+            logger.debug(f"Could not delete {path}: {e}")
+
+    @staticmethod
+    def _owner(entry: str, stems: set[str]) -> Optional[str]:
+        """The video a side file is named after: the longest stem it extends."""
+        return max(
+            (
+                stem
+                for stem in stems
+                if entry.startswith(stem)
+                and entry[len(stem) : len(stem) + 1] in (".", "-")
+            ),
+            key=len,
+            default=None,
+        )
+
+    def _clean_up_after(self, video_path: str) -> None:
+        """
+        Remove what a deleted video leaves behind.
+
+        That is its own subtitles, .nfo and artwork and, once no other video
+        shares the directory, the release's Sample/Subs/Proof/Extras folders
+        and the directories left empty. A side file belongs to the video with
+        the longest name it extends, so a kept version or an extra named after
+        the deleted file keeps its own files.
+        """
+        directory, name = os.path.split(video_path)
+        if not os.path.isdir(directory):
+            return
+
+        entries = os.listdir(directory)
+        stem = os.path.splitext(name)[0]
+        other_stems = {
+            os.path.splitext(entry)[0]
+            for entry in entries
+            if entry != name and is_video_file(entry)
+        }
+
+        for entry in entries:
+            path = os.path.join(directory, entry)
+            if os.path.isdir(path):
+                if not other_stems and entry.lower() in RELEASE_SUBDIRS:
+                    self._discard(path)
+            elif (
+                not is_video_file(entry)
+                and stem not in other_stems
+                and self._owner(entry, other_stems | {stem}) == stem
+            ):
+                self._discard(path)
+
+        if other_stems:
+            return
+        if self.dry_run:
+            logger.info(
+                f"[DRY-RUN] Would remove {directory} and its parents once empty"
+            )
+            return
+
+        root = self._get_media_root_from_path(directory)
+        try:
+            while (
+                directory != root
+                and directory.startswith(root)
+                and not os.listdir(directory)
+            ):
+                os.rmdir(directory)
+                logger.info(f"Removed empty directory: {directory}")
+                directory = os.path.dirname(directory)
+        except OSError as e:
+            logger.debug(f"Stopped removing empty directories at {directory}: {e}")
+
+    async def delete_set(self, duplicate_set: DuplicateSet) -> SetDeletion:
+        """
+        Delete every file of a set not marked keep, then rescan the *arr once.
+
+        A file counts as deleted once it is gone from disk. Anything less is an
+        error and leaves the set pending, so it can be retried; a retry skips
+        the files an earlier attempt already deleted.
+        """
+        outcome = SetDeletion()
+        kept = [file for file in duplicate_set.files if file.keep]
+        unwanted = [file for file in duplicate_set.files if not file.keep]
+
+        logger.info(
+            f"Processing duplicate set '{duplicate_set.title}' (ID: {duplicate_set.id})"
+        )
+        for file in kept:
+            logger.info(f"  KEEPING (score {file.score}): {file.file_path}")
+        for file in unwanted:
+            logger.info(f"  DELETING (score {file.score}): {file.file_path}")
+
+        result = await self.db.execute(
+            select(DeletionHistory.duplicate_file_id).where(
+                DeletionHistory.duplicate_file_id.in_([file.id for file in unwanted]),
+                DeletionHistory.deleted_from_disk.is_(True),
+            )
+        )
+        already_deleted = set(result.scalars().all())
+
+        for file in unwanted:
+            if file.id in already_deleted:
+                continue
+            try:
+                history = await self.delete_file(file.id, skip_rescan=True)
+            except Exception as e:
+                outcome.errors.append(f"Failed to delete {file.file_path}: {e}")
+                continue
+
+            if not history.deleted_from_disk:
+                outcome.errors.append(
+                    f"Failed to delete {file.file_path}: "
+                    f"{history.error or 'it is still on disk'}"
+                )
+                continue
+
+            outcome.files_deleted += 1
+            outcome.space_reclaimed += file.file_size
+            if history.error:
+                outcome.warnings.append(history.error)
+
+        for error in outcome.errors:
+            logger.error(error)
+
+        if outcome.files_deleted and kept:
+            try:
+                await self.rescan_for_kept_file(
+                    duplicate_set.media_type, kept[0].file_path, duplicate_set.id
+                )
+            except Exception as e:
+                logger.warning(f"Failed to trigger *arr rescan (non-critical): {e}")
+
+        if not self.dry_run and not outcome.errors:
+            duplicate_set.status = DuplicateStatus.PROCESSED
+        return outcome
 
     async def delete_file(
         self,
@@ -195,15 +278,22 @@ class DeletionPipeline:
         if not duplicate_file:
             raise ValueError(f"DuplicateFile {duplicate_file_id} not found")
 
-        existing_history = await self.db.execute(
-            select(DeletionHistory).where(
-                DeletionHistory.duplicate_file_id == duplicate_file_id
+        existing_history = (
+            await self.db.execute(
+                select(DeletionHistory).where(
+                    DeletionHistory.duplicate_file_id == duplicate_file_id
+                )
             )
-        )
-        if existing_history.scalar_one_or_none():
-            raise ValueError(
-                f"Deletion already in progress or completed for file {duplicate_file_id}"
-            )
+        ).scalar_one_or_none()
+        if existing_history:
+            if existing_history.deleted_from_disk:
+                raise ValueError(
+                    f"Deletion already in progress or completed for file {duplicate_file_id}"
+                )
+            if not self.dry_run:
+                # An earlier attempt left the file in place; this one starts over
+                await self.db.delete(existing_history)
+                await self.db.flush()
 
         file_path = duplicate_file.file_path
 
@@ -261,8 +351,8 @@ class DeletionPipeline:
         1. Remove from *arr and DELETE FILES (Radarr/Sonarr deletes via API)
         2. Remove item from qBittorrent and delete any remaining files
         3. Rescan *arr AFTER deletion complete (SKIPPED if skip_rescan=True)
-        4. Fallback disk cleanup (for any stragglers or manual files)
-        5. Refresh only the specific media in Plex (targeted refresh)
+        4. Delete the file if still on disk, and what it leaves behind
+        5. Refresh the item on the media server that reported it
 
         Args:
             skip_rescan: Skip the *arr rescan stage (will be done once for entire set later)
@@ -271,9 +361,17 @@ class DeletionPipeline:
         arr_type = None
         item_hash = None
         arr_media_id = None
-        # Resolved before any stage removes the file, so the disk stage can
-        # still find its directory when the media server path is remapped.
-        located_path = self._find_file_in_media_root(file_path)
+        kept_file = next(
+            (
+                file
+                for file in duplicate_file.duplicate_set.files
+                if file.keep and file.id != duplicate_file.id
+            ),
+            None,
+        )
+        # Resolved before any stage removes the file, so later stages still
+        # know where it lived.
+        located_path = self._locate_file(file_path, duplicate_file.file_size)
 
         try:
             # Stage 1: Remove from *arr and delete files
@@ -282,53 +380,26 @@ class DeletionPipeline:
             )
             await self.db.commit()
 
-            # Find the kept file path in this duplicate set
-            kept_file_path = None
-            if duplicate_file.duplicate_set:
-                for file in duplicate_file.duplicate_set.files:
-                    if file.keep and file.id != duplicate_file.id:
-                        kept_file_path = file.file_path
-                        break
-
             # Stage 2: Remove item from qBittorrent (deletes any remaining files)
             if not skip_qbit:
                 item_hash = await self._stage_qbittorrent_removal(
-                    file_path, history, kept_file_path=kept_file_path
+                    duplicate_file, history, located_path, kept_file
                 )
                 await self.db.commit()
 
-            # Stage 3: Rescan *arr AFTER deletion (SKIPPED - will be done once for entire set)
-            if not skip_rescan:
-                # This is for individual file deletions outside of batch processing
-                # duplicate_file.duplicate_set is already loaded via selectinload
-                kept_file = None
-                if duplicate_file.duplicate_set:
-                    for file in duplicate_file.duplicate_set.files:
-                        if file.keep and file.id != duplicate_file.id:
-                            kept_file = file
-                            break
+            # Stage 3: Rescan *arr AFTER deletion, unless the caller rescans
+            # once for the whole set
+            if not skip_rescan and arr_type and arr_media_id and kept_file:
+                await self._stage_arr_rescan(
+                    arr_type, arr_media_id, history, kept_file.file_path
+                )
+                await self.db.commit()
 
-                if arr_type and arr_media_id and kept_file:
-                    kept_file_path = kept_file.file_path
-                    await self._stage_arr_rescan(
-                        arr_type, arr_media_id, history, kept_file_path
-                    )
-                    await self.db.commit()
-
-            # Stage 4: Fallback disk cleanup (for any stragglers)
-            # Build list of files to protect (all files marked keep=True in this duplicate set)
-            protected_files = set()
-            if duplicate_file.duplicate_set:
-                for file in duplicate_file.duplicate_set.files:
-                    if file.keep and file.id != duplicate_file.id:
-                        protected_files.add(file.file_path)
-
-            await self._stage_disk_removal(
-                file_path, history, protected_files, located_path
-            )
+            # Stage 4: Delete the file if it is still there, and its leftovers
+            await self._stage_disk_removal(file_path, history, located_path)
             await self.db.commit()
 
-            # Stage 5: Refresh only the specific media in Plex (targeted refresh)
+            # Stage 5: Refresh the item on the media server that reported it
             await self._stage_media_server_refresh(history, duplicate_file)
 
             # Store metadata in history
@@ -344,93 +415,33 @@ class DeletionPipeline:
 
     async def _stage_qbittorrent_removal(
         self,
-        file_path: str,
+        duplicate_file: DuplicateFile,
         history: DeletionHistory,
-        kept_file_path: Optional[str] = None,
+        located_path: Optional[str],
+        kept_file: Optional[DuplicateFile],
     ) -> Optional[str]:
         """
-        Stage 2: Remove item from qBittorrent AND delete files
-
-        Searches qBittorrent's library by filename (path-agnostic) and removes
-        the item. Deletes files via qBittorrent's API since qBit knows the exact
-        file locations better than path matching.
+        Stage 2: Remove the file's torrent from qBittorrent, with its data
 
         CRITICAL: This must complete BEFORE *arr rescan to ensure the deleted file
         is fully removed and won't be re-imported.
 
-        SMART SAFETY CHECK:
-        - If the KEPT file has a torrent, skip qBittorrent deletion (keep it seeding)
-          but still mark the lower quality item for disk cleanup
-        - If the KEPT file has NO torrent, proceed with qBittorrent deletion (safe)
-        - If no kept file exists and only 1 torrent, refuse deletion (data loss prevention)
+        The torrent stays, and the disk stage removes just the file, when
+        removing it would take more than this file:
+        - the kept file has a torrent, which may be this one and should keep seeding
+        - the torrent holds other videos too, as a season pack does
+        - there is no kept file and this is the only torrent holding the file
 
         Returns:
-            Item hash if found and removed
+            Hash of the removed torrent
         """
+        file_path = duplicate_file.file_path
         try:
-            # Try to find the actual file path first (may differ from Plex path)
-            # This improves qBittorrent matching since it knows the real filesystem paths
-            actual_path = self._find_file_in_media_root(file_path)
-            search_path = actual_path if actual_path else file_path
+            match = await self.qbit_service.find_item_by_file_path(
+                located_path or file_path, duplicate_file.file_size
+            )
 
-            logger.debug(f"Searching qBittorrent for file: {search_path}")
-            result = await self.qbit_service.find_item_by_file_path(search_path)
-
-            if result:
-                item_hash, torrent_count = result
-
-                # SMART CHECK: Does the kept file have a torrent?
-                if kept_file_path:
-                    kept_file_result = await self.qbit_service.find_item_by_file_path(
-                        kept_file_path
-                    )
-                    if kept_file_result:
-                        # Kept file HAS a torrent - we want to keep that one seeding
-                        logger.info(
-                            "Kept file has a torrent in qBittorrent. Skipping qBittorrent deletion "
-                            "to preserve seeding. Will delete unwanted file via disk cleanup only."
-                        )
-                        # Mark qBittorrent as "done" (skipped intentionally)
-                        history.deleted_from_qbit = True
-                        # Don't mark disk as deleted - let disk cleanup handle it
-                        history.deleted_from_disk = False
-                        return None
-                    else:
-                        # Kept file has NO torrent - safe to delete this torrent
-                        logger.info(
-                            "Kept file not in qBittorrent. Safe to delete torrent for unwanted file."
-                        )
-                elif torrent_count <= 1:
-                    # No kept file AND only 1 torrent - DANGER!
-                    logger.warning(
-                        f"Skipping qBittorrent deletion - only 1 torrent found and no other file to keep. "
-                        f"Cannot delete the last copy! File: {file_path}"
-                    )
-                    history.error = (
-                        f"{history.error}; Only 1 torrent exists and no kept file - cannot delete last copy"
-                        if history.error
-                        else "Only 1 torrent exists and no kept file - cannot delete last copy"
-                    )
-                    history.deleted_from_qbit = False
-                    history.deleted_from_disk = False
-                    return None
-
-                if self.dry_run:
-                    logger.info(
-                        f"[DRY-RUN] Would remove item {item_hash} from qBittorrent (with files)"
-                    )
-                    history.deleted_from_qbit = True
-                    history.deleted_from_disk = True
-                else:
-                    # Delete item AND files - qBit knows exact paths
-                    await self.qbit_service.remove_item(item_hash, delete_files=True)
-                    history.deleted_from_qbit = True
-                    history.deleted_from_disk = True
-                    logger.info(
-                        f"Removed item {item_hash} from qBittorrent and deleted files"
-                    )
-                return item_hash
-            else:
+            if not match:
                 # Not finding the item is OK - file might have been manually added
                 # or acquired outside of qBittorrent. We'll clean it up in disk stage.
                 history.deleted_from_qbit = True
@@ -439,6 +450,51 @@ class DeletionPipeline:
                     "Will attempt disk cleanup in next stage."
                 )
                 return None
+
+            if kept_file:
+                if await self.qbit_service.find_item_by_file_path(
+                    kept_file.file_path, kept_file.file_size
+                ):
+                    logger.info(
+                        "Kept file has a torrent in qBittorrent. Skipping qBittorrent deletion "
+                        "to preserve seeding. Will delete unwanted file via disk cleanup only."
+                    )
+                    history.deleted_from_qbit = True
+                    return None
+            elif match.count <= 1:
+                # No kept file AND only 1 torrent - DANGER!
+                logger.warning(
+                    f"Skipping qBittorrent deletion - only 1 torrent found and no other file to keep. "
+                    f"Cannot delete the last copy! File: {file_path}"
+                )
+                history.error = (
+                    f"{history.error}; Only 1 torrent exists and no kept file - cannot delete last copy"
+                    if history.error
+                    else "Only 1 torrent exists and no kept file - cannot delete last copy"
+                )
+                history.deleted_from_qbit = False
+                return None
+
+            if match.holds_other_videos:
+                logger.info(
+                    f"Torrent {match.hash} holds other videos too. Leaving it in "
+                    "qBittorrent; the disk stage removes only this file."
+                )
+                history.deleted_from_qbit = True
+                return None
+
+            if self.dry_run:
+                logger.info(
+                    f"[DRY-RUN] Would remove item {match.hash} from qBittorrent (with files)"
+                )
+            else:
+                await self.qbit_service.remove_item(match.hash, delete_files=True)
+                logger.info(
+                    f"Removed item {match.hash} from qBittorrent and deleted files"
+                )
+            history.deleted_from_qbit = True
+            history.deleted_from_disk = True
+            return match.hash
 
         except ValueError as e:
             # qBittorrent not configured - don't mark as success, record why it failed
@@ -519,7 +575,7 @@ class DeletionPipeline:
                     series_id = episode["seriesId"]
 
                     logger.info(
-                        f"Found episode S{episode.get('seasonNumber'):02d}E{episode.get('episodeNumber'):02d} in Sonarr. "
+                        f"Found '{episode.get('title')}' in Sonarr (series {series_id}). "
                         f"Deleting this version via Sonarr API (includes disk deletion)."
                     )
 
@@ -575,258 +631,63 @@ class DeletionPipeline:
         self,
         file_path: str,
         history: DeletionHistory,
-        protected_files: set[str] = None,
-        located_path: Optional[str] = None,
+        located_path: Optional[str],
     ):
         """
-        Stage 4: Fallback disk cleanup and associated files removal
+        Stage 4: Delete the file if it is still on disk, then what it leaves behind
 
-        This is now a FALLBACK stage that runs after qBittorrent deletion.
-        It handles:
-        - Files that weren't in qBittorrent (manually added)
-        - Associated files qBittorrent might have missed (.nfo, .srt, fanart, etc.)
-        - Common subdirectories (Sample, Subs, Proof, Extras)
-        - Empty parent directories cleanup
-
-        If qBittorrent already deleted the file (deleted_from_disk=True), this stage
-        focuses on cleaning up associated files and directories only.
+        An *arr or qBittorrent can report a delete and leave the file, so the
+        filesystem decides. This also covers files no service knows about.
 
         Args:
-            file_path: Path to the file being deleted
+            file_path: The file's path as the media server reports it
             history: DeletionHistory record
-            protected_files: Set of file paths that must NOT be deleted (files we're keeping)
+            located_path: Where the file was before any stage ran, None when
+                this container cannot see it
         """
-        if protected_files is None:
-            protected_files = set()
+        if not located_path:
+            if history.deleted_from_arr or history.deleted_from_qbit:
+                history.deleted_from_disk = True
+                logger.info(
+                    f"Main file already deleted: {os.path.basename(file_path)} "
+                    f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
+                )
+            else:
+                error_msg = (
+                    f"File not found for deletion (checked its path and "
+                    f"{settings.media_dir}): {file_path}"
+                )
+                logger.error(error_msg)
+                history.error = (
+                    f"{history.error}; {error_msg}" if history.error else error_msg
+                )
+                history.deleted_from_disk = False
+            return
+
+        if os.path.isfile(located_path):
+            # An *arr or qBittorrent delete can report success and leave the
+            # file behind; the filesystem decides.
+            if history.deleted_from_disk:
+                logger.warning(
+                    f"An earlier stage reported this file deleted but it is "
+                    f"still on disk, removing it here: {located_path}"
+                )
+            try:
+                self._remove(located_path)
+            except OSError as e:
+                error_msg = f"Could not delete {located_path}: {e.strerror or e}"
+                logger.error(error_msg)
+                history.error = (
+                    f"{history.error}; {error_msg}" if history.error else error_msg
+                )
+                history.deleted_from_disk = False
+                return
 
         try:
-            # If qBittorrent already deleted the file, we just clean up remnants
-            if history.deleted_from_disk:
-                logger.info(
-                    "An earlier stage reported this file deleted; checking the "
-                    "filesystem and cleaning up associated files..."
-                )
-
-            # Find the actual file location by searching media root
-            actual_path = self._find_file_in_media_root(file_path)
-
-            if actual_path and os.path.exists(actual_path):
-                # Main file still exists - delete it and associated files
-                parent_dir = os.path.dirname(actual_path)
-                base_name = os.path.splitext(os.path.basename(actual_path))[0]
-
-                if self.dry_run:
-                    logger.info(f"[DRY-RUN] Would delete file from disk: {actual_path}")
-
-                    # Find associated files
-                    associated_files = []
-                    if os.path.exists(parent_dir):
-                        for file in os.listdir(parent_dir):
-                            file_path_full = os.path.join(parent_dir, file)
-                            # Match files with same base name (different extensions)
-                            if (
-                                file.startswith(base_name)
-                                and file_path_full != actual_path
-                            ):
-                                associated_files.append(file_path_full)
-
-                    if associated_files:
-                        logger.info(
-                            f"[DRY-RUN] Would also delete {len(associated_files)} associated files"
-                        )
-                        for assoc_file in associated_files:
-                            logger.debug(f"[DRY-RUN]   - {assoc_file}")
-
-                    # Check for subdirectories to clean up
-                    cleanup_subdirs = ["sample", "subs", "proof", "extras"]
-                    subdirs_to_remove = []
-
-                    if os.path.exists(parent_dir):
-                        for item in os.listdir(parent_dir):
-                            item_path = os.path.join(parent_dir, item)
-                            if (
-                                os.path.isdir(item_path)
-                                and item.lower() in cleanup_subdirs
-                            ):
-                                subdirs_to_remove.append(item)
-
-                    if subdirs_to_remove:
-                        logger.info(
-                            f"[DRY-RUN] Would also delete {len(subdirs_to_remove)} subdirectories: {', '.join(subdirs_to_remove)}"
-                        )
-
-                    # Check for empty directories that would be removed (recursive)
-                    logger.info(
-                        f"[DRY-RUN] Would recursively remove empty parent directories starting from: {parent_dir}"
-                    )
-
-                    history.deleted_from_disk = True
-                else:
-                    try:
-                        # An *arr or qBittorrent delete can report success and
-                        # leave the file behind; the filesystem decides.
-                        if history.deleted_from_disk:
-                            logger.warning(
-                                f"An earlier stage reported this file deleted but it is "
-                                f"still on disk, removing it here: {actual_path}"
-                            )
-                        os.remove(actual_path)
-                        logger.info(f"Deleted file from disk: {actual_path}")
-
-                        # Delete associated files using helper method
-                        # Always exclude the main file to prevent double deletion
-                        filename = os.path.basename(actual_path)
-                        self._cleanup_associated_files(
-                            parent_dir, base_name, exclude_filename=filename
-                        )
-
-                        # Clean up common subdirectories (Sample, Subs, etc.)
-                        # These are typically found in scene releases and should be removed
-                        cleanup_subdirs = ["sample", "subs", "proof", "extras"]
-                        deleted_subdirs = []
-
-                        if os.path.exists(parent_dir):
-                            for item in os.listdir(parent_dir):
-                                item_path = os.path.join(parent_dir, item)
-                                # Check if it's a directory and matches common subdir names (case insensitive)
-                                if (
-                                    os.path.isdir(item_path)
-                                    and item.lower() in cleanup_subdirs
-                                ):
-                                    try:
-                                        # Remove directory and all its contents
-                                        shutil.rmtree(item_path)
-                                        deleted_subdirs.append(item)
-                                        logger.info(
-                                            f"Removed subdirectory: {item_path}"
-                                        )
-                                    except (PermissionError, OSError) as e:
-                                        logger.debug(
-                                            f"No write permission for subdirectory {item} (readonly mount): {e}"
-                                        )
-                                    except Exception as e:
-                                        logger.warning(
-                                            f"Failed to remove subdirectory {item}: {e}"
-                                        )
-
-                        if deleted_subdirs:
-                            logger.info(
-                                f"Deleted {len(deleted_subdirs)} subdirectories: {', '.join(deleted_subdirs)}"
-                            )
-
-                        current_dir = parent_dir
-                        media_root = self._get_media_root_from_path(actual_path)
-                        removed_dirs = []
-
-                        while current_dir != media_root and current_dir.startswith(
-                            media_root
-                        ):
-                            if os.path.exists(current_dir) and os.path.isdir(
-                                current_dir
-                            ):
-                                if not os.listdir(current_dir):
-                                    try:
-                                        os.rmdir(current_dir)
-                                        removed_dirs.append(current_dir)
-                                        logger.info(
-                                            f"Removed empty directory: {current_dir}"
-                                        )
-                                        current_dir = os.path.dirname(current_dir)
-                                    except (PermissionError, OSError) as e:
-                                        logger.debug(
-                                            f"No write permission for directory {current_dir} (readonly mount): {e}"
-                                        )
-                                        break
-                                    except Exception as e:
-                                        logger.warning(
-                                            f"Failed to remove directory {current_dir}: {e}"
-                                        )
-                                        break
-                                else:
-                                    # Directory not empty, stop cleanup
-                                    break
-                            else:
-                                break
-
-                        if removed_dirs:
-                            logger.info(
-                                f"Cleaned up {len(removed_dirs)} empty directories"
-                            )
-
-                        history.deleted_from_disk = True
-
-                    except (PermissionError, OSError) as e:
-                        # Readonly filesystem or permission denied
-                        # Check if it's errno 30 (EROFS - Read-only file system)
-                        if isinstance(e, OSError) and e.errno == 30:
-                            logger.info(
-                                f"Read-only file system for {actual_path}. "
-                                f"File deletion handled by Radarr/Sonarr API."
-                            )
-                        else:
-                            logger.info(
-                                f"No write permission for {actual_path} (readonly mount). "
-                                f"File deletion handled by Radarr/Sonarr API."
-                            )
-                        history.deleted_from_disk = True
-            else:
-                # File not found by exact path or media_dir search
-                # Only mark as deleted if a service (arr/qBit) confirmed deletion
-                filename = os.path.basename(file_path)
-
-                if history.deleted_from_arr or history.deleted_from_qbit:
-                    # A service deleted it - mark as success
-                    if not history.deleted_from_disk:
-                        history.deleted_from_disk = True
-
-                    logger.info(
-                        f"Main file already deleted: {filename} "
-                        f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
-                    )
-                else:
-                    # File not found AND no service deleted it - ERROR!
-                    error_msg = f"File not found for deletion (checked exact path and {settings.media_dir}): {file_path}"
-                    logger.error(error_msg)
-                    history.error = (
-                        f"{history.error}; {error_msg}" if history.error else error_msg
-                    )
-                    # Don't mark as deleted since we didn't actually delete anything
-                    history.deleted_from_disk = False
-                    # Skip cleanup - nothing to clean up if we can't find the file
-                    return
-
-                # Where the file actually lived, if it was found before an
-                # earlier stage removed it, else the media server's path
-                parent_dir = os.path.dirname(located_path or file_path)
-                base_name = os.path.splitext(filename)[0]
-
-                if os.path.exists(parent_dir) and os.path.isdir(parent_dir):
-                    # Clean up any orphaned files in the original directory
-                    self._cleanup_associated_files(
-                        parent_dir, base_name, exclude_filename=filename
-                    )
-
-                    # Try to remove the directory if it's now empty
-                    try:
-                        if not os.listdir(parent_dir):
-                            if self.dry_run:
-                                logger.info(
-                                    f"[DRY-RUN] Would remove empty directory: {parent_dir}"
-                                )
-                            else:
-                                os.rmdir(parent_dir)
-                                logger.info(f"Removed empty directory: {parent_dir}")
-                    except Exception as e:
-                        logger.debug(f"Could not remove directory {parent_dir}: {e}")
-        except PermissionError:
-            # Readonly filesystem at search level - mark as success since *arr handles deletion
-            logger.info(
-                f"Readonly filesystem for {file_path}. File deletion handled by Radarr/Sonarr API."
-            )
-            history.deleted_from_disk = True
-        except Exception as e:
-            logger.error(f"Disk deletion failed: {e}")
-            raise
+            self._clean_up_after(located_path)
+        except OSError as e:
+            logger.warning(f"Could not clean up after {located_path}: {e}")
+        history.deleted_from_disk = True
 
     async def rescan_for_kept_file(
         self,
@@ -1244,8 +1105,12 @@ class DeletionPipeline:
             history.media_server_refreshed = True
 
         except Exception as e:
-            logger.error(f"Media server refresh failed: {e}")
-            raise
+            # The file is already gone; the server catches up on its next scan.
+            error_msg = f"{server_type.value.title()} refresh failed: {e}"
+            logger.error(error_msg)
+            history.error = (
+                f"{history.error}; {error_msg}" if history.error else error_msg
+            )
 
     async def _rollback_deletion(
         self,

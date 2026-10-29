@@ -80,20 +80,20 @@ async def rescan_media_item(
 
                     # Update media path in *arr
                     media_item["path"] = new_folder
-                    await update_method(data=media_item)
+                    await update_method(media_item)
                     logger_instance.info(
                         f"Updated {media_type} path in {media_type.capitalize()}arr to: {new_folder}"
                     )
                     scan_path = new_folder
 
-                elif current_path and current_path != scan_path:
+                elif current_path and not _within(current_path, scan_path):
                     # File is in proper folder but path is different - update it
                     logger_instance.info(
                         f"{media_type.capitalize()} path mismatch detected. "
                         f"Current: {current_path}, Updating to: {scan_path}"
                     )
                     media_item["path"] = scan_path
-                    await update_method(data=media_item)
+                    await update_method(media_item)
                     logger_instance.info(
                         f"Updated {media_type} path in {media_type.capitalize()}arr to: {scan_path}"
                     )
@@ -134,6 +134,12 @@ async def rescan_media_item(
     except Exception as e:
         logger_instance.error(f"Error triggering scan for {media_type} {media_id}: {e}")
         raise
+
+
+def _within(folder: str, path: str) -> bool:
+    """Whether path is folder itself or inside it, as a season folder is."""
+    folder = folder.rstrip("/")
+    return path == folder or path.startswith(folder + "/")
 
 
 def _create_media_subfolder(

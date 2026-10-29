@@ -5,7 +5,7 @@ Tests for arr_helpers module
 import logging
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, create_autospec, patch
 
 import pytest
 
@@ -114,34 +114,61 @@ async def test_rescan_media_item_without_kept_file():
 
 @pytest.mark.asyncio
 async def test_rescan_media_item_path_mismatch():
-    """Test that path is updated when it doesn't match the kept file's directory"""
-    mock_client = MagicMock()
-    mock_client.get_movie = AsyncMock(
-        return_value={
-            "id": 1,
-            "title": "Test Movie",
-            "year": 2024,
-            "path": "/movies/Old Path",
-        }
-    )
-    mock_client.get_root_folder = AsyncMock(return_value=[{"path": "/movies"}])
-    mock_client.update_movie = AsyncMock()
-    mock_client.post_command = AsyncMock()
+    """
+    A kept file outside the movie's folder moves the movie there.
 
-    logger = logging.getLogger("test")
+    The client is spec'd so a call it would reject fails here too: a plain
+    mock accepted update_movie(data=...), which the real client turns down.
+    """
+    client = create_autospec(RadarrClient, instance=True)
+    client.get_movie.return_value = {
+        "id": 1,
+        "title": "Test Movie",
+        "year": 2024,
+        "path": "/movies/Old Path",
+    }
+    client.get_root_folder.return_value = [{"path": "/movies"}]
 
     result = await rescan_media_item(
-        client=mock_client,
+        client=client,
         media_id=1,
         media_type="movie",
         kept_file_path="/movies/New Path/movie.mkv",
-        logger_instance=logger,
+        logger_instance=logging.getLogger("test"),
     )
 
     assert result is True
-    mock_client.update_movie.assert_called_once()
-    updated_movie = mock_client.update_movie.call_args[1]["data"]
-    assert updated_movie["path"] == "/movies/New Path"
+    client.update_movie.assert_awaited_once()
+    assert client.update_movie.await_args.args[0]["path"] == "/movies/New Path"
+
+
+@pytest.mark.asyncio
+async def test_rescan_media_item_keeps_a_series_path_over_its_season_folder():
+    """
+    Episodes live in season folders inside the series folder. That is not a
+    path mismatch, and the series must not be moved into its own season.
+    """
+    client = create_autospec(SonarrClient, instance=True)
+    client.get_series.return_value = {
+        "id": 1,
+        "title": "Test Series",
+        "path": "/tv/Test Series (2024)",
+    }
+    client.get_root_folder.return_value = [{"path": "/tv"}]
+
+    result = await rescan_media_item(
+        client=client,
+        media_id=1,
+        media_type="series",
+        kept_file_path="/tv/Test Series (2024)/Season 1/S01E01.mkv",
+        logger_instance=logging.getLogger("test"),
+    )
+
+    assert result is True
+    client.update_series.assert_not_awaited()
+    client.post_command.assert_awaited_once_with(
+        "DownloadedEpisodesScan", path="/tv/Test Series (2024)/Season 1"
+    )
 
 
 @pytest.mark.asyncio

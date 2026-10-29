@@ -68,57 +68,25 @@ class ScheduledDeletionService:
         errors = []
 
         for duplicate_set in pending_sets:
-            try:
-                set_errors: list[str] = []
-                # keep=False means delete
-                files_to_delete = [f for f in duplicate_set.files if not f.keep]
-                files_to_keep = [f for f in duplicate_set.files if f.keep]
-
-                if not files_to_delete:
-                    logger.warning(
-                        f"Set {duplicate_set.id} ({duplicate_set.title}) "
-                        "has no files marked for deletion - skipping"
-                    )
-                    continue
-
-                logger.info(
-                    f"Deleting {len(files_to_delete)} files from set {duplicate_set.id} "
-                    f"({duplicate_set.title})"
+            if all(f.keep for f in duplicate_set.files):
+                logger.warning(
+                    f"Set {duplicate_set.id} ({duplicate_set.title}) "
+                    "has no files marked for deletion - skipping"
                 )
+                continue
 
-                # Rescan once per set after every file is gone, as the single-set
-                # endpoint does, instead of once per deleted file.
-                for file in files_to_delete:
-                    try:
-                        await pipeline.delete_file(file.id, skip_rescan=True)
-                        files_deleted += 1
-                    except Exception as e:
-                        error_msg = f"Failed to delete {file.file_path}: {str(e)}"
-                        logger.error(error_msg)
-                        set_errors.append(error_msg)
-
-                if set_errors:
-                    errors.extend(set_errors)
-                    continue
-
-                if files_to_keep:
-                    try:
-                        await pipeline.rescan_for_kept_file(
-                            duplicate_set.media_type,
-                            files_to_keep[0].file_path,
-                            duplicate_set.id,
-                        )
-                    except Exception as e:
-                        logger.warning(f"Failed to trigger *arr rescan: {e}")
-
-                if not dry_run:
-                    duplicate_set.status = DuplicateStatus.PROCESSED
-                sets_processed += 1
-
+            try:
+                outcome = await pipeline.delete_set(duplicate_set)
             except Exception as e:
                 error_msg = f"Error processing set {duplicate_set.id}: {str(e)}"
                 logger.error(error_msg, exc_info=True)
                 errors.append(error_msg)
+                continue
+
+            files_deleted += outcome.files_deleted
+            errors.extend(outcome.errors)
+            if not outcome.errors:
+                sets_processed += 1
 
         # Commit changes
         if not dry_run:

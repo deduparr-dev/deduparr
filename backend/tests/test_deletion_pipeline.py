@@ -2,10 +2,17 @@
 Tests for deletion pipeline
 """
 
+import errno
+import os
+
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from app.core.config import settings
 from app.services.deletion.pipeline import DeletionPipeline
+from app.services.download.qbittorrent_service import TorrentMatch
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from app.models import DuplicateSet, DuplicateFile, DeletionHistory
 from app.models.duplicate import MediaType, DuplicateStatus
 from app.models.config import Config
@@ -118,8 +125,10 @@ async def test_delete_file_not_found(deletion_pipeline, test_db, setup_configs):
 async def test_delete_file_already_deleted(
     deletion_pipeline, test_db, setup_configs, movie_duplicate_file
 ):
-    """Test deletion when file already has deletion history"""
-    history = DeletionHistory(duplicate_file_id=movie_duplicate_file.id)
+    """A file an earlier deletion removed is not deleted twice"""
+    history = DeletionHistory(
+        duplicate_file_id=movie_duplicate_file.id, deleted_from_disk=True
+    )
     test_db.add(history)
     await test_db.commit()
 
@@ -147,7 +156,6 @@ async def test_delete_movie_full_pipeline_success(
         ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
-        patch("os.walk") as mock_walk,
         patch("os.listdir") as mock_listdir,
     ):
         mock_qbit_instance = MagicMock()
@@ -202,10 +210,6 @@ async def test_delete_movie_full_pipeline_success(
         # gone. Returning True here would describe a file that was deleted and
         # is still present, which is what the fallback stage exists to clean up.
         mock_exists.side_effect = lambda path: "Test Movie.mkv" not in str(path)
-        # Mock os.walk for _find_file_in_media_root
-        mock_walk.return_value = [
-            ("/media/movies", [], ["Test Movie.mkv"]),
-        ]
         mock_listdir.return_value = []  # No associated files
 
         mock_plex_instance = AsyncMock()
@@ -273,7 +277,6 @@ async def test_delete_episode_full_pipeline_success(
         ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
-        patch("os.walk") as mock_walk,
         patch("os.listdir") as mock_listdir,
     ):
         mock_qbit_instance = MagicMock()
@@ -296,10 +299,6 @@ async def test_delete_episode_full_pipeline_success(
 
         # As above: qBittorrent removed the file with its data
         mock_exists.side_effect = lambda path: "S01E01.mkv" not in str(path)
-        # Mock os.walk for _find_file_in_media_root
-        mock_walk.return_value = [
-            ("/media/tv/Test Series", [], ["S01E01.mkv"]),
-        ]
         mock_listdir.return_value = []  # No associated files
 
         mock_plex_instance = AsyncMock()
@@ -349,7 +348,6 @@ async def test_delete_file_skip_qbit(
         ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
-        patch("os.walk") as mock_walk,
         patch("os.listdir") as mock_listdir,
     ):
         mock_radarr_instance = AsyncMock()
@@ -366,9 +364,6 @@ async def test_delete_file_skip_qbit(
         mock_radarr_instance.del_movie_file = AsyncMock()
 
         mock_exists.return_value = True
-        mock_walk.return_value = [
-            ("/media/movies", [], ["Test Movie.mkv"]),
-        ]
         mock_listdir.return_value = []  # No associated files
 
         mock_plex_instance = AsyncMock()
@@ -530,7 +525,6 @@ async def test_delete_file_disk_failure(
         ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove") as mock_remove,
-        patch("os.walk") as mock_walk,
         patch("os.listdir") as mock_listdir,
     ):
         mock_qbit_instance = MagicMock()
@@ -555,10 +549,6 @@ async def test_delete_file_disk_failure(
         mock_plex_instance.refresh_item.return_value = True
 
         mock_exists.return_value = True
-        # Mock os.walk for _find_file_in_media_root
-        mock_walk.return_value = [
-            ("/media/movies", [], ["Test Movie.mkv"]),
-        ]
         mock_listdir.return_value = []  # No associated files
         mock_remove.side_effect = PermissionError("Permission denied")
 
@@ -578,7 +568,7 @@ async def test_delete_file_disk_failure(
 async def test_delete_file_plex_failure(
     deletion_pipeline, test_db, setup_configs, movie_duplicate_file
 ):
-    """Test rollback when Plex refresh fails"""
+    """A refresh failure after the file is gone is recorded, not raised"""
     file_id = movie_duplicate_file.id
     file_path = movie_duplicate_file.file_path
 
@@ -591,7 +581,6 @@ async def test_delete_file_plex_failure(
         ) as mock_plex_class,
         patch("os.path.exists") as mock_exists,
         patch("os.remove"),
-        patch("os.walk") as mock_walk,
         patch("os.listdir") as mock_listdir,
     ):
         mock_qbit_instance = MagicMock()
@@ -612,10 +601,6 @@ async def test_delete_file_plex_failure(
         mock_radarr_instance.del_movie_file = AsyncMock()
 
         mock_exists.return_value = True
-        # Mock os.walk for _find_file_in_media_root
-        mock_walk.return_value = [
-            ("/media/movies", [], ["Test Movie.mkv"]),
-        ]
         mock_listdir.return_value = []  # No associated files
 
         mock_plex_instance = AsyncMock()
@@ -625,15 +610,7 @@ async def test_delete_file_plex_failure(
             "Plex connection failed"
         )
 
-        with pytest.raises(Exception, match="Plex connection failed"):
-            await deletion_pipeline.delete_file(file_id)
-
-        from sqlalchemy import select
-
-        result = await test_db.execute(
-            select(DeletionHistory).where(DeletionHistory.duplicate_file_id == file_id)
-        )
-        history = result.scalar_one()
+        history = await deletion_pipeline.delete_file(file_id)
 
         assert "Plex connection failed" in history.error
         assert history.deleted_from_qbit is True
@@ -736,34 +713,16 @@ async def test_protected_files_not_deleted(deletion_pipeline, test_db, setup_con
 
 @pytest.mark.asyncio
 async def test_disk_stage_removes_a_file_an_earlier_stage_only_claimed_to_delete(
-    test_db, create_duplicate_set, create_duplicate_file, tmp_path, monkeypatch
+    test_db, tmp_path
 ):
     """An earlier stage reporting the file deleted does not stop its removal."""
-    from app.services.deletion.pipeline import DeletionPipeline
-
-    monkeypatch.setattr(
-        DeletionPipeline,
-        "_get_plex_service",
-        AsyncMock(return_value=MagicMock()),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "app.services.deletion.pipeline.get_media_server",
-        AsyncMock(return_value=AsyncMock()),
-    )
-
     leftover = tmp_path / "Still Here.mkv"
     leftover.write_bytes(b"x" * 1024)
 
-    dup_set = await create_duplicate_set(title="Still Here")
-    dup_file = await create_duplicate_file(
-        dup_set.id, file_path=str(leftover), keep=False
+    history = DeletionHistory(duplicate_file_id=1, deleted_from_disk=True)
+    await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
+        str(leftover), history, str(leftover)
     )
-
-    pipeline = DeletionPipeline(test_db, dry_run=False)
-    history = DeletionHistory(duplicate_file_id=dup_file.id, deleted_from_disk=True)
-
-    await pipeline._stage_disk_removal(str(leftover), history)
 
     assert not leftover.exists()
     assert history.deleted_from_disk is True
@@ -778,8 +737,6 @@ async def test_disk_stage_cleans_up_beside_a_remapped_file(test_db, tmp_path):
     has already removed the file, so only the location resolved beforehand
     leads to the leftovers.
     """
-    from app.services.deletion.pipeline import DeletionPipeline
-
     movie_dir = tmp_path / "media" / "Movies" / "Avatar (2009)"
     movie_dir.mkdir(parents=True)
     leftovers = [movie_dir / "Avatar.nfo", movie_dir / "Avatar.srt"]
@@ -792,7 +749,6 @@ async def test_disk_stage_cleans_up_beside_a_remapped_file(test_db, tmp_path):
     await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
         "/plexdownloads/Movies/Avatar (2009)/Avatar.mkv",
         history,
-        set(),
         str(movie_dir / "Avatar.mkv"),
     )
 
@@ -802,10 +758,11 @@ async def test_disk_stage_cleans_up_beside_a_remapped_file(test_db, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_disk_stage_never_touches_a_same_named_file_elsewhere(test_db, tmp_path):
+async def test_disk_stage_never_touches_a_same_named_file_elsewhere(
+    test_db, tmp_path, monkeypatch
+):
     """Another show's S01E01.mkv is not a leftover of this one's."""
-    from app.services.deletion.pipeline import DeletionPipeline
-
+    monkeypatch.setattr(settings, "media_dir", str(tmp_path))
     show_a = tmp_path / "tv" / "Show A" / "Season 1"
     show_b = tmp_path / "tv" / "Show B" / "Season 1"
     show_a.mkdir(parents=True)
@@ -814,9 +771,271 @@ async def test_disk_stage_never_touches_a_same_named_file_elsewhere(test_db, tmp
     other_show.write_bytes(b"x" * 1024)
 
     # Sonarr has already removed Show A's copy
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    gone = str(show_a / "S01E01.mkv")
+    located = pipeline._locate_file(gone, 1024)
     history = DeletionHistory(duplicate_file_id=1, deleted_from_arr=True)
+    await pipeline._stage_disk_removal(gone, history, located)
+
+    assert located is None
+    assert other_show.exists()
+
+
+@pytest.mark.asyncio
+async def test_disk_stage_leaves_the_kept_version_and_its_files(test_db, tmp_path):
+    """
+    Only files named after the deleted video go with it.
+
+    The kept version and an extra both start with the deleted file's name,
+    which used to be enough to delete them.
+    """
+    movie = tmp_path / "movies" / "Movie (2020)"
+    movie.mkdir(parents=True)
+    unwanted = movie / "Movie (2020).mkv"
+    its_files = [
+        movie / "Movie (2020).nfo",
+        movie / "Movie (2020).en.srt",
+        movie / "Movie (2020)-poster.jpg",
+    ]
+    others = [
+        movie / "Movie (2020) - 1080p.mkv",
+        movie / "Movie (2020) - 1080p.en.srt",
+        movie / "Movie (2020)-trailer.mkv",
+        movie / "poster.jpg",
+    ]
+    for path in [unwanted, *its_files, *others]:
+        path.write_text("x")
+
+    history = DeletionHistory(duplicate_file_id=1)
     await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
-        str(show_a / "S01E01.mkv"), history, set(), None
+        str(unwanted), history, str(unwanted)
     )
 
-    assert other_show.exists()
+    assert not unwanted.exists()
+    assert not any(path.exists() for path in its_files)
+    assert all(path.exists() for path in others)
+    assert history.deleted_from_disk is True
+
+
+@pytest.mark.asyncio
+async def test_disk_stage_keeps_folders_another_video_still_uses(test_db, tmp_path):
+    """Deleting one episode leaves the season's Subs folder to the others."""
+    season = tmp_path / "tv" / "Show" / "Season 1"
+    (season / "Subs").mkdir(parents=True)
+    subtitles = season / "Subs" / "Show - S01E02.en.srt"
+    subtitles.write_text("x")
+    unwanted = season / "Show - S01E01 - 720p.mkv"
+    for path in [unwanted, season / "Show - S01E01 - 1080p.mkv"]:
+        path.write_text("x")
+
+    history = DeletionHistory(duplicate_file_id=1)
+    await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
+        str(unwanted), history, str(unwanted)
+    )
+
+    assert not unwanted.exists()
+    assert subtitles.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dry_run", [False, True])
+async def test_disk_stage_removes_a_release_folder_with_its_last_video(
+    test_db, tmp_path, dry_run
+):
+    """A release folder goes with its only video, unless this is a dry run."""
+    library = tmp_path / "movies"
+    release = library / "Movie.2020.720p"
+    (release / "Sample").mkdir(parents=True)
+    (release / "Sample" / "movie-sample.mkv").write_text("x")
+    video = release / "Movie.2020.720p.mkv"
+    video.write_text("x")
+    (release / "Movie.2020.720p.nfo").write_text("x")
+    (library / "Other (2021)").mkdir()
+
+    history = DeletionHistory(duplicate_file_id=1)
+    await DeletionPipeline(test_db, dry_run=dry_run)._stage_disk_removal(
+        str(video), history, str(video)
+    )
+
+    assert release.exists() is dry_run
+    assert video.exists() is dry_run
+    assert (library / "Other (2021)").exists()
+    assert history.deleted_from_disk is True
+
+
+@pytest.mark.asyncio
+async def test_disk_stage_reports_a_file_it_could_not_delete(
+    test_db, tmp_path, monkeypatch
+):
+    """A read-only mount leaves the file in place, and the deletion says so."""
+    video = tmp_path / "Movie.mkv"
+    video.write_text("x")
+
+    def read_only(path):
+        raise OSError(errno.EROFS, "Read-only file system", path)
+
+    monkeypatch.setattr(os, "remove", read_only)
+    history = DeletionHistory(duplicate_file_id=1)
+    await DeletionPipeline(test_db, dry_run=False)._stage_disk_removal(
+        str(video), history, str(video)
+    )
+
+    assert video.exists()
+    assert history.deleted_from_disk is False
+    assert "Read-only file system" in history.error
+
+
+@pytest.mark.asyncio
+async def test_locate_file_follows_a_remapped_mount(test_db, tmp_path, monkeypatch):
+    """
+    A path from another mount is found by its tail, at the size the server
+    reported, never by its name alone.
+    """
+    monkeypatch.setattr(settings, "media_dir", str(tmp_path))
+    wanted = tmp_path / "movies" / "Avatar (2009)" / "Avatar.mkv"
+    namesake = tmp_path / "movies" / "Avatar (2022)" / "Avatar.mkv"
+    for path in [wanted, namesake]:
+        path.parent.mkdir(parents=True)
+        path.write_bytes(b"x" * 10)
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+
+    server_path = "/data/movies/Avatar (2009)/Avatar.mkv"
+    assert pipeline._locate_file(server_path, 10) == str(wanted)
+    # Same place, different file: the kept copy of another library, say
+    assert pipeline._locate_file(server_path, 11) is None
+    assert pipeline._locate_file("/data/movies/Gone (2001)/Avatar.mkv", 10) is None
+
+
+@pytest.mark.asyncio
+async def test_qbit_stage_leaves_a_torrent_that_holds_other_videos(
+    test_db, create_duplicate_set, create_duplicate_file
+):
+    """Removing a season pack with its data would take the other episodes too."""
+    dup_set = await create_duplicate_set(media_type=MediaType.EPISODE)
+    unwanted = await create_duplicate_file(dup_set.id, keep=False)
+    kept = await create_duplicate_file(dup_set.id, keep=True)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.qbit_service = AsyncMock()
+    pipeline.qbit_service.find_item_by_file_path.side_effect = [
+        TorrentMatch(hash="pack", count=1, holds_other_videos=True),
+        None,  # the kept file has no torrent of its own
+    ]
+    history = DeletionHistory(duplicate_file_id=unwanted.id)
+
+    assert (
+        await pipeline._stage_qbittorrent_removal(unwanted, history, None, kept) is None
+    )
+    pipeline.qbit_service.remove_item.assert_not_awaited()
+    assert history.deleted_from_qbit is True
+
+
+async def _with_files(test_db, set_id: int) -> DuplicateSet:
+    return (
+        await test_db.execute(
+            select(DuplicateSet)
+            .options(selectinload(DuplicateSet.files))
+            .where(DuplicateSet.id == set_id)
+        )
+    ).scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_delete_set_retries_only_what_an_earlier_attempt_left(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """
+    A file that could not be found is an error and keeps the set pending.
+    Once it is back, the next attempt deletes it and skips the one already gone.
+    """
+    keep, first, second = (tmp_path / f"{n}.mkv" for n in ("keep", "first", "second"))
+    keep.write_bytes(b"k" * 30)
+    first.write_bytes(b"f" * 10)
+
+    dup_set = await create_duplicate_set(media_server="disk")
+    await create_duplicate_file(
+        dup_set.id, file_path=str(keep), file_size=30, keep=True
+    )
+    await create_duplicate_file(dup_set.id, file_path=str(first), file_size=10)
+    await create_duplicate_file(dup_set.id, file_path=str(second), file_size=20)
+
+    dup_set = await _with_files(test_db, dup_set.id)
+    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
+
+    assert (outcome.files_deleted, outcome.space_reclaimed) == (1, 10)
+    assert len(outcome.errors) == 1
+    assert "File not found for deletion" in outcome.errors[0]
+    assert dup_set.status == DuplicateStatus.PENDING
+
+    second.write_bytes(b"s" * 20)
+    dup_set = await _with_files(test_db, dup_set.id)
+    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
+
+    assert (outcome.files_deleted, outcome.errors) == (1, [])
+    assert not first.exists() and not second.exists() and keep.exists()
+    assert dup_set.status == DuplicateStatus.PROCESSED
+
+
+@pytest.mark.asyncio
+async def test_delete_set_counts_a_deleted_file_when_the_refresh_fails(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path, monkeypatch
+):
+    """The file is gone, so the set is done; the failed refresh is a warning."""
+    server = AsyncMock()
+    server.refresh_item.side_effect = Exception("Plex connection failed")
+    monkeypatch.setattr(
+        "app.services.deletion.pipeline.get_media_server",
+        AsyncMock(return_value=server),
+    )
+    keep, drop = tmp_path / "keep.mkv", tmp_path / "drop.mkv"
+    keep.write_bytes(b"k" * 30)
+    drop.write_bytes(b"d" * 10)
+
+    dup_set = await create_duplicate_set()
+    await create_duplicate_file(
+        dup_set.id, file_path=str(keep), file_size=30, keep=True
+    )
+    await create_duplicate_file(dup_set.id, file_path=str(drop), file_size=10)
+
+    dup_set = await _with_files(test_db, dup_set.id)
+    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
+
+    assert (outcome.files_deleted, outcome.errors) == (1, [])
+    assert any("Plex refresh failed" in warning for warning in outcome.warnings)
+    assert not drop.exists()
+    assert dup_set.status == DuplicateStatus.PROCESSED
+
+
+@pytest.mark.asyncio
+async def test_arr_stage_deletes_an_orphaned_sonarr_file(
+    test_db, create_duplicate_set, create_duplicate_file
+):
+    """
+    Sonarr can hold a file no episode points at. It has no episode number,
+    which the stage used to format into its log line and crash on.
+    """
+    dup_set = await create_duplicate_set(media_type=MediaType.EPISODE)
+    created = await create_duplicate_file(dup_set.id, file_path="/tv/Show/S01E02.mkv")
+    unwanted = (
+        await test_db.execute(
+            select(DuplicateFile)
+            .options(selectinload(DuplicateFile.duplicate_set))
+            .where(DuplicateFile.id == created.id)
+        )
+    ).scalar_one()
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.sonarr_service = AsyncMock()
+    pipeline.sonarr_service.find_episode_by_file_path.return_value = {
+        "id": None,
+        "seriesId": 7,
+        "seasonNumber": 1,
+        "episodeFile": {"id": 70, "path": unwanted.file_path},
+        "title": "Orphaned S01 file",
+        "_orphaned": True,
+    }
+    history = DeletionHistory(duplicate_file_id=unwanted.id)
+
+    assert await pipeline._stage_arr_removal(unwanted, history) == ("sonarr", 7)
+    pipeline.sonarr_service.delete_episode_file.assert_awaited_once_with(7, 70)
+    assert history.deleted_from_arr is True

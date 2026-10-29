@@ -31,6 +31,30 @@ DEFAULT_SAMPLE_PATTERNS: tuple[str, ...] = (
 # that merely contains one of the broader words.
 SERVER_SAMPLE_PATTERNS: tuple[str, ...] = ("sample",)
 
+VIDEO_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".mkv",
+        ".mp4",
+        ".avi",
+        ".mov",
+        ".wmv",
+        ".flv",
+        ".webm",
+        ".m4v",
+        ".mpg",
+        ".mpeg",
+        ".m2ts",
+        ".ts",
+        ".vob",
+        ".ogv",
+    }
+)
+
+
+def is_video_file(file_path: str) -> bool:
+    """Whether a path has a video file extension."""
+    return os.path.splitext(file_path)[1].lower() in VIDEO_EXTENSIONS
+
 
 def is_sample_file(file_path: str, patterns: Optional[Sequence[str]] = None) -> bool:
     """Whether a path looks like a sample rather than the feature itself."""

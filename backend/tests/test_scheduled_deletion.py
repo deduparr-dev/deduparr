@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import func, select
 
+from app.services.deletion.pipeline import SetDeletion
 from app.services.deletion.scheduled import ScheduledDeletionService
 from app.models import (
     DuplicateSet,
@@ -15,6 +16,13 @@ from app.models import (
     DuplicateStatus,
     MediaType,
 )
+
+
+def _pipeline(*outcomes):
+    """A DeletionPipeline stand-in whose delete_set gives these outcomes in turn."""
+    pipeline = AsyncMock()
+    pipeline.delete_set.side_effect = list(outcomes)
+    return pipeline
 
 
 @pytest.mark.asyncio
@@ -28,44 +36,6 @@ async def test_run_scheduled_deletion_no_pending_sets(test_db):
     assert summary["files_deleted"] == 0
     assert summary["errors"] == []
     assert summary["dry_run"] is False
-
-
-@pytest.mark.asyncio
-async def test_run_scheduled_deletion_dry_run(test_db):
-    """Test dry run mode doesn't actually delete"""
-    # Create a pending duplicate set with files marked for deletion
-    duplicate_set = DuplicateSet(
-        item_id="12345",
-        media_type=MediaType.MOVIE,
-        title="Test Movie (2020)",
-        status=DuplicateStatus.PENDING,
-    )
-    test_db.add(duplicate_set)
-    await test_db.flush()
-
-    file1 = DuplicateFile(
-        set_id=duplicate_set.id,
-        file_path="/media/movie1.mkv",
-        file_size=1000000,
-        score=75,
-        keep=False,
-    )
-    test_db.add(file1)
-    await test_db.commit()
-
-    # Run dry run
-    service = ScheduledDeletionService(test_db)
-    summary = await service.run_scheduled_deletion(dry_run=True, send_email=False)
-
-    # Verify
-    assert summary["dry_run"] is True
-    assert summary["sets_processed"] == 1
-    assert summary["files_deleted"] == 1
-    assert summary["errors"] == []
-
-    # Verify set status unchanged (dry run)
-    await test_db.refresh(duplicate_set)
-    assert duplicate_set.status == DuplicateStatus.PENDING
 
 
 @pytest.mark.asyncio
@@ -99,29 +69,17 @@ async def test_run_scheduled_deletion_success(mock_pipeline_class, test_db):
     test_db.add_all([file1, file2])
     await test_db.commit()
 
-    # Mock deletion pipeline
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file = AsyncMock()
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(SetDeletion(files_deleted=1))
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify
     assert summary["sets_processed"] == 1
-    assert summary["files_deleted"] == 1  # Only one file marked for deletion
+    assert summary["files_deleted"] == 1
     assert summary["errors"] == []
-
     # A real run must not inherit the pipeline's dry_run=True default
     mock_pipeline_class.assert_called_once_with(test_db, dry_run=False)
-    # Rescan happens once per set, not once per file
-    mock_pipeline.delete_file.assert_called_once_with(file1.id, skip_rescan=True)
-    mock_pipeline.rescan_for_kept_file.assert_awaited_once()
-
-    # Verify set status updated
-    await test_db.refresh(duplicate_set)
-    assert duplicate_set.status == DuplicateStatus.PROCESSED
+    mock_pipeline_class.return_value.delete_set.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -180,24 +138,16 @@ async def test_run_scheduled_deletion_file_error(mock_pipeline_class, test_db):
     test_db.add(file1)
     await test_db.commit()
 
-    # Mock deletion pipeline to fail
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file.side_effect = Exception("Deletion failed")
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(
+        SetDeletion(errors=["Failed to delete /media/movie1.mkv: Deletion failed"])
+    )
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify
-    assert summary["sets_processed"] == 0  # Set not marked processed due to error
+    assert summary["sets_processed"] == 0
     assert summary["files_deleted"] == 0
-    assert len(summary["errors"]) == 1
-    assert "Deletion failed" in summary["errors"][0]
-
-    # Verify set status unchanged
-    await test_db.refresh(duplicate_set)
-    assert duplicate_set.status == DuplicateStatus.PENDING
+    assert summary["errors"] == ["Failed to delete /media/movie1.mkv: Deletion failed"]
 
 
 @pytest.mark.asyncio
@@ -238,25 +188,16 @@ async def test_run_scheduled_deletion_multiple_sets(mock_pipeline_class, test_db
     test_db.add_all([file1, file2])
     await test_db.commit()
 
-    # Mock deletion pipeline
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file = AsyncMock()
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(
+        SetDeletion(files_deleted=1), SetDeletion(files_deleted=1)
+    )
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify
     assert summary["sets_processed"] == 2
     assert summary["files_deleted"] == 2
     assert summary["errors"] == []
-
-    # Verify both sets marked processed
-    await test_db.refresh(set1)
-    await test_db.refresh(set2)
-    assert set1.status == DuplicateStatus.PROCESSED
-    assert set2.status == DuplicateStatus.PROCESSED
 
 
 @pytest.mark.asyncio
@@ -297,28 +238,17 @@ async def test_run_scheduled_deletion_set_exception(mock_pipeline_class, test_db
     test_db.add_all([file1, file2])
     await test_db.commit()
 
-    # Mock deletion pipeline to fail on first, succeed on second
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file.side_effect = [
-        Exception("First deletion failed"),  # First call fails
-        None,  # Second call succeeds
-    ]
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(
+        Exception("First deletion failed"), SetDeletion(files_deleted=1)
+    )
 
-    # Run deletion
     service = ScheduledDeletionService(test_db)
     summary = await service.run_scheduled_deletion(dry_run=False, send_email=False)
 
-    # Verify: one succeeded, one failed
-    assert summary["sets_processed"] == 1  # Only set2 processed
-    assert summary["files_deleted"] == 1  # Only file2 deleted
+    assert summary["sets_processed"] == 1
+    assert summary["files_deleted"] == 1
     assert len(summary["errors"]) == 1
-
-    # Verify set statuses
-    await test_db.refresh(set1)
-    await test_db.refresh(set2)
-    assert set1.status == DuplicateStatus.PENDING  # Failed
-    assert set2.status == DuplicateStatus.PROCESSED  # Success
+    assert "First deletion failed" in summary["errors"][0]
 
 
 @pytest.mark.asyncio
@@ -444,10 +374,7 @@ async def test_run_scheduled_deletion_sends_email_when_enabled(
     test_db.add(file1)
     await test_db.commit()
 
-    # Mock deletion pipeline
-    mock_pipeline = AsyncMock()
-    mock_pipeline.delete_file = AsyncMock()
-    mock_pipeline_class.return_value = mock_pipeline
+    mock_pipeline_class.return_value = _pipeline(SetDeletion(files_deleted=1))
 
     # Mock email service
     mock_email_service = MagicMock()
@@ -465,34 +392,24 @@ async def test_run_scheduled_deletion_sends_email_when_enabled(
 
 @pytest.mark.asyncio
 @patch("app.services.deletion.scheduled.DeletionPipeline")
-async def test_run_scheduled_deletion_no_email_in_dry_run(mock_pipeline_class, test_db):
-    """Test that email is NOT sent in dry run mode"""
-    # Create pending set
-    duplicate_set = DuplicateSet(
-        item_id="12345",
-        media_type=MediaType.MOVIE,
-        title="Test Movie (2020)",
-        status=DuplicateStatus.PENDING,
+@patch("app.services.notifications.helpers.get_email_service_from_config")
+async def test_run_scheduled_deletion_no_email_in_dry_run(
+    mock_get_email,
+    mock_pipeline_class,
+    test_db,
+    create_duplicate_set,
+    create_duplicate_file,
+):
+    """A dry run never emails, even when asked to"""
+    dup_set = await create_duplicate_set()
+    await create_duplicate_file(dup_set.id, keep=False)
+    mock_pipeline_class.return_value = _pipeline(SetDeletion(files_deleted=1))
+
+    await ScheduledDeletionService(test_db).run_scheduled_deletion(
+        dry_run=True, send_email=True
     )
-    test_db.add(duplicate_set)
-    await test_db.flush()
 
-    file1 = DuplicateFile(
-        set_id=duplicate_set.id,
-        file_path="/media/movie1.mkv",
-        file_size=1000000,
-        score=75,
-        keep=False,
-    )
-    test_db.add(file1)
-    await test_db.commit()
-
-    # Run dry run with send_email=True (should be ignored)
-    service = ScheduledDeletionService(test_db)
-    await service.run_scheduled_deletion(dry_run=True, send_email=True)
-
-    # Email should not be sent in dry run
-    # (No easy way to verify without mocking, but documented in docstring)
+    mock_get_email.assert_not_called()
 
 
 @pytest.mark.asyncio

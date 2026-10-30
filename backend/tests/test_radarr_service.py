@@ -3,7 +3,7 @@ Tests for Radarr service
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from app.services.arr.radarr_service import RadarrService
 from app.models.config import Config
@@ -28,8 +28,9 @@ async def test_radarr_client_initialization(test_db):
         client = await service._get_client()
 
         mock_client_class.assert_called_once_with(
-            base_url="http://localhost:7878", api_key="test_api_key"
+            base_url="http://localhost:7878", api_key="test_api_key", path_mapper=ANY
         )
+        assert not mock_client_class.call_args.kwargs["path_mapper"]
         assert client == mock_client
 
 

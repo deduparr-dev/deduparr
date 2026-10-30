@@ -55,34 +55,32 @@ export async function gotoApp(page: Page, path: string) {
 }
 
 /**
- * Create a duplicate set from two real files on disk via the dev disk scan.
- * Returns the paths, highest-scoring first.
+ * Create a duplicate set per title, each from two real files on disk, with one
+ * dev disk scan. Returns each set's paths, highest-scoring first.
  */
-export async function seedDuplicateSet(
+export async function seedDuplicateSets(
   request: APIRequestContext,
-  title: string
-): Promise<{ keep: string; drop: string }> {
-  const dir = path.join(E2E_TMP, "media", "Movies", title);
-  fs.mkdirSync(dir, { recursive: true });
-
-  const keep = path.join(dir, `${title} 1080p BluRay x265.mkv`);
-  const drop = path.join(dir, `${title} 720p HDTV x264.mkv`);
-  fs.writeFileSync(keep, Buffer.alloc(3_000_000, 1));
-  fs.writeFileSync(drop, Buffer.alloc(1_000_000, 2));
+  titles: string[]
+): Promise<{ keep: string; drop: string }[]> {
+  const movies = path.join(E2E_TMP, "media", "Movies");
+  const seeded = titles.map((title) => ({
+    keep: writeFile(path.join(movies, title, `${title} 1080p BluRay x265.mkv`), 3_000),
+    drop: writeFile(path.join(movies, title, `${title} 720p HDTV x264.mkv`), 1_000),
+  }));
 
   const res = await request.post(`${BACKEND_URL}/api/scan/dev/disk-scan`, {
-    data: { paths: [path.join(E2E_TMP, "media", "Movies")] },
+    data: { paths: [movies] },
   });
   expect(res.ok()).toBeTruthy();
 
-  return { keep, drop };
+  return seeded;
 }
 
 /** Pending duplicate sets, as the API reports them. */
 export async function getPendingSets(
   request: APIRequestContext
 ): Promise<{ id: number; title: string; status: string }[]> {
-  const res = await request.get(`${BACKEND_URL}/api/scan/duplicates?status=pending`);
+  const res = await request.get(`${BACKEND_URL}/api/scan/duplicates?status=pending&limit=1000`);
   expect(res.ok()).toBeTruthy();
   return res.json();
 }

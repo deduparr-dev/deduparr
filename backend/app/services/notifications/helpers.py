@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.models import Config
 from app.services.notifications.service import EmailService
-from app.services.shared.security import get_token_manager
+from app.services.shared.security import InvalidTokenError, get_token_manager
 
 logger = logging.getLogger(__name__)
 
@@ -68,18 +68,11 @@ async def get_email_service_from_config(
 
         # Decrypt password
         encrypted_password = config_items["smtp_password"]
-        token_manager = get_token_manager()
-
-        # Check if password is already decrypted (plain text) or encrypted
-        # Encrypted passwords have format: base64.signature (contains dot, length > 50)
-        if "." in encrypted_password and len(encrypted_password) > 50:
-            try:
-                smtp_password = token_manager.decrypt(encrypted_password)
-            except Exception as e:
-                logger.error(f"Failed to decrypt SMTP password: {e}")
-                smtp_password = encrypted_password  # Fallback to using as-is
-        else:
-            smtp_password = encrypted_password
+        try:
+            smtp_password = get_token_manager().decrypt(encrypted_password)
+        except InvalidTokenError as e:
+            logger.error(f"Failed to decrypt SMTP password: {e}")
+            smtp_password = encrypted_password  # Fallback to using as-is
 
         # Initialize and return email service
         email_service = EmailService(

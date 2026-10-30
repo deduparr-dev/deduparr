@@ -73,6 +73,21 @@ class DeletionActivity(BaseModel):
         return dt.isoformat().replace("+00:00", "Z")
 
 
+def pending_unwanted_files():
+    """What deleting every pending set removes, each file once: Plex and
+    Jellyfin can both list it"""
+    return (
+        select(DuplicateFile.file_path, DuplicateFile.file_size)
+        .join(DuplicateFile.duplicate_set)
+        .where(
+            DuplicateSet.status == DuplicateStatus.PENDING,
+            DuplicateFile.keep.is_(False),
+        )
+        .distinct()
+        .subquery()
+    )
+
+
 class StatsService:
     """Service for retrieving dashboard statistics"""
 
@@ -166,10 +181,8 @@ class StatsService:
         return {status: count for status, count in rows}
 
     async def _sum_space_to_reclaim(self) -> int:
-        """Sum total space that can be reclaimed from pending/approved duplicates"""
-        stmt = select(func.sum(DuplicateSet.space_to_reclaim)).where(
-            DuplicateSet.status.in_([DuplicateStatus.PENDING, DuplicateStatus.APPROVED])
-        )
+        """Sum the space that deleting every pending set reclaims"""
+        stmt = select(func.sum(pending_unwanted_files().c.file_size))
 
         result = await self.db.execute(stmt)
         total = result.scalar()

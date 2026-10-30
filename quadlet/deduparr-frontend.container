@@ -20,8 +20,7 @@ Volume=/workspaces/deduparr/frontend:/app:Z
 Volume=/app/node_modules
 
 # Sharing the pod's network namespace, the backend is on localhost - not a
-# service name as it was under Compose.
-Environment=VITE_API_URL=http://localhost:3001
+# service name as it was under Compose. Vite proxies /api to it.
 Environment=VITE_PROXY_TARGET=http://127.0.0.1:3001
 
 [Service]

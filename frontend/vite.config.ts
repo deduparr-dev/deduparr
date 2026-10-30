@@ -3,8 +3,6 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 
 // Backend origin the dev/preview server proxies /api to.
-// Defaults to the docker-compose service name; the E2E suite points it at a
-// locally running backend.
 // Every deployment that needs a different target sets VITE_PROXY_TARGET: the
 // Podman quadlet and the e2e harness both do. The default is therefore what a
 // plain `npm run dev` needs, where "backend" does not resolve and every /api

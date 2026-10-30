@@ -60,6 +60,17 @@ async def test_get_dashboard_stats_with_duplicates(test_db):
         space_to_reclaim=1024 * 1024 * 200,  # 200 MB
     )
     test_db.add(duplicate3)
+    await test_db.flush()
+    test_db.add_all(
+        [
+            DuplicateFile(
+                set_id=duplicate1.id, file_path="/m/a.mkv", file_size=1024 * 1024 * 500
+            ),
+            DuplicateFile(
+                set_id=duplicate3.id, file_path="/m/b.mkv", file_size=1024 * 1024 * 200
+            ),
+        ]
+    )
 
     await test_db.commit()
 
@@ -70,8 +81,7 @@ async def test_get_dashboard_stats_with_duplicates(test_db):
     assert stats.pending_duplicates == 1
     assert stats.approved_duplicates == 1
     assert stats.processed_duplicates == 1
-    expected_space = (500 + 1024) * 1024 * 1024  # Only pending + approved
-    assert stats.space_to_reclaim == expected_space
+    assert stats.space_to_reclaim == 1024 * 1024 * 500  # Only what pending sets delete
 
 
 @pytest.mark.asyncio
@@ -310,46 +320,35 @@ async def test_count_by_status(test_db):
 
 @pytest.mark.asyncio
 async def test_sum_space_to_reclaim(test_db):
-    """Test summing space to reclaim from pending/approved duplicates"""
+    """What deleting every pending set frees, a file both servers list only once"""
     now = datetime.now(timezone.utc)
-
-    duplicate1 = DuplicateSet(
-        item_id="movie1",
-        title="Pending Movie",
-        media_type=MediaType.MOVIE,
-        found_at=now,
-        status=DuplicateStatus.PENDING,
-        space_to_reclaim=1024 * 1024 * 500,
+    plex, jellyfin, processed = (
+        DuplicateSet(
+            item_id=item_id,
+            title="Movie",
+            media_type=MediaType.MOVIE,
+            found_at=now,
+            status=status,
+        )
+        for item_id, status in (
+            ("1", DuplicateStatus.PENDING),
+            ("a", DuplicateStatus.PENDING),
+            ("2", DuplicateStatus.PROCESSED),
+        )
     )
-    test_db.add(duplicate1)
-
-    duplicate2 = DuplicateSet(
-        item_id="movie2",
-        title="Approved Movie",
-        media_type=MediaType.MOVIE,
-        found_at=now,
-        status=DuplicateStatus.APPROVED,
-        space_to_reclaim=1024 * 1024 * 1024,
+    test_db.add_all([plex, jellyfin, processed])
+    await test_db.flush()
+    test_db.add_all(
+        [
+            DuplicateFile(set_id=plex.id, file_path="/m/720p.mkv", file_size=500),
+            DuplicateFile(set_id=jellyfin.id, file_path="/m/720p.mkv", file_size=500),
+            DuplicateFile(set_id=plex.id, file_path="/m/k.mkv", file_size=9, keep=True),
+            DuplicateFile(set_id=processed.id, file_path="/m/old.mkv", file_size=2000),
+        ]
     )
-    test_db.add(duplicate2)
-
-    duplicate3 = DuplicateSet(
-        item_id="movie3",
-        title="Processed Movie",
-        media_type=MediaType.MOVIE,
-        found_at=now,
-        status=DuplicateStatus.PROCESSED,
-        space_to_reclaim=1024 * 1024 * 2000,  # Should not be counted
-    )
-    test_db.add(duplicate3)
-
     await test_db.commit()
 
-    service = StatsService(test_db)
-    total_space = await service._sum_space_to_reclaim()
-
-    expected = (500 + 1024) * 1024 * 1024
-    assert total_space == expected
+    assert await StatsService(test_db)._sum_space_to_reclaim() == 500
 
 
 @pytest.mark.asyncio

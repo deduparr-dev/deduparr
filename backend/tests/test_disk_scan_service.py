@@ -387,6 +387,16 @@ class TestDiskScanService:
         result = service.find_duplicate_movies_on_disk(["/nonexistent/directory"])
         assert result == {}
 
+    def test_same_episode_of_two_shows_is_no_duplicate(self, service, temp_dir):
+        """Every show has an S01E01, in the same library."""
+        for show in ["Show A", "Show B"]:
+            season = os.path.join(temp_dir, show, "Season 1")
+            os.makedirs(season)
+            with open(os.path.join(season, f"{show} - S01E01.mkv"), "wb") as f:
+                f.write(b"x")
+
+        assert service.find_duplicate_episodes_on_disk([temp_dir]) == {}
+
     def test_find_duplicate_episodes_with_duplicates(self, service, temp_dir):
         """Test finding duplicate episodes"""
         show_dir = os.path.join(temp_dir, "Show.Name")

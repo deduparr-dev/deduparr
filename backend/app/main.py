@@ -7,14 +7,13 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from app import DEDUPARR_VERSION
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import AsyncSessionLocal, init_db
 from app.api.routes import config, setup, scoring, stats, scan, system
-from app.services.scheduler import get_scheduler
-from app.services.shared.security import SensitiveDataFilter
+from app.services.scheduler import get_scheduler, load_schedule
+from app.services.shared.security import SensitiveDataFilter, secure_stored_secrets
 from app.services.system_service import SystemService
 
 # Configure logging based on environment variable
@@ -45,36 +44,17 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events"""
     # Startup
     await init_db()
+    async with AsyncSessionLocal() as db:
+        await secure_stored_secrets(db)
     logger.info(
         f"✅ Deduparr v{DEDUPARR_VERSION} started successfully (log_level={settings.log_level})"
     )
 
     # Start background scheduler if enabled
     scheduler = get_scheduler()
-    if settings.enable_scheduled_scans:
-        scan_mode = getattr(settings, "scan_schedule_mode", "daily")
-        scan_time = getattr(settings, "scheduled_scan_time", "02:00")
-        scan_interval_hours = getattr(settings, "scan_interval_hours", 24)
-
-        await scheduler.start(
-            scan_mode=scan_mode,
-            scan_time=scan_time,
-            scan_interval_hours=scan_interval_hours,
-        )
-
-        if scan_mode == "daily":
-            logger.info(f"Scheduled scans enabled (daily at {scan_time})")
-        else:
-            logger.info(
-                f"Scheduled scans enabled (every {scan_interval_hours}h starting at {scan_time})"
-            )
-
-        if settings.enable_scheduled_deletion:
-            logger.info(
-                "Scheduled deletion enabled (runs 30 minutes after each scan completes)"
-            )
-    else:
-        logger.info("⏸Scheduled scans disabled")
+    async with AsyncSessionLocal() as db:
+        schedule = await load_schedule(db)
+    await scheduler.apply(schedule)
 
     yield
 
@@ -91,15 +71,6 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 

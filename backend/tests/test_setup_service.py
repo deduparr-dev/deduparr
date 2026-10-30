@@ -2,6 +2,8 @@
 Tests for setup service
 """
 
+from functools import partial
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from sqlalchemy import select
@@ -416,10 +418,17 @@ async def test_get_media_libraries_survives_one_server_failing(test_db):
 @pytest.mark.parametrize("saved", [False, True])
 async def test_test_jellyfin_connection_takes_the_saved_key_too(test_db, saved):
     """
-    Settings keeps a saved key out of its field and tests with that one; it
-    reached Jellyfin still encrypted.
+    Settings keeps a saved key out of its field: a test runs with the key
+    typed, or with the saved one when the field was left blank.
     """
-    key = encrypt_test_password("admin-key") if saved else "admin-key"
+    test_db.add_all(
+        [
+            Config(key="jellyfin_url", value="http://jf:8096"),
+            Config(key="jellyfin_api_key", value=encrypt_test_password("saved-key")),
+        ]
+    )
+    await test_db.commit()
+    key = "" if saved else "typed-key"
     seen: dict = {}
 
     async def connect(adapter):
@@ -437,17 +446,26 @@ async def test_test_jellyfin_connection_takes_the_saved_key_too(test_db, saved):
     ):
         await SetupService(test_db).test_jellyfin_connection("http://jf:8096", key)
 
-    assert seen["api_key"] == "admin-key"
+    assert seen["api_key"] == ("saved-key" if saved else "typed-key")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("saved", [False, True])
 async def test_test_qbittorrent_connection_takes_the_saved_password_too(test_db, saved):
     """
-    Settings sends a saved password back as it holds it, encrypted, and the
-    test encrypted it again before logging in with it.
+    Settings keeps a saved password out of its field: a test logs in with the
+    password typed, or with the saved one when the field was left blank.
     """
-    password = encrypt_test_password("adminadmin") if saved else "adminadmin"
+    test_db.add_all(
+        [
+            Config(key="qbittorrent_url", value="http://qbit:8080"),
+            Config(
+                key="qbittorrent_password", value=encrypt_test_password("saved-pass")
+            ),
+        ]
+    )
+    await test_db.commit()
+    password = "" if saved else "typed-pass"
 
     with patch("app.services.download.qbittorrent_service.Client") as client:
         client.return_value.app_version.return_value = "v4.6.0"
@@ -456,4 +474,23 @@ async def test_test_qbittorrent_connection_takes_the_saved_password_too(test_db,
         )
 
     assert result["success"] is True
-    assert client.call_args.kwargs["password"] == "adminadmin"
+    assert client.call_args.kwargs["password"] == (
+        "saved-pass" if saved else "typed-pass"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stored_secret_goes_only_to_the_server_stored_with_it(test_db):
+    """With no login, anyone could otherwise have it sent to a server of theirs."""
+    test_db.add_all(
+        [
+            Config(key="radarr_url", value="http://radarr:7878"),
+            Config(key="radarr_api_key", value="stored"),
+        ]
+    )
+    await test_db.commit()
+    service = SetupService(test_db)
+    secret = partial(service.secret_or_stored, "radarr_api_key", "", "radarr_url")
+
+    assert await secret("http://radarr:7878") == "stored"
+    assert await secret("http://elsewhere:7878") == ""

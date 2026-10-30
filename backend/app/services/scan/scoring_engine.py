@@ -74,8 +74,9 @@ class ScoringEngine:
 
     FILENAME_PATTERN_SCORES = {
         r"remux": 20000,
-        r"bluray.*1080p": 15000,
-        r"bluray.*720p": 10000,
+        r"(?=.*blu-?ray)(?=.*2160p)": 20000,
+        r"(?=.*blu-?ray)(?=.*1080p)": 15000,
+        r"(?=.*blu-?ray)(?=.*720p)": 10000,
         r"web-?dl": 5000,
         r"webrip": 4000,
         r"proper": 1500,

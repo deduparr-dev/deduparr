@@ -2,13 +2,23 @@
 Tests for configuration API endpoints
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.main import app
 from app.models import Config
 from app.models.scoring_rule import ScoringRule, RuleType
+from app.services.scheduler import get_scheduler
+from app.services.shared.security import (
+    SECRET_MASK,
+    encrypt_if_sensitive,
+    get_token_manager,
+)
+from tests.conftest import sign_the_old_way
 
 
 @pytest.mark.asyncio
@@ -124,6 +134,48 @@ async def test_batch_update_encrypts_secrets_only(test_db):
     assert rows["enable_deep_scan"] == "true"
     assert rows["jellyfin_api_key"] != "admin-key"
     assert get_token_manager().decrypt(rows["jellyfin_api_key"]) == "admin-key"
+
+
+@pytest.mark.asyncio
+async def test_no_response_holds_a_secret(test_db):
+    """
+    A stored secret comes back only as the mask, encrypted or not.
+
+    Every value used to be returned as stored, and a signed secret reads
+    without the key, so anyone who could reach the API could read them.
+    """
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        responses = [
+            await client.put("/api/config/radarr_api_key", json={"value": "a-key"}),
+            await client.post("/api/config/batch", json={"smtp_password": "a-pass"}),
+            await client.get("/api/config/"),
+            await client.get("/api/config/radarr_api_key"),
+            await client.get("/api/config/export/all"),
+        ]
+        stored = [
+            row.value for row in (await test_db.execute(select(Config))).scalars()
+        ]
+
+        for response in responses:
+            assert response.status_code == 200
+            for secret in ["a-key", "a-pass", *stored]:
+                assert secret not in response.text
+
+        assert responses[2].json()["radarr_api_key"] == SECRET_MASK
+        assert responses[4].json()["config"]["smtp_password"] == SECRET_MASK
+
+        # Sent back as shown, the mask keeps the stored secret
+        await client.put("/api/config/radarr_api_key", json={"value": SECRET_MASK})
+        await client.post("/api/config/batch", json={"smtp_password": SECRET_MASK})
+
+    rows = {
+        row.key: row.value
+        for row in (await test_db.execute(select(Config))).scalars().all()
+    }
+    assert get_token_manager().decrypt(rows["radarr_api_key"]) == "a-key"
+    assert get_token_manager().decrypt(rows["smtp_password"]) == "a-pass"
 
 
 @pytest.mark.asyncio
@@ -290,7 +342,7 @@ async def test_export_configuration_with_data(test_db):
         assert data["version"] == "1.0"
         assert len(data["config"]) == 2
         assert data["config"]["plex_url"] == "http://localhost:32400"
-        assert data["config"]["plex_auth_token"] == "test_token"
+        assert data["config"]["plex_auth_token"] == SECRET_MASK
         assert len(data["scoring_rules"]) == 1
         assert data["scoring_rules"][0]["rule_type"] == "resolution"
         assert data["scoring_rules"][0]["pattern"] == "1080p"
@@ -338,6 +390,44 @@ async def test_import_configuration_new(test_db):
     rules = result.scalars().all()
     assert len(rules) == 1
     assert rules[0].pattern == "4K"
+
+
+@pytest.mark.asyncio
+async def test_import_encrypts_secrets(test_db):
+    """
+    An import stores a secret encrypted, whether an older export held it as
+    typed or signed, and the mask a current export holds keeps the stored one.
+    What failed connection tests left in an older export stays out.
+    """
+    test_db.add(Config(key="smtp_password", value=get_token_manager().encrypt("kept")))
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/config/import/all",
+            json={
+                "config": {
+                    "radarr_api_key": "typed-key",
+                    "sonarr_api_key": sign_the_old_way("signed-key"),
+                    "smtp_password": SECRET_MASK,
+                    "temp_sonarr_api_key": "typed-in-a-test",
+                },
+                "overwrite_existing": True,
+            },
+        )
+    assert response.json()["imported"]["configs"] == 2
+
+    rows = {
+        row.key: row.value
+        for row in (await test_db.execute(select(Config))).scalars().all()
+    }
+    token_manager = get_token_manager()
+    assert token_manager.decrypt(rows["radarr_api_key"]) == "typed-key"
+    assert token_manager.decrypt(rows["sonarr_api_key"]) == "signed-key"
+    assert token_manager.decrypt(rows["smtp_password"]) == "kept"
+    assert "temp_sonarr_api_key" not in rows
 
 
 @pytest.mark.asyncio
@@ -644,6 +734,23 @@ async def test_get_scheduler_config_with_values(test_db):
 
 
 @pytest.mark.asyncio
+async def test_get_scheduler_config_falls_back_to_the_environment(test_db, monkeypatch):
+    """A value Settings has not saved comes from the environment; a saved one wins."""
+    monkeypatch.setattr(settings, "enable_scheduled_scans", True)
+    monkeypatch.setattr(settings, "scan_interval_hours", 12)
+    test_db.add(Config(key="scan_interval_hours", value="6"))
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        data = (await client.get("/api/config/scheduler")).json()
+
+    assert data["enable_scheduled_scans"] is True
+    assert data["scan_interval_hours"] == 6
+
+
+@pytest.mark.asyncio
 async def test_update_scheduler_config_enable_scans(test_db):
     """Test enabling scheduled scans"""
     async with AsyncClient(
@@ -662,6 +769,10 @@ async def test_update_scheduler_config_enable_scans(test_db):
         config = result.scalar_one_or_none()
         assert config is not None
         assert config.value == "true"
+
+        # Running, on this test's event loop, which closes after it
+        assert get_scheduler().is_running
+        await get_scheduler().stop()
 
 
 @pytest.mark.asyncio
@@ -831,3 +942,29 @@ async def test_update_scheduler_config_partial_update(test_db):
         )
         config = result.scalar_one_or_none()
         assert config.value == "03:00"  # Updated
+
+
+def test_a_secret_from_another_key_file_is_left_alone(tmp_path, monkeypatch):
+    """Encrypted again, it could never be read back once the key is restored."""
+    key_file = tmp_path / ".key"
+    monkeypatch.setenv("ENCRYPTION_KEY_FILE", str(key_file))
+    key_file.write_text("the-first-key-of-enough-length")
+    encrypted = get_token_manager().encrypt("a-real-token")
+
+    key_file.write_text("the-other-key-of-enough-length")
+    assert encrypt_if_sensitive("radarr_api_key", encrypted) == encrypted
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_written_through_the_generic_endpoints_takes_effect(test_db):
+    """It was stored and reported, while the old schedule kept running."""
+    with patch("app.api.routes.config.get_scheduler") as scheduler:
+        scheduler.return_value.apply = AsyncMock()
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            await client.put("/api/config/plex_libraries", json={"value": "Movies"})
+            scheduler.return_value.apply.assert_not_awaited()
+            await client.put("/api/config/scan_interval_hours", json={"value": "6"})
+
+    scheduler.return_value.apply.assert_awaited_once()

@@ -1,6 +1,6 @@
 """
 Security utilities for application-wide authentication and token management.
-Provides token encryption, CSRF protection, and secure logging.
+Provides token encryption and secure logging.
 
 Usage Examples:
 
@@ -20,16 +20,10 @@ Usage Examples:
         encrypted_sonarr = tm.encrypt("sonarr-api-key-789")
         decrypted_sonarr = tm.decrypt(encrypted_sonarr)
 
-    Sanitizing Sensitive Data for Logs:
-        from app.services.shared.security import sanitize_log_data
-
-        logger.info(f"Authenticated with token: {sanitize_log_data(api_key)}")
-        # Output: "Authenticated with token: abcd...xyz"
-
     OAuth PIN Flow (for services that support it):
         from app.services.shared.security import pin_cache
 
-        pin_cache.set("pin-123", {"code": "ABCD", "state": "xyz"}, ttl=600)
+        pin_cache.set("pin-123", {"code": "ABCD", "client_id": "xyz"}, ttl=600)
         data = pin_cache.get("pin-123")
         pin_cache.delete("pin-123")
 
@@ -42,16 +36,28 @@ Usage Examples:
             handler.addFilter(SensitiveDataFilter())
 """
 
+import base64
 import logging
 import re
 import secrets
-import time
 from pathlib import Path
 from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
 
-from itsdangerous import URLSafeSerializer, BadSignature
-from itsdangerous.exc import BadPayload
+from cryptography.fernet import Fernet, InvalidToken
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from itsdangerous import URLSafeSerializer
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.config import Config
+
+logger = logging.getLogger(__name__)
+
+
+# How every Fernet token starts: its version byte and the top of its timestamp
+FERNET_PREFIX = "gAAAAA"
 
 
 class InvalidTokenError(Exception):
@@ -62,17 +68,25 @@ class InvalidTokenError(Exception):
 
 class TokenManager:
     """
-    Handles encryption/decryption of tokens and API keys using itsdangerous.
+    Encrypts and decrypts tokens, API keys and passwords with Fernet.
+
+    Fernet is authenticated encryption: a stored value cannot be read without
+    the key, and one altered without it fails to decrypt.
 
     Can be used for any service: Plex, Radarr, Sonarr, qBittorrent, etc.
     """
 
     def __init__(self, encryption_key: str):
-        self.serializer = URLSafeSerializer(encryption_key)
+        # The key file holds a random string, not a Fernet key, so the Fernet
+        # key is derived from it rather than kept in a file of its own
+        key = HKDF(
+            algorithm=hashes.SHA256(), length=32, salt=None, info=b"deduparr secrets"
+        ).derive(encryption_key.encode())
+        self._fernet = Fernet(base64.urlsafe_b64encode(key))
 
     def encrypt(self, token: str) -> str:
         """
-        Encrypt a token or API key with salt and timestamp.
+        Encrypt a token, API key or password.
 
         Args:
             token: Plain text token/API key to encrypt
@@ -83,13 +97,11 @@ class TokenManager:
         if not token:
             return None
 
-        salt = secrets.token_hex(16)
-        payload = {"token": token, "salt": salt, "timestamp": int(time.time())}
-        return self.serializer.dumps(payload)
+        return self._fernet.encrypt(token.encode()).decode()
 
     def decrypt(self, encrypted_token: str) -> str:
         """
-        Decrypt a token or API key, validating the payload structure.
+        Decrypt a token, API key or password.
 
         Args:
             encrypted_token: Encrypted token to decrypt
@@ -98,27 +110,15 @@ class TokenManager:
             Plain text token string, or None if input is empty
 
         Raises:
-            InvalidTokenError: If decryption fails or payload is malformed
+            InvalidTokenError: If it was not encrypted with this key, or was altered
         """
         if not encrypted_token:
             return None
         try:
-            payload = self.serializer.loads(encrypted_token)
-            if not isinstance(payload, dict) or "token" not in payload:
-                raise InvalidTokenError("Invalid token format")
-            return payload["token"]
-        except (BadSignature, BadPayload, ValueError, KeyError):
+            return self._fernet.decrypt(encrypted_token).decode()
+        except (InvalidToken, ValueError):
+            # Fernet raises ValueError for a string that is not ASCII
             raise InvalidTokenError("Failed to decrypt token")
-
-    def generate_state_token(self) -> str:
-        """Generate a random state token for CSRF protection."""
-        return secrets.token_urlsafe(32)
-
-    def validate_state_token(self, state: str, stored_state: str) -> bool:
-        """Validate state token using constant-time comparison."""
-        if not state or not stored_state:
-            return False
-        return secrets.compare_digest(state, stored_state)
 
 
 def generate_secure_key() -> str:
@@ -182,13 +182,54 @@ SENSITIVE_CONFIG_KEYS = frozenset(
     }
 )
 
+# What the API shows for a stored secret instead of its value. Sent back, it
+# stands for the stored secret, which is then kept as it is.
+SECRET_MASK = "********"
+
+# Where connection tests used to put the credentials they were given while
+# they ran. A test that failed halfway left them behind, secret included.
+LEFTOVER_TEST_KEYS = (
+    "temp_radarr_url",
+    "temp_radarr_api_key",
+    "temp_sonarr_url",
+    "temp_sonarr_api_key",
+    "temp_qbittorrent_url",
+    "temp_qbittorrent_username",
+    "temp_qbittorrent_password",
+)
+
+
+def mask_secret(key: str, value: Optional[str]) -> Optional[str]:
+    """A config value as the API shows it: a stored secret only as the mask."""
+    return SECRET_MASK if value and key in SENSITIVE_CONFIG_KEYS else value
+
+
+def is_masked(key: str, value: Optional[str]) -> bool:
+    """Whether a value sent for a key is the mask, which keeps the stored secret."""
+    return key in SENSITIVE_CONFIG_KEYS and value == SECRET_MASK
+
+
+def _unwrap_signed(value: str) -> str:
+    """
+    The secret in a value stored before secrets were encrypted.
+
+    Those were signed with itsdangerous: base64 JSON with the secret in the
+    clear, readable whatever key signed it, so it is read without one. Any
+    other value is a secret stored as typed, and comes back unchanged.
+    """
+    _, payload = URLSafeSerializer("").loads_unsafe(value)
+    if isinstance(payload, dict) and isinstance(payload.get("token"), str):
+        return payload["token"]
+    return value
+
 
 def encrypt_if_sensitive(key: str, value: Optional[str]) -> Optional[str]:
     """
     Encrypt a config value when its key names a secret.
 
-    Already-encrypted values are left alone, so saving a form that round-trips
-    a stored secret does not encrypt it twice.
+    A value already encrypted is left alone, such as the Plex token the setup
+    wizard was handed, and one in the old signed form is encrypted for the
+    secret it holds.
     """
     if not value or key not in SENSITIVE_CONFIG_KEYS:
         return value
@@ -197,21 +238,53 @@ def encrypt_if_sensitive(key: str, value: Optional[str]) -> Optional[str]:
     try:
         token_manager.decrypt(value)
         return value
-    except (InvalidTokenError, Exception):
-        return token_manager.encrypt(value)
+    except InvalidTokenError:
+        if value.startswith(FERNET_PREFIX):
+            # Encrypting it again would lose it for good if the key comes back
+            logger.warning(
+                f"{key} was encrypted with another key file: restore that file, "
+                "or enter it again in Settings"
+            )
+            return value
+        return token_manager.encrypt(_unwrap_signed(value))
 
 
 def decrypt_if_encrypted(value: str) -> str:
     """
-    A secret as typed, whether it was typed just now or comes back stored.
+    A secret as typed, whether it was typed just now or is a stored one.
 
-    Settings sends a saved secret back encrypted, as it loaded it, so a
-    connection test has to accept both.
+    A connection test runs with the stored secret, encrypted, when its field
+    was left alone.
     """
     try:
         return get_token_manager().decrypt(value) or value
-    except (InvalidTokenError, Exception):
+    except InvalidTokenError:
         return value
+
+
+async def secure_stored_secrets(db: AsyncSession) -> None:
+    """
+    Encrypt the secrets an earlier version stored, and drop what its failed
+    connection tests left behind.
+
+    Those were signed rather than encrypted, or stored as typed, so anyone
+    with the database could read them. Runs at every start: a value already
+    encrypted is left as it is.
+    """
+    result = await db.execute(
+        select(Config).where(Config.key.in_(SENSITIVE_CONFIG_KEYS))
+    )
+    encrypted = 0
+    for config in result.scalars():
+        value = encrypt_if_sensitive(config.key, config.value)
+        if value != config.value:
+            config.value = value
+            encrypted += 1
+
+    await db.execute(delete(Config).where(Config.key.in_(LEFTOVER_TEST_KEYS)))
+    await db.commit()
+    if encrypted:
+        logger.info(f"Encrypted {encrypted} stored secret(s)")
 
 
 def get_token_manager() -> TokenManager:
@@ -245,7 +318,7 @@ class PinCache:
 
         Args:
             pin_id: Unique PIN identifier
-            data: PIN state data (code, client_id, state_token, etc.)
+            data: PIN state data (code, client_id, etc.)
             ttl: Time to live in seconds (default 10 minutes)
         """
         self._cache[pin_id] = {
@@ -282,73 +355,9 @@ class PinCache:
         """
         self._cache.pop(pin_id, None)
 
-    def cleanup_expired(self):
-        """Remove all expired entries from cache (housekeeping)."""
-        current_time = datetime.now(timezone.utc)
-        expired_keys = [
-            key
-            for key, entry in self._cache.items()
-            if current_time > entry["expires_at"]
-        ]
-        for key in expired_keys:
-            self._cache.pop(key, None)
-
 
 # Global PIN cache instance (shared across OAuth flows)
 pin_cache = PinCache()
-
-
-def sanitize_server_url(url: str) -> str:
-    """
-    Normalize server URL to include protocol and remove trailing slashes.
-
-    Works for any service URL (Plex, Radarr, Sonarr, qBittorrent, etc.).
-
-    Args:
-        url: Server URL (may or may not include protocol)
-
-    Returns:
-        Normalized URL with https:// protocol and no trailing slash
-
-    Example:
-        "192.168.1.100:32400" -> "https://192.168.1.100:32400"
-        "http://localhost:8989/" -> "http://localhost:8989"
-    """
-    if not url:
-        return ""
-
-    url = url.strip().rstrip("/")
-
-    if not url.startswith(("http://", "https://")):
-        url = f"https://{url}"
-
-    return url
-
-
-def sanitize_log_data(data: str) -> str:
-    """
-    Sanitize sensitive data for logging by showing only first/last few characters.
-
-    Use this for tokens, API keys, passwords, or any sensitive strings in logs.
-
-    Args:
-        data: Sensitive string to sanitize
-
-    Returns:
-        Sanitized string showing only first and last few characters
-
-    Example:
-        "abcdefghijklmnop" -> "abcd...mnop"
-        "short" -> "***"
-    """
-    if not data or len(data) <= 8:
-        return "***"
-
-    visible_chars = min(4, len(data) // 3)
-    if len(data) <= visible_chars * 2:
-        return "***"
-
-    return f"{data[:visible_chars]}...{data[-visible_chars:]}"
 
 
 class SensitiveDataFilter(logging.Filter):

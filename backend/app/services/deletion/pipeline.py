@@ -56,6 +56,8 @@ class DeletionPipeline:
             db: Database session
             dry_run: If True, simulate deletions without actually executing them
         """
+        # A file both servers list counts once in a run, dry or not
+        self._counted_paths: set[str] = set()
         self.db = db
         self.dry_run = dry_run
         self.qbit_service = QBittorrentService(db)
@@ -126,7 +128,7 @@ class DeletionPipeline:
                 logger.debug(f"Found {server_path} at {candidate}")
                 return candidate
 
-        logger.warning(
+        logger.debug(
             f"File not found (checked its path and {settings.media_dir}): {server_path}"
         )
         return None
@@ -237,6 +239,16 @@ class DeletionPipeline:
         for file in unwanted:
             logger.info(f"  DELETING (score {file.score}): {file.file_path}")
 
+        # Plex and Jellyfin list the same files as two sets, which can keep
+        # different copies: deleting through one can take the other's kept file
+        if not any(self._locate_file(file.file_path, file.file_size) for file in kept):
+            outcome.errors.append(
+                f"Deleted nothing from '{duplicate_set.title}': none of the files "
+                "to keep is on disk. Scan again."
+            )
+            logger.error(outcome.errors[0])
+            return outcome
+
         result = await self.db.execute(
             select(DeletionHistory.duplicate_file_id).where(
                 DeletionHistory.duplicate_file_id.in_([file.id for file in unwanted]),
@@ -248,6 +260,9 @@ class DeletionPipeline:
         for file in unwanted:
             if file.id in already_deleted:
                 continue
+            # Gone already when both servers list it and the other's set came first
+            located = self._locate_file(file.file_path, file.file_size)
+            links = os.stat(located).st_nlink if located else 0
             try:
                 history = await self.delete_file(file.id)
             except Exception as e:
@@ -261,8 +276,13 @@ class DeletionPipeline:
                 )
                 continue
 
-            outcome.files_deleted += 1
-            outcome.space_reclaimed += file.file_size
+            if located and file.file_path not in self._counted_paths:
+                self._counted_paths.add(file.file_path)
+                outcome.files_deleted += 1
+                # A hardlink's data stays until its last link goes, as in a
+                # season pack that seeds on
+                if links - 1 - bool(history.qbit_torrent_hash) <= 0:
+                    outcome.space_reclaimed += file.file_size
             if history.error:
                 outcome.warnings.append(history.error)
 
@@ -280,6 +300,9 @@ class DeletionPipeline:
 
         if not self.dry_run and not outcome.errors:
             duplicate_set.status = DuplicateStatus.PROCESSED
+            duplicate_set.space_to_reclaim = outcome.space_reclaimed + sum(
+                file.file_size for file in unwanted if file.id in already_deleted
+            )
         return outcome
 
     async def delete_file(
@@ -381,9 +404,9 @@ class DeletionPipeline:
         Deletion flow:
         1. Remove from *arr and DELETE FILES (Radarr/Sonarr deletes via API)
         2. Remove item from qBittorrent and delete any remaining files
-        3. *arr rescan - once per set, after all of its files (delete_set)
-        4. Delete the file if still on disk, and what it leaves behind
-        5. Refresh the item on the media server that reported it
+        3. Delete the file if still on disk, and what it leaves behind
+        4. Refresh the item on the media server that reported it
+        5. *arr rescan - once per set, after all of its files (delete_set)
         """
         file_path = duplicate_file.file_path
         arr_type = None
@@ -416,13 +439,13 @@ class DeletionPipeline:
                 )
                 await self.db.commit()
 
-            # Stage 4: Delete the file if it is still there, and its leftovers
+            # Stage 3: Delete the file if it is still there, and its leftovers
             await self._stage_disk_removal(
                 file_path, history, located_path, library_root
             )
             await self.db.commit()
 
-            # Stage 5: Refresh the item on the media server that reported it
+            # Stage 4: Refresh the item on the media server that reported it
             await self._stage_media_server_refresh(history, duplicate_file)
 
             # Store metadata in history
@@ -451,7 +474,8 @@ class DeletionPipeline:
 
         The torrent stays, and the disk stage removes just the file, when
         removing it would take more than this file:
-        - the kept file has a torrent, which may be this one and should keep seeding
+        - it is the torrent of the kept file, which a copy of the same name and
+          size also matches, and which should keep seeding
         - the torrent holds other videos too, as a season pack does
         - there is no kept file and this is the only torrent holding the file
 
@@ -475,12 +499,13 @@ class DeletionPipeline:
                 return None
 
             if kept_file:
-                if await self.qbit_service.find_item_by_file_path(
+                kept_match = await self.qbit_service.find_item_by_file_path(
                     kept_file.file_path, kept_file.file_size
-                ):
+                )
+                if kept_match and kept_match.hash == match.hash:
                     logger.info(
-                        "Kept file has a torrent in qBittorrent. Skipping qBittorrent deletion "
-                        "to preserve seeding. Will delete unwanted file via disk cleanup only."
+                        f"Torrent {match.hash} holds the kept file. Leaving it in "
+                        "qBittorrent; the disk stage removes only this file."
                     )
                     history.deleted_from_qbit = True
                     return None
@@ -516,7 +541,6 @@ class DeletionPipeline:
                     f"Removed item {match.hash} from qBittorrent and deleted files"
                 )
             history.deleted_from_qbit = True
-            history.deleted_from_disk = True
             return match.hash
 
         except ValueError as e:
@@ -598,7 +622,7 @@ class DeletionPipeline:
                     series_id = episode["seriesId"]
 
                     logger.info(
-                        f"Found '{episode.get('title')}' in Sonarr (series {series_id}). "
+                        f"Found {file_path} in Sonarr (series {series_id}). "
                         f"Deleting this version via Sonarr API (includes disk deletion)."
                     )
 
@@ -658,7 +682,7 @@ class DeletionPipeline:
         library_root: Optional[str] = None,
     ):
         """
-        Stage 4: Delete the file if it is still on disk, then what it leaves behind
+        Stage 3: Delete the file if it is still on disk, then what it leaves behind
 
         An *arr or qBittorrent can report a delete and leave the file, so the
         filesystem decides. This also covers files no service knows about.
@@ -672,12 +696,13 @@ class DeletionPipeline:
                 folders are removed up to; None removes none
         """
         if not located_path:
-            if history.deleted_from_arr or history.deleted_from_qbit:
+            if (
+                history.deleted_from_arr
+                or history.deleted_from_qbit
+                or await self._deleted_through_another_set(file_path)
+            ):
                 history.deleted_from_disk = True
-                logger.info(
-                    f"Main file already deleted: {os.path.basename(file_path)} "
-                    f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
-                )
+                logger.info(f"Main file already deleted: {file_path}")
             else:
                 error_msg = (
                     f"File not found for deletion (checked its path and "
@@ -714,6 +739,19 @@ class DeletionPipeline:
         except OSError as e:
             logger.warning(f"Could not clean up after {located_path}: {e}")
         history.deleted_from_disk = True
+
+    async def _deleted_through_another_set(self, file_path: str) -> bool:
+        """Whether the other server's set for this same file deleted it already"""
+        result = await self.db.execute(
+            select(DeletionHistory.id)
+            .join(DuplicateFile, DeletionHistory.duplicate_file_id == DuplicateFile.id)
+            .where(
+                DuplicateFile.file_path == file_path,
+                DeletionHistory.deleted_from_disk.is_(True),
+            )
+            .limit(1)
+        )
+        return result.first() is not None
 
     async def rescan_for_kept_file(
         self,
@@ -851,7 +889,7 @@ class DeletionPipeline:
                     f"Found {arr_type} media ID {arr_media_id} from deletion history for duplicate set {duplicate_set_id}"
                 )
             else:
-                logger.warning(
+                logger.info(
                     f"No {arr_type} media ID found in deletion history for duplicate set {duplicate_set_id}"
                 )
 
@@ -865,12 +903,12 @@ class DeletionPipeline:
         self, history: DeletionHistory, duplicate_file: DuplicateFile
     ):
         """
-        Stage 5: ask the media server that reported this set to re-read the item.
+        Stage 4: ask the media server that reported this set to re-read the item.
 
-        It runs after *arr has imported the file being kept, so the server
-        notices the deleted file is gone and picks the better version up. Only
-        the owning server is refreshed; another server configured over the same
-        media sees the change on its own next scan.
+        It runs right after the file is deleted, so the server notices it is
+        gone; the *arr rescans the set once every file is done. Only the owning
+        server is refreshed; another server configured over the same media sees
+        the change on its own next scan.
         """
         duplicate_set = duplicate_file.duplicate_set
 

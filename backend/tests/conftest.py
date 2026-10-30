@@ -3,8 +3,12 @@ Pytest configuration and shared fixtures
 """
 
 import os
+import secrets
+import time
+
 import pytest
 from httpx import AsyncClient, ASGITransport
+from itsdangerous import URLSafeSerializer
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
 from app.core.database import Base
@@ -12,7 +16,7 @@ from app.models import DuplicateSet, DuplicateFile, DeletionHistory
 from app.models.duplicate import MediaType
 from app.main import app
 from app.api.deps import get_db
-from app.services.shared.security import get_token_manager
+from app.services.shared.security import get_or_create_key_file, get_token_manager
 
 # Set a fixed encryption key for tests to ensure consistency
 os.environ["ENCRYPTION_KEY_FILE"] = "/tmp/deduparr_test_key"
@@ -25,6 +29,13 @@ def encrypt_test_password(plain_password: str) -> str:
     """Helper to encrypt passwords for test fixtures"""
     token_manager = get_token_manager()
     return token_manager.encrypt(plain_password)
+
+
+def sign_the_old_way(secret: str) -> str:
+    """A secret as stored before secrets were encrypted: signed, and readable."""
+    return URLSafeSerializer(get_or_create_key_file()).dumps(
+        {"token": secret, "salt": secrets.token_hex(16), "timestamp": int(time.time())}
+    )
 
 
 @pytest.fixture

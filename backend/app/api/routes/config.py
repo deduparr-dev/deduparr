@@ -2,20 +2,26 @@
 Configuration API endpoints
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 from typing_extensions import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.models import Config
-from app.services.shared.security import encrypt_if_sensitive
+from app.services.shared.security import (
+    LEFTOVER_TEST_KEYS,
+    encrypt_if_sensitive,
+    is_masked,
+    mask_secret,
+)
 from app.models.scoring_rule import ScoringRule
 from app.services.arr.quality import PREFER_ARR_QUALITY_PROFILE_KEY
+from app.services.scheduler import Schedule, get_scheduler, load_schedule
 
 
 class ScoringRuleImportData(TypedDict, total=False):
@@ -94,14 +100,22 @@ async def _set_bool_config(db: AsyncSession, key: str, enabled: bool) -> None:
     await db.commit()
 
 
+async def _apply_schedule_if_written(db: AsyncSession, keys: Iterable[str]) -> None:
+    """Have the scheduler follow a schedule written outside its own endpoint"""
+    if set(keys) & set(Schedule.model_fields):
+        await get_scheduler().apply(await load_schedule(db))
+
+
 @router.get("/", response_model=Dict[str, Optional[str]])
 async def get_all_config(db: AsyncSession = Depends(get_db)):
     """
     Get all configuration settings as a key-value dictionary
+
+    A stored secret shows as the mask, never as its value.
     """
     result = await db.execute(select(Config))
     configs = result.scalars().all()
-    return {config.key: config.value for config in configs}
+    return {config.key: mask_secret(config.key, config.value) for config in configs}
 
 
 @router.get("/deep-scan", response_model=DeepScanResponse)
@@ -123,9 +137,9 @@ async def update_deep_scan_setting(
     """
     Update the deep scan setting
 
-    Deep scan enables filesystem-based duplicate detection in addition to
-    Plex API detection. This is slower but finds duplicates Plex might miss
-    (e.g., case-sensitivity differences, cross-directory duplicates).
+    Deep scan also walks the library folders on disk and logs duplicate files
+    the media server does not list. It creates no duplicate sets, and makes
+    scans slower.
 
     Args:
         update: Deep scan setting update
@@ -173,33 +187,10 @@ async def update_arr_quality_profile_setting(
 
 
 # Scheduler configuration endpoints (must come before /{key} catch-all route)
-@router.get("/scheduler")
+@router.get("/scheduler", response_model=Schedule)
 async def get_scheduler_config(db: AsyncSession = Depends(get_db)):
-    """Get scheduler configuration settings"""
-    result = await db.execute(
-        select(Config).where(
-            Config.key.in_(
-                [
-                    "enable_scheduled_scans",
-                    "scan_schedule_mode",
-                    "scheduled_scan_time",
-                    "scan_interval_hours",
-                    "enable_scheduled_deletion",
-                ]
-            )
-        )
-    )
-    configs = {item.key: item.value for item in result.scalars().all()}
-
-    return {
-        "enable_scheduled_scans": configs.get("enable_scheduled_scans", "false")
-        == "true",
-        "scan_schedule_mode": configs.get("scan_schedule_mode", "daily"),
-        "scheduled_scan_time": configs.get("scheduled_scan_time", "02:00"),
-        "scan_interval_hours": int(configs.get("scan_interval_hours", "24")),
-        "enable_scheduled_deletion": configs.get("enable_scheduled_deletion", "false")
-        == "true",
-    }
+    """Get the schedule in effect"""
+    return await load_schedule(db)
 
 
 class SchedulerConfigUpdate(BaseModel):
@@ -212,103 +203,40 @@ class SchedulerConfigUpdate(BaseModel):
     enable_scheduled_deletion: Optional[bool] = None
 
 
+# Why the scheduler endpoint refuses a value, for each value it can refuse
+INVALID_SCHEDULE_VALUE = {
+    "scan_schedule_mode": "Scan schedule mode must be 'daily' or 'interval'",
+    "scheduled_scan_time": "Scan time must be in HH:MM format (00:00 - 23:59)",
+    "scan_interval_hours": "Scan interval must be between 1 and 168 hours",
+}
+
+
 @router.post("/scheduler")
 async def update_scheduler_config(
     config: SchedulerConfigUpdate, db: AsyncSession = Depends(get_db)
 ):
     """Update scheduler configuration and restart scheduler if needed"""
-    import re
+    updates = config.model_dump(exclude_none=True)
+    try:
+        Schedule.model_validate({**(await load_schedule(db)).model_dump(), **updates})
+    except ValidationError as e:
+        field = str(e.errors()[0]["loc"][0])
+        raise HTTPException(status_code=400, detail=INVALID_SCHEDULE_VALUE[field])
 
-    updates = {}
-
-    if config.enable_scheduled_scans is not None:
-        updates["enable_scheduled_scans"] = (
-            "true" if config.enable_scheduled_scans else "false"
-        )
-
-    if config.scan_schedule_mode is not None:
-        if config.scan_schedule_mode not in ["daily", "interval"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Scan schedule mode must be 'daily' or 'interval'",
-            )
-        updates["scan_schedule_mode"] = config.scan_schedule_mode
-
-    if config.scheduled_scan_time is not None:
-        # Validate time format (HH:MM)
-        if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", config.scheduled_scan_time):
-            raise HTTPException(
-                status_code=400,
-                detail="Scan time must be in HH:MM format (00:00 - 23:59)",
-            )
-        updates["scheduled_scan_time"] = config.scheduled_scan_time
-
-    if config.scan_interval_hours is not None:
-        if not (1 <= config.scan_interval_hours <= 168):
-            raise HTTPException(
-                status_code=400, detail="Scan interval must be between 1 and 168 hours"
-            )
-        updates["scan_interval_hours"] = str(config.scan_interval_hours)
-
-    if config.enable_scheduled_deletion is not None:
-        updates["enable_scheduled_deletion"] = (
-            "true" if config.enable_scheduled_deletion else "false"
-        )
-
-    # Update database
     for key, value in updates.items():
+        if isinstance(value, bool):
+            value = "true" if value else "false"
         result = await db.execute(select(Config).where(Config.key == key))
         config_item = result.scalar_one_or_none()
 
         if config_item:
-            config_item.value = value
+            config_item.value = str(value)
         else:
-            db.add(Config(key=key, value=value))
+            db.add(Config(key=key, value=str(value)))
 
     await db.commit()
 
-    # Restart scheduler with new settings
-    from app.services.scheduler import get_scheduler
-
-    scheduler = get_scheduler()
-    # Stop scheduler if running. Catch RuntimeError which can occur in tests
-    # if the event loop is already closed (defensive; scheduler is optional).
-    try:
-        await scheduler.stop()
-    except RuntimeError:
-        # Don't fail the request if the loop is closed in the test harness.
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "Scheduler stop raised RuntimeError (loop closed); continuing"
-        )
-
-    # Get updated config values
-    result = await db.execute(
-        select(Config).where(
-            Config.key.in_(
-                [
-                    "enable_scheduled_scans",
-                    "scan_schedule_mode",
-                    "scheduled_scan_time",
-                    "scan_interval_hours",
-                ]
-            )
-        )
-    )
-    configs = {item.key: item.value for item in result.scalars().all()}
-
-    enable_scans = configs.get("enable_scheduled_scans", "false") == "true"
-    scan_mode = configs.get("scan_schedule_mode", "daily")
-    scan_time = configs.get("scheduled_scan_time", "02:00")
-    scan_interval_hours = int(configs.get("scan_interval_hours", "24"))
-
-    if enable_scans:
-        await scheduler.start(
-            scan_mode=scan_mode,
-            scan_time=scan_time,
-            scan_interval_hours=scan_interval_hours,
-        )
+    await get_scheduler().apply(await load_schedule(db))
 
     return {"status": "success", "message": "Scheduler configuration updated"}
 
@@ -324,7 +252,7 @@ async def get_config(key: str, db: AsyncSession = Depends(get_db)):
     if not config:
         raise HTTPException(status_code=404, detail=f"Config key '{key}' not found")
 
-    return config
+    return ConfigResponse(key=key, value=mask_secret(key, config.value))
 
 
 @router.put("/{key}", response_model=ConfigResponse)
@@ -338,18 +266,24 @@ async def update_config(
     config = result.scalar_one_or_none()
 
     # Secrets are encrypted here too, not only by the setup wizard, so a value
-    # written through this endpoint is never left in the clear.
-    value = encrypt_if_sensitive(key, config_update.value)
+    # written through this endpoint is never left in the clear. The mask a
+    # secret was shown as keeps the stored one.
+    if not is_masked(key, config_update.value):
+        value = encrypt_if_sensitive(key, config_update.value)
 
-    if config:
-        config.value = value
-    else:
-        config = Config(key=key, value=value)
-        db.add(config)
+        if config:
+            config.value = value
+        else:
+            config = Config(key=key, value=value)
+            db.add(config)
 
-    await db.commit()
-    await db.refresh(config)
-    return config
+        await db.commit()
+        await db.refresh(config)
+        await _apply_schedule_if_written(db, [key])
+
+    return ConfigResponse(
+        key=key, value=mask_secret(key, config.value if config else None)
+    )
 
 
 @router.delete("/{key}")
@@ -365,6 +299,7 @@ async def delete_config(key: str, db: AsyncSession = Depends(get_db)):
 
     await db.delete(config)
     await db.commit()
+    await _apply_schedule_if_written(db, [key])
     return {"status": "deleted", "key": key}
 
 
@@ -378,6 +313,10 @@ async def batch_update_config(
     updated_configs = []
 
     for key, value in configs.items():
+        # The mask a secret was shown as keeps the stored one
+        if is_masked(key, value):
+            continue
+
         result = await db.execute(select(Config).where(Config.key == key))
         config = result.scalar_one_or_none()
 
@@ -392,11 +331,15 @@ async def batch_update_config(
         updated_configs.append(config)
 
     await db.commit()
+    await _apply_schedule_if_written(db, configs)
 
     for config in updated_configs:
         await db.refresh(config)
 
-    return updated_configs
+    return [
+        ConfigResponse(key=config.key, value=mask_secret(config.key, config.value))
+        for config in updated_configs
+    ]
 
 
 @router.get("/export/all")
@@ -404,12 +347,16 @@ async def export_configuration(db: AsyncSession = Depends(get_db)):
     """
     Export all configuration including settings and scoring rules
 
+    A stored secret shows as the mask, which an import skips.
+
     Returns:
         JSON with all configuration data
     """
     result = await db.execute(select(Config))
     configs = result.scalars().all()
-    config_dict = {config.key: config.value for config in configs}
+    config_dict = {
+        config.key: mask_secret(config.key, config.value) for config in configs
+    }
 
     result = await db.execute(select(ScoringRule))
     scoring_rules = result.scalars().all()
@@ -440,6 +387,10 @@ async def import_configuration(
     """
     Import configuration from exported JSON
 
+    Secrets are stored encrypted. An export made before they were encrypted
+    holds them signed or as typed; a current one holds the mask instead, which
+    keeps the stored secret.
+
     Args:
         import_data: Configuration data to import
 
@@ -452,6 +403,12 @@ async def import_configuration(
     skipped_rules = 0
 
     for key, value in import_data.config.items():
+        # An old export can also hold what a failed connection test left behind
+        if is_masked(key, value) or key in LEFTOVER_TEST_KEYS:
+            skipped_configs += 1
+            continue
+        value = encrypt_if_sensitive(key, value)
+
         result = await db.execute(select(Config).where(Config.key == key))
         existing_config = result.scalar_one_or_none()
 
@@ -504,6 +461,7 @@ async def import_configuration(
                 imported_rules += 1
 
     await db.commit()
+    await _apply_schedule_if_written(db, import_data.config)
 
     return {
         "status": "success",

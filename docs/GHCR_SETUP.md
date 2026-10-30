@@ -65,7 +65,7 @@ services:
 
 ## 🔑 Authentication (for contributors)
 
-GitHub Container Registry images are public by default, so no authentication is needed to pull images.
+The Deduparr image is public, so no authentication is needed to pull it.
 
 For pushing images (maintainers only), the workflow uses the automatic `GITHUB_TOKEN`.
 
@@ -91,8 +91,8 @@ docker run -d -p 8655:8655 deduparr:local
 
 The workflow passes these build arguments:
 
-- `BUILD_DATE`: Timestamp of the build
-- `VCS_REF`: Git commit SHA
+- `BUILD_DATE`: Timestamp of the pushed commit (empty on nightly and manual builds)
+- `VCS_REF`: SHA of the commit the run started from; on nightly and manual builds, the head of the branch the workflow runs on, not necessarily the commit it builds
 - `VERSION`: Version from git tag or branch
 
 These can be used in the Dockerfile for metadata.
@@ -102,7 +102,7 @@ These can be used in the Dockerfile for metadata.
 GitHub Actions generates build attestations for all published images. You can verify an image's provenance:
 
 ```bash
-# Install cosign (for verification)
+# Requires the GitHub CLI (gh)
 gh attestation verify oci://ghcr.io/deduparr-dev/deduparr:latest \
   --owner deduparr-dev
 ```
@@ -143,7 +143,8 @@ This is useful for testing a build, or for rebuilding `dev` without a new commit
 bash scripts/release.sh 0.1.3
 ```
 
-Creates tags: `latest`, `0.1.3`, `0.1` (no `0`, no SHA)
+Creates tags: `latest`, `0.1.3`, `0.1` (no `0`, no SHA), then the GitHub release. The whole
+process is in [RELEASING.md](RELEASING.md).
 
 ##  Resources
 

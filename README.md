@@ -42,13 +42,12 @@ All with a beautiful web UI and dry-run mode for safety!
 
 ## ✨ Features
 
-- 🔍 **Smart Duplicate Detection** - Scan libraries through Plex or Jellyfin, or with deep filesystem scans
+- 🔍 **Smart Duplicate Detection** - Scan libraries through Plex or Jellyfin; an optional deep scan also logs duplicates on disk that the media server does not list
 - ✅ **Safe Review System** - Dry-run mode by default, preview before deletion
 - 🗑️ **Multi-Stage Deletion** - Removes from qBittorrent, Radarr/Sonarr, disk, and refreshes media library
 - 📊 **Dashboard & Analytics** - Track duplicates found, space reclaimed, and activity history
 - ⚙️ **Easy Setup** - Setup wizard with OAuth authentication and connection testing
-- 🔒 **Secure** - Enterprise-grade token encryption and type-safe code
-- 🤖 **Automated Dependency Updates** - Dependabot auto-approves and merges patch/minor updates
+- 🤖 **Automated Dependency Updates** - Dependabot pull requests, major versions included, are approved and merged once CI passes
 
 ---
 
@@ -89,8 +88,8 @@ All with a beautiful web UI and dry-run mode for safety!
 
 - Docker and Docker Compose
 - Plex Media Server or Jellyfin (either, or both)
-- Radarr and/or Sonarr
-- qBittorrent
+- Radarr and/or Sonarr (optional)
+- qBittorrent (optional)
 
 ### Installation
 
@@ -106,19 +105,19 @@ services:
       - PGID=1000
       - TZ=Etc/UTC
       - DATABASE_TYPE=sqlite  # or 'postgres'
-      # Optional: Enable scheduled scans
+      # Optional: scheduled scans, until the schedule is saved in Settings
       - ENABLE_SCHEDULED_SCANS=false
-      - SCAN_INTERVAL_HOURS=24
+      - SCAN_INTERVAL_HOURS=24  # Only with SCAN_SCHEDULE_MODE=interval (default: daily at 02:00)
     volumes:
       - ./config:/config
       - ./data:/app/data
-      - /path/to/media:/media:rw  # Use :ro for API-only deletion, :rw for full cleanup
+      - /path/to/media:/path/in/media/server:rw  # Use :ro for API-only deletion, :rw for full cleanup
     ports:
       - 8655:8655
     restart: unless-stopped
 ```
 
-> **Media Mount:** Use `:rw` (recommended) for complete cleanup including associated files and empty directories. Use `:ro` if you only want API-based deletion via Radarr/Sonarr/qBittorrent. See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed configuration options.
+> **Media Mount:** Mount your media at the same paths your media server (Plex or Jellyfin) reports: the scan looks for each file at exactly that path and skips a duplicate whose file it cannot find. Use `:rw` (recommended) for complete cleanup including associated files and empty directories. Use `:ro` if you only want API-based deletion via Radarr/Sonarr/qBittorrent. See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed configuration options.
 
 2. **Start the container:**
 
@@ -166,8 +165,9 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for developmen
 
 **Quick Start:**
 ```bash
-git clone https://github.com/deduparr-dev/deduparr.git
-cd deduparr
+git clone https://github.com/deduparr-dev/deduparr.git /workspaces/deduparr
+cd /workspaces/deduparr
+mkdir -p ~/.config/containers/systemd
 ln -sf "$PWD"/quadlet/*.{pod,build,container} ~/.config/containers/systemd/
 systemctl --user daemon-reload
 systemctl --user start deduparr-frontend.service
@@ -175,7 +175,7 @@ systemctl --user start deduparr-frontend.service
 
 Frontend: http://localhost:3000 | Backend: http://localhost:3001
 
-See [quadlet/README.md](quadlet/README.md) for requirements and day-to-day commands.
+The clone must be at `/workspaces/deduparr`: the units hard-code that path. See [quadlet/README.md](quadlet/README.md) for requirements and day-to-day commands.
 
 ---
 
@@ -187,8 +187,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 💬 Community
 
-- [GitHub Discussions](https://github.com/deduparr-dev/deduparr/discussions) - Ask questions and share ideas
-- [Issues](https://github.com/deduparr-dev/deduparr/issues) - Report bugs or request features
+- [Issues](https://github.com/deduparr-dev/deduparr/issues) - Ask questions, report bugs or request features
 
 ---
 

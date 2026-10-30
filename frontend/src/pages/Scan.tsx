@@ -16,7 +16,7 @@ import {
   FlaskConical,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   MEDIA_SERVER_NAMES,
   scanAPI,
@@ -33,6 +33,7 @@ import {
 import { toast } from "@/components/ui/use-toast";
 
 const SHOWN_ERRORS = 3;
+const SETS_PER_PAGE = 100;
 
 function deletionTitle({ success, dry_run }: DeleteResponse | DeleteAllResponse): string {
   if (!success) return dry_run ? "Dry Run Found Problems" : "Deletion Incomplete";
@@ -413,12 +414,37 @@ export default function Scan() {
     refetchInterval: 30 * 1000, // Auto-refresh every 30 seconds
   });
 
-  // Fetch duplicates with caching
-  const { data: duplicates = [] } = useQuery({
+  // Fetch duplicates a page at a time, each page starting where the last ended
+  const {
+    data: duplicatePages,
+    hasNextPage,
+    fetchNextPage,
+    isFetchingNextPage,
+    refetch: refetchDuplicates,
+  } = useInfiniteQuery({
     queryKey: ["duplicates"],
-    queryFn: () => scanAPI.getDuplicates(),
+    queryFn: ({ pageParam }) => scanAPI.getDuplicates(pageParam, SETS_PER_PAGE),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, _pages, offset) => {
+      const next = offset + lastPage.sets.length;
+      return next < lastPage.total ? next : undefined;
+    },
     staleTime: 30 * 1000, // Cache for 30 seconds
   });
+  const pages = duplicatePages?.pages ?? [];
+  // A set found or removed after the first page loaded shifts the others
+  // between pages: loadMore then loads every page again, and until it has, a
+  // set shifted onto the next page is listed once
+  const duplicates = [
+    ...new Map(pages.flatMap((page) => page.sets).map((set) => [set.id, set])).values(),
+  ];
+  const totalSets = pages[pages.length - 1]?.total ?? 0;
+
+  async function loadMore() {
+    const { data } = await fetchNextPage();
+    const loaded = data?.pages ?? [];
+    if (loaded[0]?.total !== loaded[loaded.length - 1]?.total) await refetchDuplicates();
+  }
 
   // Start scan mutation
   const startScanMutation = useMutation({
@@ -554,12 +580,10 @@ export default function Scan() {
 
   const isScanning = startScanMutation.isPending;
 
-  const pendingSets = duplicates.filter((dupSet) => dupSet.status === "pending");
-  const pendingFilesToDelete = pendingSets.reduce(
-    (total, dupSet) => total + dupSet.files.filter((file) => !file.keep).length,
-    0
-  );
-  const pendingSpace = pendingSets.reduce((total, dupSet) => total + dupSet.space_to_reclaim, 0);
+  // Delete All covers every pending set, not only the pages loaded
+  const setsToDelete = scanStatus?.sets_to_delete ?? 0;
+  const pendingFilesToDelete = scanStatus?.pending_files_to_delete ?? 0;
+  const pendingSpace = scanStatus?.total_space_reclaimable ?? 0;
 
   // Dev-only: Direct disk scan mutation
   const devScanMutation = useMutation({
@@ -600,7 +624,10 @@ export default function Scan() {
         <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-3">
           <div>
             <div className="text-xs md:text-sm text-muted-foreground mb-1">Duplicate Items</div>
-            <div className="text-2xl md:text-3xl font-bold text-foreground">
+            <div
+              className="text-2xl md:text-3xl font-bold text-foreground"
+              data-testid="duplicate-items"
+            >
               {scanStatus?.total_duplicate_sets ?? 0}
             </div>
           </div>
@@ -705,7 +732,7 @@ export default function Scan() {
       <div className="space-y-3 md:space-y-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
           <h3 className="text-base md:text-lg font-semibold">Duplicate Sets Found</h3>
-          {pendingSets.length > 0 && (
+          {setsToDelete > 0 && (
             <Button
               size="sm"
               variant="destructive"
@@ -719,7 +746,7 @@ export default function Scan() {
               ) : (
                 <Trash2 className="w-3 h-3 md:w-4 md:h-4 mr-2" />
               )}
-              Delete All ({pendingSets.length})
+              Delete All ({setsToDelete})
             </Button>
           )}
         </div>
@@ -731,9 +758,8 @@ export default function Scan() {
             description={
               <>
                 This will delete <strong>{pendingFilesToDelete}</strong> file
-                {pendingFilesToDelete === 1 ? "" : "s"} across <strong>{pendingSets.length}</strong>{" "}
-                set
-                {pendingSets.length === 1 ? "" : "s"}, keeping the highest ranked file in each, and
+                {pendingFilesToDelete === 1 ? "" : "s"} across <strong>{setsToDelete}</strong> set
+                {setsToDelete === 1 ? "" : "s"}, keeping the highest ranked file in each, and
                 reclaim about <strong>{formatBytes(pendingSpace)}</strong>.
               </>
             }
@@ -758,6 +784,24 @@ export default function Scan() {
               isTogglingFile={togglingFileId}
             />
           ))
+        )}
+
+        {hasNextPage && (
+          <div className="flex flex-col items-center gap-2">
+            <p className="text-xs md:text-sm text-muted-foreground" data-testid="sets-shown">
+              Showing {duplicates.length} of {totalSets} duplicate sets
+            </p>
+            <Button
+              variant="outline"
+              data-testid="load-more"
+              disabled={isFetchingNextPage}
+              onClick={loadMore}
+              className="w-full sm:w-auto"
+            >
+              {isFetchingNextPage && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Load More
+            </Button>
+          </div>
         )}
       </div>
     </div>

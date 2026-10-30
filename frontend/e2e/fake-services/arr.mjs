@@ -56,22 +56,11 @@ function reset(title = DEFAULT_TITLE) {
     series: [
       { id: 1, title: "Fake Show", qualityProfileId: 1, path: `${MEDIA_DIR}/Shows/Fake Show` },
     ],
-    episodes: [
-      {
-        id: 31,
-        seriesId: 1,
-        seasonNumber: 1,
-        episodeNumber: 2,
-        title: "The Second One",
-        episodeFileId: 21,
-      },
-    ],
     episodeFiles: [
       {
         id: 21,
         seriesId: 1,
         seasonNumber: 1,
-        episodeIds: [31],
         path: `${seasonDir}/Fake Show - S01E02 480p.mkv`,
         quality: { quality: { id: 1, name: "480p" }, revision: { version: 1, real: 0 } },
       },
@@ -79,7 +68,6 @@ function reset(title = DEFAULT_TITLE) {
         id: 22,
         seriesId: 1,
         seasonNumber: 1,
-        episodeIds: [],
         path: `${seasonDir}/Fake Show - S01E02 1080p.mkv`,
         quality: { quality: { id: 2, name: "1080p" }, revision: { version: 1, real: 0 } },
       },
@@ -187,7 +175,8 @@ const server = http.createServer(async (req, res) => {
     for (const movie of state.movies) {
       if (movie.movieFile?.id === id) delete movie.movieFile;
     }
-    return json(res, 200, {});
+    res.writeHead(200).end();
+    return undefined;
   }
   if (v3 === "/series") {
     return json(res, 200, state.series);
@@ -210,21 +199,26 @@ const server = http.createServer(async (req, res) => {
     const id = Number(v3.split("/").pop());
     removeFile(state.episodeFiles, id);
     state.deletedEpisodeFiles.push(id);
-    return json(res, 200, {});
-  }
-  if (/^\/episode\/\d+$/.test(v3)) {
-    const id = Number(v3.split("/").pop());
-    const episode = state.episodes.find((e) => e.id === id);
-    return episode ? json(res, 200, episode) : json(res, 404, { message: "Not found" });
+    res.writeHead(200).end();
+    return undefined;
   }
   if (/^\/qualityprofile\/\d+$/.test(v3)) {
     const id = Number(v3.split("/").pop());
     const profile = state.qualityProfiles.find((p) => p.id === id);
     return profile ? json(res, 200, profile) : json(res, 404, { message: "Not found" });
   }
-  if (v3 === "/manualimport") {
-    // Files the *arr has not catalogued yet
-    return json(res, 200, []);
+  if (v3 === "/parse") {
+    const title = url.searchParams.get("title") ?? "";
+    const index = ["480p", "1080p", "2160p"].findIndex((name) => title.includes(name));
+    const quality = { id: index + 1, name: index < 0 ? "Unknown" : title.match(/\d+p/)[0] };
+    return json(res, 200, {
+      title,
+      [FLAVOUR === "radarr" ? "parsedMovieInfo" : "parsedEpisodeInfo"]: {
+        quality: { quality, revision: { version: 1, real: 0 } },
+      },
+      customFormats: [],
+      customFormatScore: 0,
+    });
   }
   if (v3 === "/command" && req.method === "POST") {
     const body = await readBody(req);

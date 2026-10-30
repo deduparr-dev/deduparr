@@ -3,6 +3,7 @@ Tests for scan API routes
 """
 
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
@@ -229,6 +230,14 @@ async def test_scan_status_endpoint(client, test_db):
     )
     test_db.add(set1)
     test_db.add(set2)
+    await test_db.flush()
+    test_db.add_all(
+        [
+            DuplicateFile(set_id=set1.id, file_path="/m/a.mkv", file_size=1, keep=True),
+            DuplicateFile(set_id=set1.id, file_path="/m/b.mkv", file_size=1),
+            DuplicateFile(set_id=set2.id, file_path="/m/c.mkv", file_size=1),
+        ]
+    )
     await test_db.commit()
 
     response = await client.get("/api/scan/status")
@@ -237,8 +246,80 @@ async def test_scan_status_endpoint(client, test_db):
     data = response.json()
     assert data["total_duplicate_sets"] == 2
     assert data["pending_sets"] == 1
-    # Only PENDING/APPROVED sets count toward reclaimable space (excludes PROCESSED)
-    assert data["total_space_reclaimable"] == 5 * 1024**3
+    # Delete All removes the pending set's file not marked to keep, and no other
+    assert data["sets_to_delete"] == 1
+    assert data["pending_files_to_delete"] == 1
+    # What the pending sets would delete, not the PROCESSED set's file
+    assert data["total_space_reclaimable"] == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_status_counts_a_file_both_servers_list_once(client, test_db):
+    """Plex and Jellyfin list the same file as two sets; it is deleted once."""
+    plex, jellyfin, all_kept = (
+        DuplicateSet(
+            item_id=item_id,
+            title="Movie",
+            media_type=MediaType.MOVIE,
+            media_server=server,
+            status=DuplicateStatus.PENDING,
+        )
+        for item_id, server in (("1", "plex"), ("a", "jellyfin"), ("2", "plex"))
+    )
+    test_db.add_all([plex, jellyfin, all_kept])
+    await test_db.flush()
+    test_db.add_all(
+        [
+            DuplicateFile(set_id=plex.id, file_path="/m/720p.mkv", file_size=10),
+            DuplicateFile(set_id=jellyfin.id, file_path="/m/720p.mkv", file_size=10),
+            DuplicateFile(
+                set_id=all_kept.id, file_path="/m/k.mkv", file_size=5, keep=True
+            ),
+        ]
+    )
+    await test_db.commit()
+
+    data = (await client.get("/api/scan/status")).json()
+
+    assert data["pending_sets"] == 3
+    assert data["sets_to_delete"] == 2
+    assert data["pending_files_to_delete"] == 1
+    assert data["total_space_reclaimable"] == 10
+
+
+@pytest.mark.asyncio
+async def test_delete_all_reports_what_it_could_not_do(client, test_db, tmp_path):
+    """A note on a set, such as a service not configured, reaches the result."""
+    keep, drop = tmp_path / "keep.mkv", tmp_path / "drop.mkv"
+    keep.write_bytes(b"k")
+    drop.write_bytes(b"d")
+    dup_set = DuplicateSet(
+        item_id="1",
+        title="Movie",
+        media_type=MediaType.MOVIE,
+        media_server="disk",
+        status=DuplicateStatus.PENDING,
+    )
+    test_db.add(dup_set)
+    await test_db.flush()
+    test_db.add_all(
+        [
+            DuplicateFile(
+                set_id=dup_set.id, file_path=str(keep), file_size=1, keep=True
+            ),
+            DuplicateFile(set_id=dup_set.id, file_path=str(drop), file_size=1),
+        ]
+    )
+    await test_db.commit()
+
+    response = await client.post(
+        "/api/scan/duplicates/delete-all", json={"dry_run": False}
+    )
+
+    data = response.json()
+    assert data["success"] is True
+    assert "Note: " in data["message"] and "not configured" in data["message"]
+    assert not drop.exists()
 
 
 @pytest.mark.asyncio
@@ -295,10 +376,31 @@ async def test_get_duplicates_filtered_by_status(client, test_db, create_duplica
 
     response = await client.get("/api/scan/duplicates?status=pending")
     assert response.status_code == 200
+    assert response.headers["X-Total-Count"] == "1"
 
     data = response.json()
     assert len(data) == 1
     assert data[0]["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_get_duplicates_pages_through_every_set(client, create_duplicate_set):
+    """Each set is on exactly one page, newest first, and the header counts all."""
+    # Found in the same instant, as sets from one scan can be
+    found_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ids = [
+        (await create_duplicate_set(item_id=str(n), found_at=found_at)).id
+        for n in range(5)
+    ]
+
+    pages = []
+    for offset in (0, 2, 4):
+        response = await client.get(f"/api/scan/duplicates?limit=2&offset={offset}")
+        assert response.status_code == 200
+        assert response.headers["X-Total-Count"] == "5"
+        pages.append([dup_set["id"] for dup_set in response.json()])
+
+    assert pages == [ids[4:2:-1], ids[2:0:-1], ids[:1]]
 
 
 @pytest.mark.asyncio
@@ -554,7 +656,7 @@ async def test_delete_reports_a_file_it_could_not_find(
     assert data["success"] is False
     assert data["files_deleted"] == 0
     assert data["space_reclaimed"] == 0
-    assert "File not found for deletion" in data["errors"][0]
+    assert "none of the files to keep is on disk" in data["errors"][0]
     await test_db.refresh(dup_set)
     assert dup_set.status == DuplicateStatus.PENDING
 
@@ -669,6 +771,57 @@ async def test_update_file_keep_flag_success(client, test_db, create_duplicate_s
     # Verify in database
     await test_db.refresh(file2)
     assert file2.keep is True
+
+
+@pytest.mark.asyncio
+async def test_update_file_keep_flag_reaches_the_other_server(client, test_db):
+    """
+    Plex and Jellyfin list the same files as two sets. A copy marked to keep on
+    one was still deleted through the other.
+    """
+    plex, jellyfin = (
+        DuplicateSet(
+            item_id=item_id,
+            title="Movie",
+            media_type=MediaType.MOVIE,
+            media_server=server,
+            status=DuplicateStatus.PENDING,
+        )
+        for item_id, server in (("1", "plex"), ("a", "jellyfin"))
+    )
+    test_db.add_all([plex, jellyfin])
+    await test_db.flush()
+    plex_best, plex_other = None, None
+    for dup_set in (plex, jellyfin):
+        best = DuplicateFile(
+            set_id=dup_set.id, file_path="/m/2160p.mkv", file_size=20, keep=True
+        )
+        other = DuplicateFile(set_id=dup_set.id, file_path="/m/1080p.mkv", file_size=10)
+        test_db.add_all([best, other])
+        plex_best, plex_other = plex_best or best, plex_other or other
+    await test_db.flush()
+    plex_id, jellyfin_id = plex.id, jellyfin.id
+    toggles = ((plex_other.id, True), (plex_best.id, False))
+    await test_db.commit()
+
+    for file_id, keep in toggles:
+        response = await client.patch(
+            f"/api/scan/duplicates/{plex_id}/files/{file_id}", json={"keep": keep}
+        )
+        assert response.status_code == 200
+
+    rows = await test_db.execute(
+        select(DuplicateFile.file_path, DuplicateFile.keep).where(
+            DuplicateFile.set_id == jellyfin_id
+        )
+    )
+    assert dict(rows.all()) == {"/m/2160p.mkv": False, "/m/1080p.mkv": True}
+    assert (
+        await test_db.scalar(
+            select(DuplicateSet.space_to_reclaim).where(DuplicateSet.id == jellyfin_id)
+        )
+        == 20
+    )
 
 
 @pytest.mark.asyncio
@@ -847,6 +1000,7 @@ async def test_delete_all_dry_run_spans_every_pending_set(client, test_db, tmp_p
         await test_db.flush()
         drop = tmp_path / f"drop{n}.mkv"
         drop.write_bytes(b"d" * 1024)
+        (tmp_path / f"keep{n}.mkv").write_bytes(b"k" * 1024)
         test_db.add_all(
             [
                 DuplicateFile(

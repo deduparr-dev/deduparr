@@ -2,7 +2,7 @@ import fs from "fs";
 
 import { expect, test } from "@playwright/test";
 
-import { getPendingSets, gotoApp, markConfigured, seedDuplicateSet } from "./helpers";
+import { getPendingSets, gotoApp, markConfigured, seedDuplicateSets } from "./helpers";
 
 test.describe("delete all duplicates", () => {
   test.beforeEach(async ({ request }) => {
@@ -21,7 +21,7 @@ test.describe("delete all duplicates", () => {
     page,
     request,
   }) => {
-    const { keep, drop } = await seedDuplicateSet(request, "Delete All Movie (2024)");
+    const [{ keep, drop }] = await seedDuplicateSets(request, ["Delete All Movie (2024)"]);
     const pendingBefore = await getPendingSets(request);
     expect(pendingBefore.length).toBeGreaterThan(0);
 
@@ -53,7 +53,7 @@ test.describe("delete all duplicates", () => {
   });
 
   test("cancelling closes the confirmation", async ({ page, request }) => {
-    await seedDuplicateSet(request, "Cancel Movie (2024)");
+    await seedDuplicateSets(request, ["Cancel Movie (2024)"]);
 
     await gotoApp(page, "/scan");
     await expect(page.getByTestId("delete-all")).toHaveCount(1);

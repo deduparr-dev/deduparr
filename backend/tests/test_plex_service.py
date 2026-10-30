@@ -53,9 +53,8 @@ def mock_plex_resource():
 
 
 @pytest.mark.asyncio
-@patch("app.services.media_server.plex_service.get_token_manager")
 @patch("app.services.media_server.plex_service.requests.post")
-async def test_initiate_auth(mock_post, mock_token_manager):
+async def test_initiate_auth(mock_post):
     """Test initiating OAuth PIN authentication"""
     mock_response = Mock()
     mock_response.json.return_value = {
@@ -64,10 +63,6 @@ async def test_initiate_auth(mock_post, mock_token_manager):
     }
     mock_response.raise_for_status = Mock()
     mock_post.return_value = mock_response
-
-    mock_manager = Mock()
-    mock_manager.generate_state_token.return_value = "test-state-token"
-    mock_token_manager.return_value = mock_manager
 
     result = await PlexAuthService.initiate_auth()
 
@@ -81,16 +76,12 @@ async def test_initiate_auth(mock_post, mock_token_manager):
 @pytest.mark.asyncio
 @patch("app.services.media_server.plex_service.requests.get")
 @patch("app.services.media_server.plex_service.pin_cache")
-@patch("app.services.media_server.plex_service.PlexAuthService.validate_token")
 @patch("app.services.media_server.plex_service.get_token_manager")
-async def test_check_auth_completed(
-    mock_token_manager, mock_validate, mock_cache, mock_get
-):
+async def test_check_auth_completed(mock_token_manager, mock_cache, mock_get):
     """Test checking auth when user has completed OAuth"""
     mock_cache.get.return_value = {
         "code": "ABCD",
         "client_id": "test-client-id",
-        "state_token": "test-state",
         "created_at": "2024-01-01T00:00:00",
     }
 
@@ -100,8 +91,6 @@ async def test_check_auth_completed(
     }
     mock_response.raise_for_status = Mock()
     mock_get.return_value = mock_response
-
-    mock_validate.return_value = {"username": "testuser"}
 
     mock_manager = Mock()
     mock_manager.encrypt.return_value = "encrypted_token"
@@ -122,7 +111,6 @@ async def test_check_auth_pending(mock_cache, mock_get):
     mock_cache.get.return_value = {
         "code": "ABCD",
         "client_id": "test-client-id",
-        "state_token": "test-state",
         "created_at": "2024-01-01T00:00:00",
     }
 
@@ -340,3 +328,17 @@ def test_test_connection_failure(mock_account_class, mock_token_manager):
 
     assert result["success"] is False
     assert "Connection failed" in result["error"]
+
+
+def test_get_libraries_gives_the_key_as_text():
+    """plexapi's section key is a number; the setup API's response takes text."""
+    service = PlexService(encrypted_token="encrypted_token", server_name="Test Server")
+    server = Mock()
+    server.library.sections.return_value = [
+        Mock(key=1, title="Movies", type="movie", totalSize=3)
+    ]
+
+    with patch.object(service, "_get_server", return_value=server):
+        assert service.get_libraries() == [
+            {"key": "1", "title": "Movies", "type": "movie", "count": 3}
+        ]

@@ -12,9 +12,12 @@ The TypedDicts below describe the parts of each resource Deduparr reads; the
 """
 
 import logging
+import os
 from typing import List, Mapping, Optional, TypedDict, Union, cast, overload
 
 import httpx
+
+from app.services.arr.path_mapping import PathMapper
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +54,6 @@ class ArrFile(TypedDict, total=False):
     customFormats: List[CustomFormatRef]
     seriesId: int
     seasonNumber: int
-    episodeIds: List[int]
 
 
 class MediaItem(TypedDict, total=False):
@@ -65,11 +67,7 @@ class MediaItem(TypedDict, total=False):
 
 
 class Episode(TypedDict, total=False):
-    id: int
     seriesId: int
-    seasonNumber: int
-    episodeNumber: int
-    title: str
     episodeFile: ArrFile
 
 
@@ -164,6 +162,7 @@ class ArrClient:
         api_key: str,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         verify_ssl: bool = True,
+        path_mapper: Optional[PathMapper] = None,
     ):
         """
         Initialize *arr client
@@ -173,9 +172,13 @@ class ArrClient:
             api_key: API key for authentication
             timeout: Request timeout in seconds (float) or httpx.Timeout object. Defaults to 30.0
             verify_ssl: Whether to verify SSL certificates. Defaults to True
+            path_mapper: Translates paths between the *arr's view and the media
+                server's view of the library. Requests and responses are translated,
+                so callers only handle the paths the media server reports.
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.path_mapper = path_mapper
         self.api_version = "v3"
         # store optional client configuration for use when creating httpx AsyncClient
         self.timeout = timeout
@@ -230,7 +233,8 @@ class ArrClient:
             json_data: JSON body data
 
         Returns:
-            The decoded JSON response, {} for 204 No Content
+            The decoded JSON response, {} for 204 No Content and for a delete,
+            which Radarr and Sonarr answer with 200 and an empty body
 
         Raises:
             ArrConnectionError: Connection failed
@@ -239,6 +243,9 @@ class ArrClient:
             ArrClientError: Other API errors
         """
         client = await self._get_client()
+
+        if self.path_mapper:
+            json_data = self.path_mapper.translate_to_arr(json_data)
 
         try:
             response = await client.request(
@@ -259,14 +266,19 @@ class ArrClient:
                     f"API request failed with status {response.status_code}: {response.text}"
                 )
 
-            if response.status_code == 204:
+            if response.status_code == 204 or (
+                method == "DELETE" and not response.content
+            ):
                 return {}
 
             try:
-                return response.json()
+                data = response.json()
             except ValueError as e:
                 # A login page or a proxy's error page, for instance
                 raise ArrClientError(f"{endpoint} did not answer with JSON: {e}")
+            if self.path_mapper:
+                data = self.path_mapper.translate_to_media_server(data)
+            return data
 
         except httpx.ConnectError as e:
             raise ArrConnectionError(f"Failed to connect to {self.base_url}: {e}")
@@ -323,11 +335,30 @@ class ArrClient:
             QualityProfile, _as_object(await self._request("GET", endpoint), endpoint)
         )
 
-    async def _get_manual_import(self, params: QueryParams) -> List[ArrFile]:
-        """Manual import candidates, as Radarr or Sonarr narrows them"""
-        endpoint = "/manualimport"
-        result = await self._request("GET", endpoint, params=params)
-        return cast(List[ArrFile], _as_list(result, endpoint))
+    async def _parse_file(self, file_path: str, parsed_info: str) -> ArrFile:
+        """
+        What the *arr reads from the name of a file it has not imported.
+
+        Not /manualimport, which answers "Unknown" for such a file when it is
+        given the item's ID, and no quality from Sonarr when it is not.
+        """
+        endpoint = "/parse"
+        answer = _as_object(
+            await self._request(
+                "GET", endpoint, params={"title": os.path.basename(file_path)}
+            ),
+            endpoint,
+        )
+        info = cast(JsonObject, answer.get(parsed_info) or {})
+        return cast(
+            ArrFile,
+            {
+                "path": file_path,
+                "quality": info.get("quality"),
+                "customFormatScore": answer.get("customFormatScore"),
+                "customFormats": answer.get("customFormats"),
+            },
+        )
 
 
 class RadarrClient(ArrClient):
@@ -343,9 +374,14 @@ class RadarrClient(ArrClient):
         api_key: str,
         timeout: int = 30,
         verify_ssl: bool = True,
+        path_mapper: Optional[PathMapper] = None,
     ):
         super().__init__(
-            base_url=base_url, api_key=api_key, timeout=timeout, verify_ssl=verify_ssl
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+            path_mapper=path_mapper,
         )
         self.api_version = "v3"
 
@@ -408,34 +444,9 @@ class RadarrClient(ArrClient):
         result = await self._request("GET", endpoint, params={"movieId": movie_id})
         return cast(List[ArrFile], _as_list(result, endpoint))
 
-    async def get_manual_import(
-        self,
-        folder: str,
-        download_id: str = "",
-        movie_id: Optional[int] = None,
-        filter_existing_files: bool = True,
-    ) -> List[ArrFile]:
-        """
-        Get manual import candidates
-
-        Args:
-            folder: Folder path to scan
-            download_id: Download ID (optional)
-            movie_id: Movie ID to filter by
-            filter_existing_files: Filter out already imported files
-
-        Returns:
-            List of importable files
-        """
-        params: dict[str, Union[str, int, bool]] = {
-            "folder": folder,
-            "filterExistingFiles": filter_existing_files,
-        }
-        if download_id:
-            params["downloadId"] = download_id
-        if movie_id is not None:
-            params["movieId"] = movie_id
-        return await self._get_manual_import(params)
+    async def parse_file(self, file_path: str) -> ArrFile:
+        """What Radarr reads from the name of a file it has not imported"""
+        return await self._parse_file(file_path, "parsedMovieInfo")
 
 
 class SonarrClient(ArrClient):
@@ -452,9 +463,14 @@ class SonarrClient(ArrClient):
         api_key: str,
         timeout: int = 30,
         verify_ssl: bool = True,
+        path_mapper: Optional[PathMapper] = None,
     ):
         super().__init__(
-            base_url=base_url, api_key=api_key, timeout=timeout, verify_ssl=verify_ssl
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+            path_mapper=path_mapper,
         )
         # Start with v5, will auto-detect and fall back to v3 if needed
         self.api_version = "v5"
@@ -539,18 +555,6 @@ class SonarrClient(ArrClient):
         result = await self._request("GET", endpoint, params={"seriesId": series_id})
         return cast(List[ArrFile], _as_list(result, endpoint))
 
-    async def get_episode(self, episode_id: int) -> Episode:
-        """
-        Get episode by ID
-
-        Some Sonarr versions answer with a list holding the one episode.
-        """
-        endpoint = f"/episode/{episode_id}"
-        episodes = _as_list(await self._request("GET", endpoint), endpoint)
-        if not episodes:
-            raise ArrNotFoundError(f"Resource not found: {endpoint}")
-        return cast(Episode, episodes[0])
-
     async def delete_episode_file(self, episode_file_id: int) -> None:
         """
         Delete episode file
@@ -560,31 +564,6 @@ class SonarrClient(ArrClient):
         """
         await self._request("DELETE", f"/episodefile/{episode_file_id}")
 
-    async def get_manual_import(
-        self,
-        folder: str,
-        download_id: str = "",
-        series_id: Optional[int] = None,
-        filter_existing_files: bool = True,
-    ) -> List[ArrFile]:
-        """
-        Get manual import candidates
-
-        Args:
-            folder: Folder path to scan
-            download_id: Download ID (optional)
-            series_id: Series ID to filter by
-            filter_existing_files: Filter out already imported files
-
-        Returns:
-            List of importable files
-        """
-        params: dict[str, Union[str, int, bool]] = {
-            "folder": folder,
-            "filterExistingFiles": filter_existing_files,
-        }
-        if download_id:
-            params["downloadId"] = download_id
-        if series_id is not None:
-            params["seriesId"] = series_id
-        return await self._get_manual_import(params)
+    async def parse_file(self, file_path: str) -> ArrFile:
+        """What Sonarr reads from the name of a file it has not imported"""
+        return await self._parse_file(file_path, "parsedEpisodeInfo")

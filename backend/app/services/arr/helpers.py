@@ -33,9 +33,10 @@ async def rescan_media_item(
     another folder gets the item pointed at that folder first.
 
     Raises:
-        ValueError: The kept file sits directly in a root folder. The *arr
-            refuses a root folder as a movie or series path, and the kept file
-            is not moved behind the user's back.
+        ValueError: The kept file sits directly in a root folder, which the
+            *arr refuses as a movie or series path, or in a folder that no
+            path mapping covers and no root folder holds, so the *arr may not
+            see it. The kept file is not moved behind the user's back.
     """
     if isinstance(client, RadarrClient):
         arr, kind, command, id_param = "Radarr", "movie", "RescanMovie", "movieId"
@@ -55,8 +56,9 @@ async def rescan_media_item(
     current_path = item.get("path", "")
     folder = os.path.dirname(kept_file_path)
 
+    roots = await client.get_root_folder()
     # Root folders picked in the *arr's folder browser carry a trailing slash
-    for root in await client.get_root_folder():
+    for root in roots:
         if root.get("path", "").rstrip("/") == folder.rstrip("/"):
             raise ValueError(
                 f"{arr} cannot import {kept_file_path}: it sits directly in the "
@@ -65,6 +67,19 @@ async def rescan_media_item(
             )
 
     if current_path and not _within(current_path, folder):
+        # A folder no mapping covers reaches the *arr as the media server sees
+        # it, which is right only where both see the same path
+        mapper = client.path_mapper
+        if (
+            mapper
+            and not mapper.covers(folder)
+            and not any(r.get("path") and _within(r["path"], folder) for r in roots)
+        ):
+            raise ValueError(
+                f"{arr} cannot import {kept_file_path}: no path mapping covers "
+                f"{folder}, and none of {arr}'s root folders holds it. Move it "
+                f"into {current_path} and refresh the {kind} in {arr}."
+            )
         logger_instance.info(
             f"{arr} keeps this {kind} in {current_path}; pointing it at {folder}"
         )
@@ -97,7 +112,7 @@ async def find_movie_by_file_path(
                 )
                 return movie
 
-        logger_instance.warning(f"Movie not found in Radarr for file path: {file_path}")
+        logger_instance.info(f"Movie not found in Radarr for file path: {file_path}")
         return None
     except Exception as e:
         logger_instance.error(f"Error finding movie for {file_path}: {e}")
@@ -108,11 +123,8 @@ async def find_episode_by_file_path(
     client: SonarrClient, file_path: str, logger_instance: logging.Logger
 ) -> Optional[Episode]:
     """
-    The episode whose file Sonarr keeps at exactly this path, if any.
-
-    Sonarr can hold a file no episode points at, after a manual import or an
-    episode's deletion. That file comes back as an episode without an ID, so
-    the deletion pipeline can still delete it.
+    The file Sonarr keeps at exactly this path, if any, inside an Episode that
+    has only its series: Sonarr's episode files do not name their episodes.
     """
     try:
         for series in await client.get_series():
@@ -120,34 +132,14 @@ async def find_episode_by_file_path(
             if not series_id:
                 continue
             for episode_file in await client.get_episode_files_by_series_id(series_id):
-                if episode_file.get("path") != file_path:
-                    continue
-
-                episode_ids = episode_file.get("episodeIds") or []
-                if episode_ids:
-                    episode = await client.get_episode(episode_ids[0])
-                    episode["episodeFile"] = episode_file
+                if episode_file.get("path") == file_path:
                     logger_instance.info(
-                        f"Found episode '{episode.get('title', 'Unknown Episode')}' "
-                        f"for file {file_path}"
+                        f"Found file {episode_file.get('id')} of series {series_id} "
+                        f"for {file_path}"
                     )
-                    return episode
+                    return Episode(seriesId=series_id, episodeFile=episode_file)
 
-                season = episode_file.get("seasonNumber", 0)
-                logger_instance.warning(
-                    f"Found orphaned episode file {episode_file.get('id')} in Sonarr "
-                    f"(series {series_id}, season {season}, no episodes): {file_path}"
-                )
-                return Episode(
-                    seriesId=series_id,
-                    seasonNumber=season,
-                    episodeFile=episode_file,
-                    title=f"Orphaned S{season:02d} file",
-                )
-
-        logger_instance.warning(
-            f"Episode not found in Sonarr for file path: {file_path}"
-        )
+        logger_instance.info(f"Episode not found in Sonarr for file path: {file_path}")
         return None
     except Exception as e:
         logger_instance.error(f"Error finding episode for {file_path}: {e}")

@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PlexServerSelect } from "@/components/PlexServerSelect";
 import {
   AlertCircle,
   Check,
@@ -108,6 +109,7 @@ function GeneralSettings({
   setSmtpUser,
   smtpPassword,
   setSmtpPassword,
+  smtpPasswordSaved,
   notificationEmail,
   setNotificationEmail,
   scheduledScansEnabled,
@@ -137,6 +139,8 @@ function GeneralSettings({
   setSmtpUser: (value: string) => void;
   smtpPassword: string;
   setSmtpPassword: (value: string) => void;
+  /** A password is saved; the field is left blank, which keeps and tests it */
+  smtpPasswordSaved: boolean;
   notificationEmail: string;
   setNotificationEmail: (value: string) => void;
   scheduledScansEnabled: boolean;
@@ -181,8 +185,8 @@ function GeneralSettings({
               Enable Deep Scan
             </label>
             <p className="text-sm text-muted-foreground mt-1">
-              Scans filesystem directly alongside Plex API to find duplicates that might be missed -
-              case-sensitivity, cross-directory files, and similar.
+              Also walks the library folders on disk and logs any duplicate files the media server
+              does not list. These are only logged, not added as duplicate sets.
             </p>
             <div className="flex items-start gap-2 mt-3">
               <AlertCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
@@ -307,7 +311,9 @@ function GeneralSettings({
                 <Input
                   id="smtp-password"
                   type="password"
-                  placeholder="••••••••"
+                  placeholder={
+                    smtpPasswordSaved ? "Saved - type a new password to replace it" : "••••••••"
+                  }
                   value={smtpPassword}
                   onChange={(e) => setSmtpPassword(e.target.value)}
                   className="mt-2"
@@ -357,7 +363,7 @@ function GeneralSettings({
                     !smtpHost ||
                     !smtpPort ||
                     !smtpUser ||
-                    !smtpPassword ||
+                    !(smtpPassword || smtpPasswordSaved) ||
                     !notificationEmail
                   }
                   className="flex-shrink-0"
@@ -501,14 +507,14 @@ function PlexSettings({
   result,
   recordTest,
 }: PlexSettingsProps) {
+  // The token itself never reaches the browser: a blank one means the saved one
   const authenticated = !!initialConfig.plex_auth_token;
-  const encryptedToken = initialConfig.plex_auth_token || "";
   const [isTesting, runTest] = useConnectionTest("plex", recordTest);
 
   const { data: serversData } = useQuery({
-    queryKey: ["plexServers", encryptedToken],
-    queryFn: () => setupAPI.getPlexServers(encryptedToken),
-    enabled: !!encryptedToken,
+    queryKey: ["plexServers"],
+    queryFn: () => setupAPI.getPlexServers(""),
+    enabled: authenticated,
     staleTime: 5 * 60 * 1000,
   });
 
@@ -549,27 +555,16 @@ function PlexSettings({
             </div>
           </div>
 
-          <div>
-            <Label htmlFor="server">Select Plex Server</Label>
-            <select
-              id="server"
-              value={selectedServer}
-              onChange={(e) => setSelectedServer(e.target.value)}
-              className="mt-2 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              disabled={!serversData}
-            >
-              <option value="">Choose a server...</option>
-              {servers.map((server) => (
-                <option key={server.client_identifier} value={server.name}>
-                  {server.name} ({server.platform})
-                </option>
-              ))}
-            </select>
-          </div>
+          <PlexServerSelect
+            servers={servers}
+            value={selectedServer}
+            onChange={setSelectedServer}
+            disabled={!serversData}
+          />
 
           {selectedServer && (
             <Button
-              onClick={() => runTest(() => setupAPI.testPlex(encryptedToken, selectedServer))}
+              onClick={() => runTest(() => setupAPI.testPlex("", selectedServer))}
               disabled={isTesting}
             >
               Test Connection
@@ -608,8 +603,10 @@ interface ServiceSettingsProps {
   setUsername?: (value: string) => void;
   password?: string;
   setPassword?: (value: string) => void;
-  /** A key saved but kept out of the field; a blank field tests with it */
-  storedApiKey?: string;
+  pathMappings?: string;
+  setPathMappings?: (value: string) => void;
+  /** A key or password is saved; the field is left blank, which keeps and tests it */
+  secretSaved: boolean;
   result?: ConnectionTestResult;
   recordTest: RecordTest;
 }
@@ -624,7 +621,9 @@ function ServiceSettings({
   setUsername,
   password,
   setPassword,
-  storedApiKey,
+  pathMappings,
+  setPathMappings,
+  secretSaved,
   result,
   recordTest,
 }: ServiceSettingsProps) {
@@ -635,7 +634,7 @@ function ServiceSettings({
     runTest(() =>
       isQBittorrent
         ? setupAPI.testQBittorrent({ url, username: username ?? "", password: password ?? "" })
-        : SERVICE_TESTS[service]({ url, api_key: apiKey || storedApiKey || "" })
+        : SERVICE_TESTS[service]({ url, api_key: apiKey ?? "" })
     );
   }
 
@@ -677,7 +676,7 @@ function ServiceSettings({
             <Input
               id="password"
               type="password"
-              placeholder="Password"
+              placeholder={secretSaved ? "Saved - type a new password to replace it" : "Password"}
               value={password || ""}
               onChange={(e) => setPassword?.(e.target.value)}
               className="mt-2"
@@ -690,11 +689,33 @@ function ServiceSettings({
           <Input
             id="api-key"
             type="password"
-            placeholder={storedApiKey ? "Saved - type a new key to replace it" : "API Key"}
+            placeholder={secretSaved ? "Saved - type a new key to replace it" : "API Key"}
             value={apiKey || ""}
             onChange={(e) => setApiKey?.(e.target.value)}
             className="mt-2"
           />
+        </div>
+      )}
+
+      {setPathMappings && (
+        <div>
+          <Label htmlFor="path-mappings">Path mappings (optional)</Label>
+          <textarea
+            id="path-mappings"
+            rows={3}
+            placeholder={service === "radarr" ? "/data/movies=/movies" : "/data/series=/series"}
+            value={pathMappings || ""}
+            onChange={(e) => setPathMappings(e.target.value)}
+            className="mt-2 flex w-full rounded-md border border-border bg-card px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:border-muted-foreground"
+          />
+          <p className="text-sm text-muted-foreground mt-2">
+            Only needed when {service === "radarr" ? "Radarr" : "Sonarr"} and your media server see
+            the library under different paths. One mapping per line, written as{" "}
+            <code>
+              path in {service === "radarr" ? "Radarr" : "Sonarr"}=path in the media server
+            </code>
+            .
+          </p>
         </div>
       )}
 
@@ -752,7 +773,8 @@ function SettingsContent({
   const [isPending, startTransition] = useTransition();
   const [activeTab, setActiveTab] = useState("general");
   const [jellyfinUrl, setJellyfinUrl] = useState(initialConfig.jellyfin_url || "");
-  // The stored key is encrypted, so it is not a value to put in a field
+  // The API shows a saved key or password only as a mask, so secret fields
+  // start blank, and blank keeps what is saved
   const [jellyfinApiKey, setJellyfinApiKey] = useState("");
   const [testResults, setTestResults] = useState<Record<string, ConnectionTestResult>>({});
 
@@ -773,15 +795,21 @@ function SettingsContent({
   const [smtpHost, setSmtpHost] = useState(initialConfig.smtp_host || "");
   const [smtpPort, setSmtpPort] = useState(initialConfig.smtp_port || "587");
   const [smtpUser, setSmtpUser] = useState(initialConfig.smtp_user || "");
-  const [smtpPassword, setSmtpPassword] = useState(initialConfig.smtp_password || "");
+  const [smtpPassword, setSmtpPassword] = useState("");
   const [selectedServer, setSelectedServer] = useState(initialConfig.plex_server_name || "");
   const [radarrUrl, setRadarrUrl] = useState(initialConfig.radarr_url || "");
-  const [radarrApiKey, setRadarrApiKey] = useState(initialConfig.radarr_api_key || "");
+  const [radarrApiKey, setRadarrApiKey] = useState("");
+  const [radarrPathMappings, setRadarrPathMappings] = useState(
+    initialConfig.radarr_path_mappings || ""
+  );
   const [sonarrUrl, setSonarrUrl] = useState(initialConfig.sonarr_url || "");
-  const [sonarrApiKey, setSonarrApiKey] = useState(initialConfig.sonarr_api_key || "");
+  const [sonarrApiKey, setSonarrApiKey] = useState("");
+  const [sonarrPathMappings, setSonarrPathMappings] = useState(
+    initialConfig.sonarr_path_mappings || ""
+  );
   const [qbitUrl, setQbitUrl] = useState(initialConfig.qbittorrent_url || "");
   const [qbitUsername, setQbitUsername] = useState(initialConfig.qbittorrent_username || "");
-  const [qbitPassword, setQbitPassword] = useState(initialConfig.qbittorrent_password || "");
+  const [qbitPassword, setQbitPassword] = useState("");
 
   // Scheduler settings - initialized from prop (component remounts when schedulerConfig changes)
   const [scheduledScansEnabled, setScheduledScansEnabled] = useState(
@@ -806,17 +834,16 @@ function SettingsContent({
         await configAPI.updateArrQualityProfileSetting(preferArrQualityProfile);
 
         // Build config object, only including non-empty values
-        // Library selections are made on the Scan page, so they are left out
-        // rather than written back from what was loaded here
+        // Library selections are made on the Scan page, and the Plex token
+        // in the setup wizard, so they are left out
         const config: Record<string, string> = {
-          plex_auth_token: initialConfig.plex_auth_token || "",
           plex_server_name: selectedServer,
         };
 
         if (jellyfinUrl) {
           config.jellyfin_url = jellyfinUrl;
         }
-        // Blank means "leave the saved key alone", not "clear it"
+        // A blank secret means "leave the saved one alone", not "clear it"
         if (jellyfinApiKey) {
           config.jellyfin_api_key = jellyfinApiKey;
         }
@@ -828,27 +855,31 @@ function SettingsContent({
           config.smtp_host = smtpHost;
           config.smtp_port = smtpPort;
           config.smtp_user = smtpUser;
-          config.smtp_password = smtpPassword;
+          if (smtpPassword) config.smtp_password = smtpPassword;
         } else {
           config.email_notifications_enabled = "false";
         }
 
-        // Add optional services only if configured
-        if (radarrUrl && radarrApiKey) {
+        // Add optional services only if configured, with a secret typed or saved
+        if (radarrUrl && (radarrApiKey || initialConfig.radarr_api_key)) {
           config.radarr_url = radarrUrl;
-          config.radarr_api_key = radarrApiKey;
+          if (radarrApiKey) config.radarr_api_key = radarrApiKey;
         }
-        if (sonarrUrl && sonarrApiKey) {
+        if (sonarrUrl && (sonarrApiKey || initialConfig.sonarr_api_key)) {
           config.sonarr_url = sonarrUrl;
-          config.sonarr_api_key = sonarrApiKey;
+          if (sonarrApiKey) config.sonarr_api_key = sonarrApiKey;
         }
-        if (qbitUrl && qbitUsername && qbitPassword) {
+        if (qbitUrl && qbitUsername && (qbitPassword || initialConfig.qbittorrent_password)) {
           config.qbittorrent_url = qbitUrl;
           config.qbittorrent_username = qbitUsername;
-          config.qbittorrent_password = qbitPassword;
+          if (qbitPassword) config.qbittorrent_password = qbitPassword;
         }
 
         await setupAPI.saveConfig(config);
+
+        // Path mappings are saved on their own so that clearing them works
+        await configAPI.setValue("radarr_path_mappings", radarrPathMappings);
+        await configAPI.setValue("sonarr_path_mappings", sonarrPathMappings);
 
         // Invalidate caches to refetch fresh data from backend
         queryClient.invalidateQueries({ queryKey: ["config"] });
@@ -894,15 +925,17 @@ function SettingsContent({
     setSmtpHost(initialConfig.smtp_host || "");
     setSmtpPort(initialConfig.smtp_port || "587");
     setSmtpUser(initialConfig.smtp_user || "");
-    setSmtpPassword(initialConfig.smtp_password || "");
+    setSmtpPassword("");
     setSelectedServer(initialConfig.plex_server_name || "");
     setRadarrUrl(initialConfig.radarr_url || "");
-    setRadarrApiKey(initialConfig.radarr_api_key || "");
+    setRadarrApiKey("");
     setSonarrUrl(initialConfig.sonarr_url || "");
-    setSonarrApiKey(initialConfig.sonarr_api_key || "");
+    setSonarrApiKey("");
+    setRadarrPathMappings(initialConfig.radarr_path_mappings || "");
+    setSonarrPathMappings(initialConfig.sonarr_path_mappings || "");
     setQbitUrl(initialConfig.qbittorrent_url || "");
     setQbitUsername(initialConfig.qbittorrent_username || "");
-    setQbitPassword(initialConfig.qbittorrent_password || "");
+    setQbitPassword("");
 
     // Reset scheduler settings
     if (initialSchedulerConfig) {
@@ -967,6 +1000,7 @@ function SettingsContent({
               setSmtpUser={setSmtpUser}
               smtpPassword={smtpPassword}
               setSmtpPassword={setSmtpPassword}
+              smtpPasswordSaved={!!initialConfig.smtp_password}
               notificationEmail={notificationEmail}
               setNotificationEmail={setNotificationEmail}
               scheduledScansEnabled={scheduledScansEnabled}
@@ -999,7 +1033,7 @@ function SettingsContent({
               setUrl={setJellyfinUrl}
               apiKey={jellyfinApiKey}
               setApiKey={setJellyfinApiKey}
-              storedApiKey={initialConfig.jellyfin_api_key}
+              secretSaved={!!initialConfig.jellyfin_api_key}
               result={testResults.jellyfin}
               recordTest={recordTest}
             />
@@ -1011,6 +1045,9 @@ function SettingsContent({
               setUrl={setRadarrUrl}
               apiKey={radarrApiKey}
               setApiKey={setRadarrApiKey}
+              secretSaved={!!initialConfig.radarr_api_key}
+              pathMappings={radarrPathMappings}
+              setPathMappings={setRadarrPathMappings}
               result={testResults.radarr}
               recordTest={recordTest}
             />
@@ -1022,6 +1059,9 @@ function SettingsContent({
               setUrl={setSonarrUrl}
               apiKey={sonarrApiKey}
               setApiKey={setSonarrApiKey}
+              secretSaved={!!initialConfig.sonarr_api_key}
+              pathMappings={sonarrPathMappings}
+              setPathMappings={setSonarrPathMappings}
               result={testResults.sonarr}
               recordTest={recordTest}
             />
@@ -1035,6 +1075,7 @@ function SettingsContent({
               setUsername={setQbitUsername}
               password={qbitPassword}
               setPassword={setQbitPassword}
+              secretSaved={!!initialConfig.qbittorrent_password}
               result={testResults.qbittorrent}
               recordTest={recordTest}
             />

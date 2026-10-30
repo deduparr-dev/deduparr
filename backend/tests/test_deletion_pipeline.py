@@ -928,6 +928,55 @@ async def test_qbit_stage_leaves_a_torrent_that_holds_other_videos(
     assert history.deleted_from_qbit is True
 
 
+@pytest.mark.asyncio
+async def test_qbit_stage_removes_the_torrent_when_the_kept_file_has_its_own(
+    test_db, create_duplicate_set, create_duplicate_file
+):
+    """The kept file's torrent seeds on; the unwanted one's data would stay forever."""
+    dup_set = await create_duplicate_set(media_type=MediaType.MOVIE)
+    unwanted = await create_duplicate_file(dup_set.id, keep=False)
+    kept = await create_duplicate_file(dup_set.id, keep=True)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.qbit_service = AsyncMock()
+    pipeline.qbit_service.find_item_by_file_path.side_effect = [
+        TorrentMatch(hash="unwanted", count=1, holds_other_videos=False),
+        TorrentMatch(hash="kept", count=1, holds_other_videos=False),
+    ]
+    history = DeletionHistory(duplicate_file_id=unwanted.id)
+
+    assert (
+        await pipeline._stage_qbittorrent_removal(unwanted, history, None, kept)
+        == "unwanted"
+    )
+    pipeline.qbit_service.remove_item.assert_awaited_once_with(
+        "unwanted", delete_files=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_qbit_stage_leaves_the_torrent_of_the_kept_file(
+    test_db, create_duplicate_set, create_duplicate_file
+):
+    """A copy of the same name and size matches the kept file's torrent too."""
+    dup_set = await create_duplicate_set(media_type=MediaType.MOVIE)
+    unwanted = await create_duplicate_file(dup_set.id, keep=False)
+    kept = await create_duplicate_file(dup_set.id, keep=True)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.qbit_service = AsyncMock()
+    pipeline.qbit_service.find_item_by_file_path.return_value = TorrentMatch(
+        hash="kept", count=1, holds_other_videos=False
+    )
+    history = DeletionHistory(duplicate_file_id=unwanted.id)
+
+    assert (
+        await pipeline._stage_qbittorrent_removal(unwanted, history, None, kept) is None
+    )
+    pipeline.qbit_service.remove_item.assert_not_awaited()
+    assert history.deleted_from_qbit is True
+
+
 async def _with_files(test_db, set_id: int) -> DuplicateSet:
     return (
         await test_db.execute(
@@ -939,16 +988,41 @@ async def _with_files(test_db, set_id: int) -> DuplicateSet:
 
 
 @pytest.mark.asyncio
-async def test_delete_set_retries_only_what_an_earlier_attempt_left(
+async def test_delete_set_deletes_nothing_once_its_kept_file_is_gone(
     test_db, create_duplicate_set, create_duplicate_file, tmp_path
 ):
     """
-    A file that could not be found is an error and keeps the set pending.
-    Once it is back, the next attempt deletes it and skips the one already gone.
+    Plex and Jellyfin list the same files as two sets, which can keep different
+    copies. Deleting through the first took the second's kept file: going on
+    would delete the last copy of the title.
     """
+    gone, last = tmp_path / "2160p.mkv", tmp_path / "1080p.mkv"
+    last.write_bytes(b"l" * 10)
+
+    dup_set = await create_duplicate_set(media_server="disk")
+    await create_duplicate_file(
+        dup_set.id, file_path=str(gone), file_size=20, keep=True
+    )
+    await create_duplicate_file(dup_set.id, file_path=str(last), file_size=10)
+
+    dup_set = await _with_files(test_db, dup_set.id)
+    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
+
+    assert last.exists()
+    assert outcome.files_deleted == 0
+    assert "none of the files to keep is on disk" in outcome.errors[0]
+    assert dup_set.status == DuplicateStatus.PENDING
+
+
+@pytest.mark.asyncio
+async def test_delete_set_retries_only_what_an_earlier_attempt_left(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path, monkeypatch
+):
+    """A file that could not be removed is an error and keeps the set pending."""
     keep, first, second = (tmp_path / f"{n}.mkv" for n in ("keep", "first", "second"))
     keep.write_bytes(b"k" * 30)
     first.write_bytes(b"f" * 10)
+    second.write_bytes(b"s" * 20)
 
     dup_set = await create_duplicate_set(media_server="disk")
     await create_duplicate_file(
@@ -957,21 +1031,62 @@ async def test_delete_set_retries_only_what_an_earlier_attempt_left(
     await create_duplicate_file(dup_set.id, file_path=str(first), file_size=10)
     await create_duplicate_file(dup_set.id, file_path=str(second), file_size=20)
 
-    dup_set = await _with_files(test_db, dup_set.id)
-    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
+    real_remove = os.remove
+
+    def refuse_second(path):
+        if str(path) == str(second):
+            raise PermissionError("refused")
+        real_remove(path)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(os, "remove", refuse_second)
+        dup_set = await _with_files(test_db, dup_set.id)
+        outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
 
     assert (outcome.files_deleted, outcome.space_reclaimed) == (1, 10)
-    assert len(outcome.errors) == 1
-    assert "File not found for deletion" in outcome.errors[0]
+    assert "Could not delete" in outcome.errors[0]
     assert dup_set.status == DuplicateStatus.PENDING
 
-    second.write_bytes(b"s" * 20)
     dup_set = await _with_files(test_db, dup_set.id)
     outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(dup_set)
 
     assert (outcome.files_deleted, outcome.errors) == (1, [])
     assert not first.exists() and not second.exists() and keep.exists()
     assert dup_set.status == DuplicateStatus.PROCESSED
+    assert dup_set.space_to_reclaim == 30
+
+
+@pytest.mark.asyncio
+async def test_delete_set_counts_only_what_it_really_freed(
+    test_db, create_duplicate_set, create_duplicate_file, tmp_path
+):
+    """A file the other server's set took counts for nothing; a hardlink's data stays."""
+    keep, shared, linked = (tmp_path / f"{n}.mkv" for n in ("keep", "shared", "linked"))
+    keep.write_bytes(b"k" * 30)
+    shared.write_bytes(b"s" * 20)
+    linked.write_bytes(b"l" * 10)
+    os.link(linked, tmp_path / "season pack copy.mkv")
+
+    first = await create_duplicate_set(media_server="disk")
+    second = await create_duplicate_set(media_server="disk")
+    for dup_set in (first, second):
+        await create_duplicate_file(
+            dup_set.id, file_path=str(keep), file_size=30, keep=True
+        )
+        await create_duplicate_file(dup_set.id, file_path=str(shared), file_size=20)
+    await create_duplicate_file(second.id, file_path=str(linked), file_size=10)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    outcome = await pipeline.delete_set(await _with_files(test_db, first.id))
+    assert (outcome.files_deleted, outcome.space_reclaimed) == (1, 20)
+
+    second = await _with_files(test_db, second.id)
+    outcome = await DeletionPipeline(test_db, dry_run=False).delete_set(second)
+
+    assert (outcome.files_deleted, outcome.space_reclaimed) == (1, 0)
+    assert outcome.errors == []
+    assert second.status == DuplicateStatus.PROCESSED
+    assert second.space_to_reclaim == 0
 
 
 @pytest.mark.asyncio

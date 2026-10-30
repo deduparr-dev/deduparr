@@ -230,6 +230,34 @@ test.describe("setup wizard Plex steps", () => {
     await page.getByRole("button", { name: "Get Started" }).click();
   });
 
+  test("with several Plex servers it asks which one, instead of taking the first", async ({
+    page,
+  }) => {
+    const server = (name: string) => ({
+      name,
+      client_identifier: name,
+      product: "Plex Media Server",
+      platform: "Linux",
+      owned: true,
+    });
+    await page.route("**/api/setup/plex/servers", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ servers: [server("Home"), server("Office")] }),
+      })
+    );
+    await page.locator("#choose-plex").check();
+    await page.getByTestId("server-choice-continue").click();
+
+    const chooser = page.locator("#server");
+    await expect(chooser).toHaveValue("");
+    const test = page.getByRole("button", { name: "Test Connection" });
+    await expect(test).toBeDisabled();
+
+    await chooser.selectOption("Office");
+    await expect(test).toBeEnabled();
+  });
+
   test("with Jellyfin chosen too, it is set up after signing in to Plex", async ({ page }) => {
     await page.locator("#choose-plex").check();
     await page.locator("#choose-jellyfin").check();

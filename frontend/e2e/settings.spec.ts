@@ -15,6 +15,7 @@ test.describe("settings", () => {
     await markConfigured(request);
     await setConfig(request, "enable_deep_scan", "false");
     await setConfig(request, "prefer_arr_quality_profile", "false");
+    await setConfig(request, "radarr_path_mappings", "");
   });
 
   test("renders the configuration sections", async ({ page }) => {
@@ -66,6 +67,29 @@ test.describe("settings", () => {
       .toBe("true");
   });
 
+  test("Radarr path mappings are saved, and can be cleared", async ({ page, request }) => {
+    await gotoApp(page, "/settings");
+    await page.getByRole("button", { name: "Radarr" }).click();
+
+    const mappings = page.locator("#path-mappings");
+    await mappings.fill("/data/movies=/movies");
+    await page.getByRole("button", { name: "Save Configuration" }).click();
+
+    await expect
+      .poll(async () => (await getConfig(request)).radarr_path_mappings, { timeout: 10_000 })
+      .toBe("/data/movies=/movies");
+
+    await gotoApp(page, "/settings");
+    await page.getByRole("button", { name: "Radarr" }).click();
+    await expect(page.locator("#path-mappings")).toHaveValue("/data/movies=/movies");
+
+    await page.locator("#path-mappings").fill("");
+    await page.getByRole("button", { name: "Save Configuration" }).click();
+    await expect
+      .poll(async () => (await getConfig(request)).radarr_path_mappings, { timeout: 10_000 })
+      .toBe("");
+  });
+
   test("a saved setting survives a full page reload", async ({ page }) => {
     await gotoApp(page, "/settings");
 
@@ -102,14 +126,24 @@ test.describe("settings connection tests", () => {
     await markJellyfinUnconfigured(request);
   });
 
-  // The saved Jellyfin key is kept out of its field, and the saved qBittorrent
-  // password went back encrypted twice: both tests failed with nothing retyped
+  // The page never gets a saved key or password, only that one is saved: its
+  // field stays blank, a save keeps it, and a test runs with it
   for (const tab of ["Jellyfin", "Radarr", "Sonarr", "qBittorrent"]) {
-    test(`${tab} tests with what is saved`, async ({ page }) => {
+    test(`${tab} keeps and tests with what is saved`, async ({ page }) => {
+      const openTab = () => page.getByRole("button", { name: tab, exact: true }).click();
+      const secret = page.locator(tab === "qBittorrent" ? "#password" : "#api-key");
       await gotoApp(page, "/settings");
-      await page.getByRole("button", { name: tab, exact: true }).click();
-      await page.getByRole("button", { name: "Test Connection" }).click();
+      await openTab();
+      await expect(secret).toHaveValue("");
+      await expect(secret).toHaveAttribute("placeholder", /^Saved/);
 
+      await page.getByRole("button", { name: "Save Configuration" }).click();
+      await expect(page.getByText("Configuration saved").first()).toBeVisible();
+
+      await gotoApp(page, "/settings");
+      await openTab();
+      await expect(secret).toHaveAttribute("placeholder", /^Saved/);
+      await page.getByRole("button", { name: "Test Connection" }).click();
       await expect(page.getByText("Connection successful")).toBeVisible();
     });
   }

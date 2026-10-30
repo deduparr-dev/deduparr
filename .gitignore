@@ -83,7 +83,6 @@ docker-compose.override.yml
 config/*.yml
 config/*.yaml
 config/*.json
-config/.encryption_key
 !config/*.example.*
 !config/*.sample.*
 
@@ -113,7 +112,6 @@ coverage/
 Thumbs.db
 
 # Project specific
-data/
 postgres-data/
 media/
 
@@ -124,5 +122,6 @@ backend/manifest.json
 # Playwright E2E
 frontend/test-results/
 frontend/playwright-report/
+.playwright-mcp/
 frontend/blob-report/
 frontend/e2e/.tmp/

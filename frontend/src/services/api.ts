@@ -2,11 +2,8 @@
  * API client for Deduparr backend
  */
 
-// In production (no Vite dev server), use relative paths for nginx proxy
-// In development, use localhost:3001 for backend
-const API_BASE_URL =
-  (import.meta.env.VITE_API_URL as string | undefined) ||
-  (import.meta.env.DEV ? "http://localhost:3001" : "");
+// Relative /api: nginx proxies it in production, and Vite's dev and preview
+// servers proxy it to VITE_PROXY_TARGET (vite.config.ts)
 
 export interface DashboardStats {
   total_duplicates: number; // Number of unique items (movies/episodes) with duplicates
@@ -77,9 +74,19 @@ export interface DuplicateSet {
   files: DuplicateFile[];
 }
 
+/** Duplicate sets, newest first, from an offset */
+export interface DuplicateSetPage {
+  sets: DuplicateSet[];
+  /** How many there are across every page */
+  total: number;
+}
+
 export interface ScanStatus {
   total_duplicate_sets: number;
   pending_sets: number;
+  /** The files Delete All removes */
+  sets_to_delete: number;
+  pending_files_to_delete: number;
   total_space_reclaimable: number;
 }
 
@@ -196,6 +203,7 @@ export interface LogsResponse {
   limit: number;
 }
 
+/** The stored configuration; a saved token, key or password reads as a mask */
 export interface AppConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
@@ -212,6 +220,8 @@ export interface AppConfig {
   prefer_arr_quality_profile?: string; // "true" or "false" string from backend
   jellyfin_url?: string;
   jellyfin_api_key?: string;
+  radarr_path_mappings?: string; // one "<Radarr path>=<media server path>" per line
+  sonarr_path_mappings?: string; // one "<Sonarr path>=<media server path>" per line
   email_notifications_enabled?: string; // "true" or "false" string from backend
   notification_email?: string;
   smtp_host?: string;
@@ -308,18 +318,23 @@ async function requestError(response: Response): Promise<Error> {
   return new Error(text || response.statusText || `Request failed (${response.status})`);
 }
 
-async function fetchAPI<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`);
+async function fetchResponse(endpoint: string): Promise<Response> {
+  const response = await fetch(endpoint);
 
   if (!response.ok) {
     throw await requestError(response);
   }
 
+  return response;
+}
+
+async function fetchAPI<T>(endpoint: string): Promise<T> {
+  const response = await fetchResponse(endpoint);
   return response.json() as Promise<T>;
 }
 
 async function postAPI<T, U>(endpoint: string, data: U): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -335,7 +350,7 @@ async function postAPI<T, U>(endpoint: string, data: U): Promise<T> {
 }
 
 async function putAPI<T, U>(endpoint: string, data: U): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(endpoint, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -351,7 +366,7 @@ async function putAPI<T, U>(endpoint: string, data: U): Promise<T> {
 }
 
 async function patchAPI<T, U>(endpoint: string, data: U): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(endpoint, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -394,12 +409,12 @@ export const scanAPI = {
       paths,
       media_type: mediaType,
     }),
-  getDuplicates: (status?: string, mediaType?: string) => {
-    const params = new URLSearchParams();
-    if (status) params.append("status", status);
-    if (mediaType) params.append("media_type", mediaType);
-    const query = params.toString() ? `?${params.toString()}` : "";
-    return fetchAPI<DuplicateSet[]>(`/api/scan/duplicates${query}`);
+  getDuplicates: async (offset: number, limit: number): Promise<DuplicateSetPage> => {
+    const response = await fetchResponse(`/api/scan/duplicates?offset=${offset}&limit=${limit}`);
+    return {
+      sets: (await response.json()) as DuplicateSet[],
+      total: Number(response.headers.get("X-Total-Count")),
+    };
   },
   getScanStatus: () => fetchAPI<ScanStatus>("/api/scan/status"),
   deleteDuplicateSet: (setId: number, dryRun: boolean) =>
@@ -449,6 +464,12 @@ export const configAPI = {
       enabled,
     }),
 
+  // Single config value (an empty string clears it)
+  setValue: (key: string, value: string) =>
+    putAPI<{ key: string; value: string | null }, { value: string }>(`/api/config/${key}`, {
+      value,
+    }),
+
   // Scheduler configuration
   getSchedulerConfig: () => fetchAPI<SchedulerConfig>("/api/config/scheduler"),
   updateSchedulerConfig: (config: Partial<SchedulerConfig>) =>
@@ -464,12 +485,13 @@ export const setupAPI = {
   checkPlexAuth: (pinId: string) =>
     fetchAPI<PlexAuthCheckResponse>(`/api/setup/plex/auth/check/${pinId}`),
 
+  // A blank token means the saved one
   getPlexServers: (authToken: string) =>
     postAPI<{ servers: PlexServer[] }, { auth_token: string }>("/api/setup/plex/servers", {
       auth_token: authToken,
     }),
 
-  // Service testing
+  // Service testing; a blank token, key or password tests the saved one
   testPlex: (authToken: string, serverName: string) =>
     postAPI<ServiceTestResponse, { auth_token: string; server_name: string }>(
       "/api/setup/test/plex",

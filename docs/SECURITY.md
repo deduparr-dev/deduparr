@@ -8,14 +8,16 @@ https://www.trendmicro.com/en_us/research/25/i/npm-supply-chain-attack.html
 ### Security Measures
 
 1. **Package Lock Enforcement**: `package-lock.json` is required and enforced
-2. **Registry Pinning**: Only official npm registry allowed
+2. **Registry Pinning**: `.npmrc` pins the official npm registry (the development image, `frontend/Dockerfile.dev`, tries the registry.npmmirror.com mirror first)
 3. **Integrity Checking**: Package integrity verified via checksums
-4. **Version Pinning**: Exact versions saved (no `^` or `~`)
+4. **Version Pinning**: New dependencies are saved with exact versions (`save-exact=true`), and `package-lock.json` pins every installed version
 5. **Regular Audits**: `npm audit` is recommended before releases.
 
 ### Running Security Checks
 
 ```bash
+cd frontend
+
 # Check for vulnerabilities
 npm run security-check
 
@@ -35,11 +37,11 @@ No known vulnerabilities. All dependencies are up to date and security audits pa
 
 ## Reporting Security Issues
 
-If you discover a security vulnerability, please email hello@deduparr.com or open a private security advisory on GitHub.
+If you discover a security vulnerability, please email hello@deduparr.com.
 
 ## Code Security Standards
 
-Per `.github/copilot-instructions.md`:
+Per `AGENTS.md`:
 
 1. **NO `any` type**: Always use specific types
    - ✅ `Record<string, string>` 
@@ -53,21 +55,17 @@ Per `.github/copilot-instructions.md`:
 
 ## Dependency Updates
 
-Dependencies are reviewed monthly. Breaking changes require:
-1. Code review
-2. Full test suite pass
-3. Security audit clear
-4. Manual QA testing
+Dependabot proposes updates every Monday, and its pull requests, major versions included, are approved and merged once CI passes: see [DEPENDABOT_AUTO_MERGE.md](DEPENDABOT_AUTO_MERGE.md).
 
 ## Frontend Security Architecture
 
 ### Token Transmission
 
-Sensitive authentication tokens are transmitted via HTTP request bodies, not URL parameters. This prevents token exposure in browser history, server logs, and network inspection tools.
+Sensitive authentication tokens are transmitted via HTTP request bodies, not URL parameters. This keeps them out of browser history and server logs; the browser's network inspector still shows them.
 
 **Implementation:**
-- POST requests for all authentication operations
-- Request body contains encrypted tokens
+- POST requests for every operation that sends a credential (the Plex sign-in starts and polls its PIN with GET requests)
+- Credentials typed in the wizard or Settings are sent as typed. The API returns a stored one only as a mask, and a connection test uses it only with the server stored with it
 - URL parameters never contain credentials
 
 ### Development Mode Considerations
@@ -78,20 +76,14 @@ During development (`npm run dev`), Vite's hot module replacement (HMR) creates 
 - Only enable development features (live reload)
 - Are not present in production builds
 
-### Plex Media Resources
+### Plex Token
 
-Plex Media Server requires authentication tokens in resource URLs (thumbnails, transcoded streams, metadata). These tokens are protected by:
-- Database encryption using itsdangerous
-- Log sanitization preventing exposure in browser developer tools
-- Revocation capability through Plex account settings
-- User-scoped visibility (only accessible to authenticated user)
-- Plex's standard security model
+Deduparr loads no Plex thumbnails or streams, so the Plex token never appears in a URL: the backend sends it to Plex in the `X-Plex-Token` header. The stored token is encrypted, and the API never returns it. It is redacted from logs, and can be revoked through Plex account settings.
 
 ### Frontend Security Utilities
 
 The `src/lib/security.ts` module provides:
 - Log sanitization for production environments
-- Request data redaction
 - Error message sanitization
 - Debug output protection
 
@@ -119,10 +111,8 @@ console.log('URL:', sanitizeUrl(requestUrl));
 
 ### Backend Security
 
-The backend implements comprehensive security through `app/services/shared/security.py`:
-- Token encryption/decryption (TokenManager)
+The backend's security helpers are in `app/services/shared/security.py`:
+- Encryption and decryption of stored secrets (TokenManager)
 - Log data sanitization (SensitiveDataFilter)
-- CSRF protection (state token generation)
-- URL normalization
 
-All API keys, authentication tokens, and passwords are encrypted using itsdangerous URLSafeSerializer before database storage. The encryption key is file-based and persists across container restarts via Docker volumes.
+API keys, authentication tokens, and passwords are encrypted with Fernet before database storage, and values sent to `/api/config/import/all` are too. `GET /api/config/` and the export return a set secret only as `********`. The key (`/app/data/.encryption_key`) is file-based and persists across container restarts via Docker volumes. Deduparr has no login, so anyone who can reach the API can still use it: keep it off untrusted networks. It sends no CORS headers, so another site open in a browser cannot call it.

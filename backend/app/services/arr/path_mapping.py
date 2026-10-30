@@ -26,13 +26,6 @@ def _normalize(path: str) -> str:
     return path.strip().rstrip("/")
 
 
-def _replace_prefix(path: str, old: str, new: str) -> Optional[str]:
-    """Replace a directory prefix, or return None if path is not under it"""
-    if path == old or path.startswith(old + "/"):
-        return (new + path[len(old) :]) or "/"
-    return None
-
-
 class PathMapper:
     """Translates paths between the *arr's view and the media server's view of the library"""
 
@@ -41,11 +34,13 @@ class PathMapper:
         Args:
             mappings: List of (path in the *arr, path in the media server) directory pairs
         """
-        normalized = [(_normalize(arr), _normalize(plex)) for arr, plex in mappings]
+        normalized = [(_normalize(arr), _normalize(server)) for arr, server in mappings]
         # The most specific mapping wins
-        self._arr_to_plex = sorted(normalized, key=lambda m: len(m[0]), reverse=True)
-        self._plex_to_arr = sorted(
-            [(plex, arr) for arr, plex in normalized],
+        self._to_media_server = sorted(
+            normalized, key=lambda m: len(m[0]), reverse=True
+        )
+        self._to_arr = sorted(
+            [(server, arr) for arr, server in normalized],
             key=lambda m: len(m[0]),
             reverse=True,
         )
@@ -58,41 +53,45 @@ class PathMapper:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            arr_path, separator, plex_path = line.partition("=")
-            arr_path, plex_path = arr_path.strip(), plex_path.strip()
+            arr_path, separator, server_path = line.partition("=")
+            arr_path, server_path = arr_path.strip(), server_path.strip()
             if (
                 not separator
                 or not arr_path.startswith("/")
-                or not plex_path.startswith("/")
+                or not server_path.startswith("/")
             ):
                 logger.warning(f"Ignoring invalid path mapping: {line!r}")
                 continue
-            mappings.append((arr_path, plex_path))
+            mappings.append((arr_path, server_path))
         return cls(mappings)
 
-    @property
-    def is_empty(self) -> bool:
-        return not self._arr_to_plex
+    def __bool__(self) -> bool:
+        """False without mappings, when there is nothing to translate"""
+        return bool(self._to_arr)
 
     @staticmethod
-    def _convert(path: str, mappings: List[Tuple[str, str]]) -> str:
+    def _convert(path: str, mappings: List[Tuple[str, str]]) -> Optional[str]:
+        """The path under the most specific mapping covering it, None if none does"""
         for old, new in mappings:
-            converted = _replace_prefix(path, old, new)
-            if converted is not None:
-                return converted
-        return path
+            if path == old or path.startswith(old + "/"):
+                return (new + path[len(old) :]) or "/"
+        return None
 
-    def to_plex(self, path: str) -> str:
+    def covers(self, path: str) -> bool:
+        """Whether a mapping applies to a path as the media server sees it"""
+        return self._convert(path, self._to_arr) is not None
+
+    def to_media_server(self, path: str) -> str:
         """Convert a path as the *arr sees it into the path the media server sees"""
-        return self._convert(path, self._arr_to_plex)
+        return self._convert(path, self._to_media_server) or path
 
     def to_arr(self, path: str) -> str:
         """Convert a path as the media server sees it into the path the *arr sees"""
-        return self._convert(path, self._plex_to_arr)
+        return self._convert(path, self._to_arr) or path
 
-    def translate_to_plex(self, value: T) -> T:
+    def translate_to_media_server(self, value: T) -> T:
         """Convert the paths of a decoded *arr API response"""
-        return cast(T, self._translate(value, self.to_plex))
+        return cast(T, self._translate(value, self.to_media_server))
 
     def translate_to_arr(self, value: T) -> T:
         """Convert the paths of a request about to be sent to the *arr"""

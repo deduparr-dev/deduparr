@@ -279,7 +279,7 @@ class ArrClient:
                 # A login page or a proxy's error page, for instance
                 raise ArrClientError(f"{endpoint} did not answer with JSON: {e}")
             if self.path_mapper:
-                data = self.path_mapper.translate_to_plex(data)
+                data = self.path_mapper.translate_to_media_server(data)
             return data
 
         except httpx.ConnectError as e:

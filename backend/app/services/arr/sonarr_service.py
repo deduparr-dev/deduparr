@@ -15,8 +15,8 @@ from app.services.arr.client import (
     SonarrClient,
 )
 from app.services.arr.helpers import find_episode_by_file_path, rescan_media_item
-from app.services.shared.base_service import BaseExternalService
 from app.services.arr.path_mapping import PathMapper
+from app.services.shared.base_service import BaseExternalService
 
 logger = logging.getLogger(__name__)
 

@@ -193,7 +193,7 @@ labels:
 
 **Note:** Stage 4 only runs as fallback for files missed by API deletion. All deletions require manual approval (dry-run by default).
 
-### When Plex and Radarr/Sonarr See Different Paths
+### When the Media Server and Radarr/Sonarr See Different Paths
 
 Deduparr matches the files your media server (Plex or Jellyfin) reports with the movies and episodes Radarr and Sonarr track by comparing their paths. If the containers mount the same library under different paths (for example `/movies` in Plex and `/data/movies` in Radarr), nothing matches: Deduparr cannot tell which files Radarr/Sonarr track, so the *arr quality profile ranking falls back to Deduparr's own score, and files are removed as if the *arr did not know them.
 
@@ -204,9 +204,11 @@ Fix it in **Settings → Radarr** (and **Sonarr**) under **Path mappings**. Writ
 /data/cartoons=/cartoons
 ```
 
-A mapping applies to a whole directory, and the most specific one wins. To drop a common prefix from every path, map it to the root: `/data=/`. Mount the media in the Deduparr container at the paths your **media server** sees (here `/movies`, `/cartoons`, ...), since those are the paths Deduparr works with. Paths exchanged with Radarr/Sonarr are translated in both directions, so nothing changes in Radarr, Sonarr or the media server. Leave the field empty when they all see the same paths.
+A mapping applies to a whole directory, and the most specific one wins. To drop a common prefix from every path, map it to the root: `/data=/`. Paths exchanged with Radarr/Sonarr are translated in both directions, so nothing changes in Radarr, Sonarr or the media server. Leave the field empty when they all see the same paths. A path no mapping covers is sent unchanged, which suits a folder both see at the same path. When the copy Deduparr keeps is in another folder than the movie or series, Deduparr points the movie or series there only if a mapping covers that folder or one of the *arr's root folders holds it; otherwise it changes nothing in the *arr and says why.
 
-To check it, start a scan and run a dry-run deletion: the log must say `Found movie '...' in Radarr`, not `Movie not tracked in Radarr (orphaned/old file)`.
+Deduparr's own media mount stays at `/media`, as above: it finds each file at the path the media server reports, or at the end of that path under `/media`, of the size the server reported (`/movies/Film/Film.mkv` as `/media/movies/Film/Film.mkv` or `/media/Film/Film.mkv`).
+
+To check it, start a scan and run a dry-run deletion: the log must say `Found movie '...' (ID: ...) in Radarr`, not `Movie not tracked in Radarr (orphaned/old file)`.
 
 ### Scheduled Automated Scans
 

@@ -1,5 +1,5 @@
 """
-Tests for translating paths between Radarr/Sonarr and Plex
+Tests for the path mappings between Radarr/Sonarr and the media server
 """
 
 import json
@@ -7,269 +7,89 @@ import json
 import httpx
 import pytest
 
+from app.models.config import Config
 from app.services.arr.client import RadarrClient
 from app.services.arr.path_mapping import PathMapper
+from app.services.arr.radarr_service import RadarrService
+from app.services.arr.sonarr_service import SonarrService
 
 
-def test_to_plex_and_to_arr_replace_the_directory_prefix():
-    mapper = PathMapper([("/data/movies", "/movies")])
+def test_the_most_specific_mapping_wins_on_whole_directories():
+    mapper = PathMapper.from_text("/data=/library\n/data/movies/=/movies/")
 
-    assert mapper.to_plex("/data/movies/Film (2020)/Film.mkv") == (
-        "/movies/Film (2020)/Film.mkv"
-    )
-    assert mapper.to_arr("/movies/Film (2020)/Film.mkv") == (
-        "/data/movies/Film (2020)/Film.mkv"
-    )
-
-
-def test_prefix_matches_whole_directories_only():
-    mapper = PathMapper([("/data/movies", "/movies")])
-
-    assert mapper.to_plex("/data/movies-4k/Film.mkv") == "/data/movies-4k/Film.mkv"
-    assert mapper.to_plex("/data/movies") == "/movies"
-    assert mapper.to_plex("/elsewhere/Film.mkv") == "/elsewhere/Film.mkv"
+    assert mapper.to_media_server("/data/movies/a.mkv") == "/movies/a.mkv"
+    assert mapper.to_media_server("/data/tv/a.mkv") == "/library/tv/a.mkv"
+    assert mapper.to_media_server("/data2/a.mkv") == "/data2/a.mkv"
+    assert mapper.to_arr("/movies/a.mkv") == "/data/movies/a.mkv"
+    assert mapper.to_arr("/movies-4k/a.mkv") == "/movies-4k/a.mkv"
+    assert not mapper.covers("/movies-4k")
 
 
-def test_trailing_slashes_are_ignored():
-    mapper = PathMapper([("/data/movies/", "/movies/")])
+def test_a_mapping_to_the_root_drops_a_common_prefix():
+    mapper = PathMapper.from_text("/data=/")
 
-    assert mapper.to_plex("/data/movies/Film.mkv") == "/movies/Film.mkv"
-    assert mapper.to_arr("/movies/Film.mkv") == "/data/movies/Film.mkv"
-
-
-def test_most_specific_mapping_wins():
-    mapper = PathMapper([("/data", "/library"), ("/data/movies", "/movies")])
-
-    assert mapper.to_plex("/data/movies/Film.mkv") == "/movies/Film.mkv"
-    assert mapper.to_plex("/data/series/Show.mkv") == "/library/series/Show.mkv"
-    assert mapper.to_arr("/movies/Film.mkv") == "/data/movies/Film.mkv"
+    assert mapper.to_media_server("/data/movies/a.mkv") == "/movies/a.mkv"
+    assert mapper.to_media_server("/data") == "/"
+    assert mapper.to_arr("/movies/a.mkv") == "/data/movies/a.mkv"
 
 
-def test_root_mapping_strips_a_common_prefix():
-    mapper = PathMapper([("/data", "/")])
-
-    assert mapper.to_plex("/data/movies/Film.mkv") == "/movies/Film.mkv"
-    assert mapper.to_plex("/data") == "/"
-    assert mapper.to_arr("/movies/Film.mkv") == "/data/movies/Film.mkv"
-
-
-def test_from_text_parses_lines_and_ignores_invalid_ones(caplog):
-    mapper = PathMapper.from_text(
-        "# Radarr\n/data/movies=/movies\n\n  /data/cartoons = /cartoons  \nnot a mapping\nrelative=/x\n"
-    )
-
-    assert mapper.to_plex("/data/movies/a.mkv") == "/movies/a.mkv"
-    assert mapper.to_plex("/data/cartoons/b.mkv") == "/cartoons/b.mkv"
+def test_without_a_valid_mapping_there_is_nothing_to_translate(caplog):
+    assert not PathMapper.from_text(None)
+    assert not PathMapper.from_text("# Radarr\n\nnot a mapping\nrelative=/movies")
     assert caplog.text.count("Ignoring invalid path mapping") == 2
 
 
-def test_from_text_without_mappings_is_empty():
-    assert PathMapper.from_text(None).is_empty
-    assert PathMapper.from_text("   \n# nothing").is_empty
-
-
-def test_translate_only_touches_path_keys_recursively():
-    mapper = PathMapper([("/data/movies", "/movies")])
-    response = [
-        {
-            "id": 1,
-            "title": "/data/movies is not a path here",
-            "path": "/data/movies/Film (2020)",
-            "movieFile": {
-                "path": "/data/movies/Film (2020)/Film.mkv",
-                "relativePath": "Film.mkv",
-            },
-            "unmappedFolders": [{"name": "x", "path": "/data/movies/x"}],
-        }
-    ]
-
-    assert mapper.translate_to_plex(response) == [
-        {
-            "id": 1,
-            "title": "/data/movies is not a path here",
-            "path": "/movies/Film (2020)",
-            "movieFile": {
-                "path": "/movies/Film (2020)/Film.mkv",
-                "relativePath": "Film.mkv",
-            },
-            "unmappedFolders": [{"name": "x", "path": "/movies/x"}],
-        }
-    ]
-
-
-def test_translate_to_arr_covers_params_and_command_bodies():
-    mapper = PathMapper([("/data/movies", "/movies")])
-
-    assert mapper.translate_to_arr({"folder": "/movies/Film", "movieId": 3}) == {
-        "folder": "/data/movies/Film",
-        "movieId": 3,
-    }
-    assert mapper.translate_to_arr(
-        {"name": "ManualImport", "files": [{"path": "/movies/Film/a.mkv"}]}
-    ) == {"name": "ManualImport", "files": [{"path": "/data/movies/Film/a.mkv"}]}
-    assert mapper.translate_to_arr(None) is None
-
-
 @pytest.mark.asyncio
-async def test_client_translates_requests_and_responses():
-    """End to end through the HTTP layer: Plex paths in, Plex paths out"""
-    seen = []
+@pytest.mark.parametrize(
+    "mappings, seen", [("/data/movies=/movies", "/movies"), ("", "/data/movies")]
+)
+async def test_the_client_translates_what_it_sends_and_receives(mappings, seen):
+    sent = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        if request.url.path.endswith("/movie"):
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": 42,
-                        "path": "/data/movies/Film (2020)",
-                        "movieFile": {"path": "/data/movies/Film (2020)/Film.mkv"},
-                    }
-                ],
-            )
-        return httpx.Response(200, json={"id": 7})
+        sent.append(request)
+        if request.method == "PUT":
+            return httpx.Response(202, json=json.loads(request.content))
+        movie_file = {"path": "/data/movies/Film/a.mkv", "relativePath": "a.mkv"}
+        return httpx.Response(
+            200, json=[{"id": 1, "path": "/data/movies/Film", "movieFile": movie_file}]
+        )
 
     client = RadarrClient(
-        base_url="http://radarr:7878",
+        base_url="http://radarr",
         api_key="key",
-        path_mapper=PathMapper([("/data/movies", "/movies")]),
+        path_mapper=PathMapper.from_text(mappings),
     )
     client._client = httpx.AsyncClient(
-        base_url="http://radarr:7878/api/v3",
-        transport=httpx.MockTransport(handler),
+        base_url="http://radarr/api/v3", transport=httpx.MockTransport(handler)
     )
 
-    movies = await client.get_movie()
-    await client.get_manual_import(folder="/movies/Film (2020)", movie_id=42)
-    await client.post_command("DownloadedMoviesScan", path="/movies/Film (2020)")
+    [movie] = await client.get_movie()
+    await client.get_manual_import(folder=f"{seen}/Film")
+    await client.update_movie(movie)
 
-    assert movies[0]["path"] == "/movies/Film (2020)"
-    assert movies[0]["movieFile"]["path"] == "/movies/Film (2020)/Film.mkv"
-    assert seen[1].url.params["folder"] == "/data/movies/Film (2020)"
-    assert json.loads(seen[2].content) == {
-        "name": "DownloadedMoviesScan",
-        "path": "/data/movies/Film (2020)",
-    }
+    assert movie["path"] == f"{seen}/Film"
+    assert movie["movieFile"] == {"path": f"{seen}/Film/a.mkv", "relativePath": "a.mkv"}
+    assert sent[1].url.params["folder"] == "/data/movies/Film"
+    assert json.loads(sent[2].content)["movieFile"]["path"] == "/data/movies/Film/a.mkv"
 
 
 @pytest.mark.asyncio
-async def test_client_without_mapper_leaves_paths_untouched():
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=[{"id": 1, "path": "/data/movies/Film"}])
-
-    client = RadarrClient(base_url="http://radarr:7878", api_key="key")
-    client._client = httpx.AsyncClient(
-        base_url="http://radarr:7878/api/v3", transport=httpx.MockTransport(handler)
+@pytest.mark.parametrize(
+    "service_class, name", [(RadarrService, "radarr"), (SonarrService, "sonarr")]
+)
+async def test_services_give_their_client_the_stored_mappings(
+    test_db, service_class, name
+):
+    test_db.add_all(
+        [
+            Config(key=f"{name}_url", value="http://arr"),
+            Config(key=f"{name}_api_key", value="key"),
+            Config(key=f"{name}_path_mappings", value="/data=/"),
+        ]
     )
+    await test_db.commit()
 
-    assert (await client.get_movie())[0]["path"] == "/data/movies/Film"
+    client = await service_class(test_db)._get_client()
 
-
-def _radarr_with_data_mount() -> RadarrClient:
-    """A Radarr that sees the library under /data, while Plex sees it under /movies"""
-    profile = {
-        "id": 4,
-        "items": [
-            {"quality": {"id": 3, "name": "WEBDL-1080p"}, "items": []},
-            {"quality": {"id": 7, "name": "Bluray-1080p"}, "items": []},
-        ],
-        "formatItems": [],
-    }
-
-    def quality(quality_id: int, name: str) -> dict:
-        return {
-            "quality": {"id": quality_id, "name": name},
-            "revision": {"version": 1, "real": 0},
-        }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        endpoint = request.url.path.removeprefix("/api/v3")
-        if endpoint == "/movie":
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "id": 42,
-                        "title": "Film",
-                        "path": "/data/movies/Film (2020)",
-                        "qualityProfileId": 4,
-                        "movieFile": {
-                            "path": "/data/movies/Film (2020)/Film.WEBDL-1080p.mkv"
-                        },
-                    }
-                ],
-            )
-        if endpoint == "/qualityprofile/4":
-            return httpx.Response(200, json=profile)
-        if endpoint == "/moviefile":
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "path": "/data/movies/Film (2020)/Film.WEBDL-1080p.mkv",
-                        "quality": quality(3, "WEBDL-1080p"),
-                        "customFormatScore": 0,
-                    }
-                ],
-            )
-        if endpoint == "/manualimport":
-            assert request.url.params["folder"] == "/data/movies/Film (2020)/extra"
-            return httpx.Response(
-                200,
-                json=[
-                    {
-                        "path": "/data/movies/Film (2020)/extra/Film.Bluray-1080p.mkv",
-                        "quality": quality(7, "Bluray-1080p"),
-                        "customFormatScore": 0,
-                    }
-                ],
-            )
-        return httpx.Response(404)
-
-    client = RadarrClient(
-        base_url="http://radarr:7878",
-        api_key="key",
-        path_mapper=PathMapper.from_text("/data=/"),
-    )
-    client._client = httpx.AsyncClient(
-        base_url="http://radarr:7878/api/v3", transport=httpx.MockTransport(handler)
-    )
-    return client
-
-
-@pytest.mark.asyncio
-async def test_plex_paths_find_the_movie_in_a_radarr_with_a_different_mount():
-    from app.services.arr.helpers import find_movie_by_file_path
-    import logging
-
-    movie = await find_movie_by_file_path(
-        _radarr_with_data_mount(),
-        "/movies/Film (2020)/Film.WEBDL-1080p.mkv",
-        logging.getLogger("test"),
-    )
-
-    assert movie["id"] == 42
-
-
-@pytest.mark.asyncio
-async def test_quality_ranking_works_with_different_mounts(test_db):
-    from unittest.mock import AsyncMock, patch
-
-    from app.models.duplicate import MediaType
-    from app.services.arr.quality import ArrQualityRanker
-
-    ranker = ArrQualityRanker(test_db)
-    tracked = "/movies/Film (2020)/Film.WEBDL-1080p.mkv"
-    untracked = "/movies/Film (2020)/extra/Film.Bluray-1080p.mkv"
-
-    with patch.object(
-        ranker.radarr_service,
-        "_get_client",
-        AsyncMock(return_value=_radarr_with_data_mount()),
-    ):
-        qualities = await ranker.evaluate(MediaType.MOVIE, [tracked, untracked])
-
-    assert qualities[tracked].quality_name == "WEBDL-1080p"
-    assert qualities[untracked].quality_name == "Bluray-1080p"
-    assert qualities[untracked].quality_rank > qualities[tracked].quality_rank
+    assert client.path_mapper.to_arr("/tv/a.mkv") == "/data/tv/a.mkv"

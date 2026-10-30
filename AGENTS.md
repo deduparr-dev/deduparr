@@ -11,9 +11,10 @@ Be critical. Base everything on facts: code you read, a command you ran, the API
 5. **Test against the real stack, as a user would.** Run the Podman stack ([quadlet/](quadlet/README.md)) and test every server and service with real calls and real logs, the backend API directly, and every flow through the frontend (port 3000) with Playwright. Conclusions are reproducible defects in the current code, not speculative edge cases.
 6. **Only the tests and comments that are needed.** No debug output or clutter in the code.
 7. **The full suite is heavy.** Run the tests you touch while working, and `scripts/test.sh` once, before committing a pull request.
-8. **No AI attribution** in commits, pull requests or code.
+8. **No AI attribution** in commits, pull requests or code. `.claude/settings.json` turns it off for Claude Code.
 9. **No summary or report documents** in the repository: the reasoning goes in commit messages and pull requests.
 10. **Reference project**: [maintainerr](https://github.com/Maintainerr/Maintainerr) solves the same media server and *arr problems. Look at how it does things; do not copy it.
+11. **Subagents**, if you use any, run on the most capable model: Opus in Claude Code.
 
 ## Coding Standards
 

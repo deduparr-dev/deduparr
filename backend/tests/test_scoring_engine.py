@@ -107,12 +107,20 @@ class TestScoringEngine:
         score = scoring_engine._score_filename_patterns("/movies/Movie.Remux.mkv")
         assert score == 20000
 
-    def test_score_filename_pattern_bluray(self, scoring_engine):
-        """Test scoring for BluRay in filename"""
-        score = scoring_engine._score_filename_patterns(
-            "/movies/Movie.BluRay.1080p.mkv"
-        )
-        assert score == 15000
+    @pytest.mark.parametrize(
+        "name, score",
+        [
+            ("Movie (2008) - Bluray-2160p.mkv", 20000),
+            ("Movie.2160p.BluRay.x265-GRP.mkv", 20000),
+            ("Movie (2008) - Bluray-1080p.mkv", 15000),
+            ("Movie.2010.1080p.BluRay.x264-GRP.mkv", 15000),
+            ("Movie.1080p.Blu-ray.mkv", 15000),
+            ("Movie.2010.720p.BluRay.x264-GRP.mkv", 10000),
+        ],
+    )
+    def test_score_filename_pattern_bluray(self, scoring_engine, name, score):
+        """Radarr's and scene names order the source and resolution differently"""
+        assert scoring_engine._score_filename_patterns(f"/movies/{name}") == score
 
     def test_score_filename_pattern_negative(self, scoring_engine):
         """Test negative scoring for low quality formats"""

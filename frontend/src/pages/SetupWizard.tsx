@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { PlexServerSelect } from "@/components/PlexServerSelect";
 import { Loader2, Check, X, Film, Tv, Download, AlertCircle, Server } from "lucide-react";
 import {
   MEDIA_SERVER_NAMES,
@@ -12,6 +13,7 @@ import {
   setupAPI,
   type ConnectionTestResult,
   type MediaLibrary,
+  type PlexServer,
   type ServiceTestResponse,
 } from "@/services/api";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,8 +31,7 @@ type WizardStep =
   | "plex-server"
   | "jellyfin"
   | "libraries"
-  | "required-services"
-  | "complete";
+  | "required-services";
 
 /** Which media servers the user chose to set up. At least one is required. */
 interface ServerChoice {
@@ -59,7 +60,7 @@ function ProgressIndicator({
   const steps = stepsFor(choice);
   const currentIndex = steps.indexOf(currentStep);
 
-  if (currentStep === "welcome" || currentStep === "complete") return null;
+  if (currentStep === "welcome") return null;
 
   return (
     <div data-testid="wizard-progress" className="mb-8 flex items-center justify-center gap-2">
@@ -124,6 +125,7 @@ export default function SetupWizard() {
 
   // Plex OAuth state
   const [plexAuthToken, setPlexAuthToken] = useState<string>("");
+  const [plexServers, setPlexServers] = useState<PlexServer[]>([]);
   const [plexServerName, setPlexServerName] = useState<string>("");
   const [libraries, setLibraries] = useState<MediaLibrary[]>([]);
   const [selectedLibraries, setSelectedLibraries] = useState<SelectedLibrary[]>([]);
@@ -238,14 +240,16 @@ export default function SetupWizard() {
           try {
             const { servers } = await setupAPI.getPlexServers(result.encrypted_token);
 
-            if (servers.length > 0) {
-              // Auto-select first server (or only server)
-              const firstServer = servers[0];
-              setPlexServerName(firstServer.name);
+            setPlexServers(servers);
+            if (servers.length === 1) {
+              setPlexServerName(servers[0].name);
 
               // Jellyfin, when chosen too, is set up before the libraries of both
               setCurrentStep(choice.jellyfin ? "jellyfin" : "libraries");
-              loadPlexLibraries(result.encrypted_token, firstServer.name);
+              loadPlexLibraries(result.encrypted_token, servers[0].name);
+            } else if (servers.length > 1) {
+              // An account also sees the servers shared with it: the user picks
+              setCurrentStep("plex-server");
             } else {
               setError("No Plex servers found for your account");
             }
@@ -543,6 +547,17 @@ export default function SetupWizard() {
                 </div>
               ) : (
                 <>
+                  {plexServers.length > 1 && (
+                    <PlexServerSelect
+                      servers={plexServers}
+                      value={plexServerName}
+                      onChange={(name) => {
+                        setPlexServerName(name);
+                        forgetTest("plex");
+                      }}
+                    />
+                  )}
+
                   <TestResultDisplay result={testResults.plex} />
 
                   <div className="flex flex-col sm:flex-row gap-3">
@@ -553,7 +568,11 @@ export default function SetupWizard() {
                     >
                       Back
                     </Button>
-                    <Button onClick={testPlexConnection} disabled={isPending} className="flex-1">
+                    <Button
+                      onClick={testPlexConnection}
+                      disabled={isPending || !plexServerName}
+                      className="flex-1"
+                    >
                       {isPending ? (
                         <>
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -565,7 +584,10 @@ export default function SetupWizard() {
                     </Button>
                     {testResults.plex?.success && (
                       <Button
-                        onClick={() => setCurrentStep(choice.jellyfin ? "jellyfin" : "libraries")}
+                        onClick={() => {
+                          loadPlexLibraries(plexAuthToken, plexServerName);
+                          setCurrentStep(choice.jellyfin ? "jellyfin" : "libraries");
+                        }}
                         className="flex-1"
                       >
                         Next: Libraries
@@ -1059,63 +1081,6 @@ export default function SetupWizard() {
                   )}
                 </Button>
               </div>
-            </div>
-          )}
-
-          {/* Complete Step */}
-          {currentStep === "complete" && (
-            <div className="text-center max-w-2xl mx-auto space-y-4 md:space-y-6">
-              <div className="w-16 h-16 md:w-20 md:h-20 mx-auto rounded-2xl bg-primary text-primary-foreground flex items-center justify-center text-2xl md:text-3xl font-bold shadow-lg">
-                ✓
-              </div>
-              <h1 className="text-2xl md:text-3xl font-bold">Setup Complete!</h1>
-              <p className="text-sm md:text-lg text-muted-foreground">
-                Your deduparr installation is now configured and ready to use.
-                <br />
-                Redirecting to dashboard in a moment...
-              </p>
-
-              <Card className="p-4 md:p-6 bg-card border-border text-left">
-                <h3 className="font-semibold mb-3 text-sm md:text-base">What's configured:</h3>
-                <div className="space-y-2 text-xs md:text-sm">
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-primary" />
-                    <span>Plex authenticated</span>
-                  </div>
-                  {testResults.radarr?.success && (
-                    <div className="flex items-center gap-2">
-                      <Check className="w-4 h-4 text-primary" />
-                      <span>Radarr connected</span>
-                    </div>
-                  )}
-                  {testResults.sonarr?.success && (
-                    <div className="flex items-center gap-2">
-                      <Check className="w-4 h-4 text-primary" />
-                      <span>Sonarr connected</span>
-                    </div>
-                  )}
-                  {testResults.qbittorrent?.success && (
-                    <div className="flex items-center gap-2">
-                      <Check className="w-4 h-4 text-primary" />
-                      <span>qBittorrent connected</span>
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              <Card className="p-4 md:p-6 bg-card border-border text-left">
-                <h3 className="font-semibold mb-3 text-sm md:text-base">Next steps:</h3>
-                <ol className="space-y-2 text-xs md:text-sm text-muted-foreground list-decimal list-inside">
-                  <li>Head to the Dashboard to view your media statistics</li>
-                  <li>Configure duplicate detection rules in Settings</li>
-                  <li>Run your first scan to find duplicates</li>
-                  <li>Review and approve deletions in dry-run mode</li>
-                </ol>
-              </Card>
-
-              <Button size="lg" onClick={() => navigate("/")} className="w-full sm:w-auto">
-                Go to Dashboard
-              </Button>
             </div>
           )}
         </Card>

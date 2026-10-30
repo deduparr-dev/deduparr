@@ -65,13 +65,11 @@ async def test_the_client_translates_what_it_sends_and_receives(mappings, seen):
     )
 
     [movie] = await client.get_movie()
-    await client.get_manual_import(folder=f"{seen}/Film")
     await client.update_movie(movie)
 
     assert movie["path"] == f"{seen}/Film"
     assert movie["movieFile"] == {"path": f"{seen}/Film/a.mkv", "relativePath": "a.mkv"}
-    assert sent[1].url.params["folder"] == "/data/movies/Film"
-    assert json.loads(sent[2].content)["movieFile"]["path"] == "/data/movies/Film/a.mkv"
+    assert json.loads(sent[1].content)["movieFile"]["path"] == "/data/movies/Film/a.mkv"
 
 
 @pytest.mark.asyncio

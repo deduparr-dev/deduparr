@@ -8,7 +8,6 @@ Mirrors the *arr upgrade logic (QualityModelComparer + custom format score):
 """
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -82,7 +81,7 @@ def build_arr_quality(
     resource: ArrFile, profile: QualityProfile
 ) -> Optional[ArrQuality]:
     """
-    Build an ArrQuality from a moviefile, episodefile or manualimport resource.
+    Build an ArrQuality from a moviefile or episodefile resource, or a parsed file.
 
     Returns None if the *arr could not determine the file's quality.
     """
@@ -239,23 +238,9 @@ class ArrQualityRanker:
             )
             resources = {f.get("path"): f for f in tracked_files}
 
-            untracked_folders = {
-                os.path.dirname(path) for path in file_paths if path not in resources
-            }
-            for folder in sorted(untracked_folders):
-                items = await (
-                    client.get_manual_import(folder=folder, movie_id=media_id)
-                    if isinstance(client, RadarrClient)
-                    else client.get_manual_import(folder=folder, series_id=media_id)
-                )
-                for item in items:
-                    resources.setdefault(item.get("path"), item)
-
             qualities: Dict[str, ArrQuality] = {}
             for path in file_paths:
-                resource = resources.get(path)
-                if resource is None:
-                    raise ArrQualityUnavailable(f"{arr_name} does not know file {path}")
+                resource = resources.get(path) or await client.parse_file(path)
                 quality = build_arr_quality(resource, profile)
                 if quality is None:
                     raise ArrQualityUnavailable(

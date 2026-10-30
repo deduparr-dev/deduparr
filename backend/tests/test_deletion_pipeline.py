@@ -928,6 +928,55 @@ async def test_qbit_stage_leaves_a_torrent_that_holds_other_videos(
     assert history.deleted_from_qbit is True
 
 
+@pytest.mark.asyncio
+async def test_qbit_stage_removes_the_torrent_when_the_kept_file_has_its_own(
+    test_db, create_duplicate_set, create_duplicate_file
+):
+    """The kept file's torrent seeds on; the unwanted one's data would stay forever."""
+    dup_set = await create_duplicate_set(media_type=MediaType.MOVIE)
+    unwanted = await create_duplicate_file(dup_set.id, keep=False)
+    kept = await create_duplicate_file(dup_set.id, keep=True)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.qbit_service = AsyncMock()
+    pipeline.qbit_service.find_item_by_file_path.side_effect = [
+        TorrentMatch(hash="unwanted", count=1, holds_other_videos=False),
+        TorrentMatch(hash="kept", count=1, holds_other_videos=False),
+    ]
+    history = DeletionHistory(duplicate_file_id=unwanted.id)
+
+    assert (
+        await pipeline._stage_qbittorrent_removal(unwanted, history, None, kept)
+        == "unwanted"
+    )
+    pipeline.qbit_service.remove_item.assert_awaited_once_with(
+        "unwanted", delete_files=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_qbit_stage_leaves_the_torrent_of_the_kept_file(
+    test_db, create_duplicate_set, create_duplicate_file
+):
+    """A copy of the same name and size matches the kept file's torrent too."""
+    dup_set = await create_duplicate_set(media_type=MediaType.MOVIE)
+    unwanted = await create_duplicate_file(dup_set.id, keep=False)
+    kept = await create_duplicate_file(dup_set.id, keep=True)
+
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.qbit_service = AsyncMock()
+    pipeline.qbit_service.find_item_by_file_path.return_value = TorrentMatch(
+        hash="kept", count=1, holds_other_videos=False
+    )
+    history = DeletionHistory(duplicate_file_id=unwanted.id)
+
+    assert (
+        await pipeline._stage_qbittorrent_removal(unwanted, history, None, kept) is None
+    )
+    pipeline.qbit_service.remove_item.assert_not_awaited()
+    assert history.deleted_from_qbit is True
+
+
 async def _with_files(test_db, set_id: int) -> DuplicateSet:
     return (
         await test_db.execute(

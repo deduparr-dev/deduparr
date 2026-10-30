@@ -112,7 +112,7 @@ async def find_movie_by_file_path(
                 )
                 return movie
 
-        logger_instance.warning(f"Movie not found in Radarr for file path: {file_path}")
+        logger_instance.info(f"Movie not found in Radarr for file path: {file_path}")
         return None
     except Exception as e:
         logger_instance.error(f"Error finding movie for {file_path}: {e}")
@@ -123,11 +123,8 @@ async def find_episode_by_file_path(
     client: SonarrClient, file_path: str, logger_instance: logging.Logger
 ) -> Optional[Episode]:
     """
-    The episode whose file Sonarr keeps at exactly this path, if any.
-
-    Sonarr can hold a file no episode points at, after a manual import or an
-    episode's deletion. That file comes back as an episode without an ID, so
-    the deletion pipeline can still delete it.
+    The file Sonarr keeps at exactly this path, if any, inside an Episode that
+    has only its series: Sonarr's episode files do not name their episodes.
     """
     try:
         for series in await client.get_series():
@@ -135,34 +132,14 @@ async def find_episode_by_file_path(
             if not series_id:
                 continue
             for episode_file in await client.get_episode_files_by_series_id(series_id):
-                if episode_file.get("path") != file_path:
-                    continue
-
-                episode_ids = episode_file.get("episodeIds") or []
-                if episode_ids:
-                    episode = await client.get_episode(episode_ids[0])
-                    episode["episodeFile"] = episode_file
+                if episode_file.get("path") == file_path:
                     logger_instance.info(
-                        f"Found episode '{episode.get('title', 'Unknown Episode')}' "
-                        f"for file {file_path}"
+                        f"Found file {episode_file.get('id')} of series {series_id} "
+                        f"for {file_path}"
                     )
-                    return episode
+                    return Episode(seriesId=series_id, episodeFile=episode_file)
 
-                season = episode_file.get("seasonNumber", 0)
-                logger_instance.warning(
-                    f"Found orphaned episode file {episode_file.get('id')} in Sonarr "
-                    f"(series {series_id}, season {season}, no episodes): {file_path}"
-                )
-                return Episode(
-                    seriesId=series_id,
-                    seasonNumber=season,
-                    episodeFile=episode_file,
-                    title=f"Orphaned S{season:02d} file",
-                )
-
-        logger_instance.warning(
-            f"Episode not found in Sonarr for file path: {file_path}"
-        )
+        logger_instance.info(f"Episode not found in Sonarr for file path: {file_path}")
         return None
     except Exception as e:
         logger_instance.error(f"Error finding episode for {file_path}: {e}")

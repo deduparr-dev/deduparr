@@ -270,14 +270,12 @@ def radarr_client_mock() -> AsyncMock:
     client.get_movie_files.return_value = [
         resource("/movies/Film (2020)/Film.WEBDL-1080p.mkv", 3, "WEBDL-1080p")
     ]
-    client.get_manual_import.return_value = [
-        resource(
-            "/downloads/Film.2020.Remux-1080p.mkv",
-            30,
-            "Remux-1080p",
-            custom_format_score=500,
-        )
-    ]
+    client.parse_file.return_value = resource(
+        "/downloads/Film.2020.Remux-1080p.mkv",
+        30,
+        "Remux-1080p",
+        custom_format_score=500,
+    )
     return client
 
 
@@ -296,7 +294,7 @@ async def test_evaluate_radarr_tracked_and_untracked_files(test_db):
     assert qualities[untracked].custom_format_score == 500
     client.get_quality_profile.assert_awaited_once_with(4)
     client.get_movie_files.assert_awaited_once_with(42)
-    client.get_manual_import.assert_awaited_once_with(folder="/downloads", movie_id=42)
+    client.parse_file.assert_awaited_once_with(untracked)
     client.close.assert_awaited()
 
 
@@ -305,7 +303,7 @@ async def test_evaluate_radarr_matches_movie_by_folder(test_db):
     client = radarr_client_mock()
     client.get_movie.return_value[1].pop("movieFile")
     client.get_movie_files.return_value = []
-    client.get_manual_import.return_value = [
+    client.parse_file.side_effect = [
         resource("/movies/Film (2020)/a.mkv", 7, "Bluray-1080p"),
         resource("/movies/Film (2020)/b.mkv", 3, "WEBDL-1080p"),
     ]
@@ -317,9 +315,6 @@ async def test_evaluate_radarr_matches_movie_by_folder(test_db):
         )
 
     assert qualities["/movies/Film (2020)/a.mkv"].quality_rank == 2
-    client.get_manual_import.assert_awaited_once_with(
-        folder="/movies/Film (2020)", movie_id=42
-    )
 
 
 @pytest.mark.asyncio
@@ -346,9 +341,9 @@ async def test_evaluate_sonarr_uses_series_folder(test_db):
     client.get_episode_files_by_series_id.return_value = [
         resource("/tv/Show/Season 01/Show.S01E01.WEBRip.mkv", 15, "WEBRip-1080p")
     ]
-    client.get_manual_import.return_value = [
-        resource("/tv/Show/Season 01/Show.S01E01.Bluray.mkv", 7, "Bluray-1080p")
-    ]
+    client.parse_file.return_value = resource(
+        "/tv/Show/Season 01/Show.S01E01.Bluray.mkv", 7, "Bluray-1080p"
+    )
     ranker = ArrQualityRanker(test_db)
     tracked = "/tv/Show/Season 01/Show.S01E01.WEBRip.mkv"
     untracked = "/tv/Show/Season 01/Show.S01E01.Bluray.mkv"
@@ -359,9 +354,7 @@ async def test_evaluate_sonarr_uses_series_folder(test_db):
     assert qualities[tracked].quality_rank == 1
     assert qualities[untracked].quality_rank == 2
     client.get_episode_files_by_series_id.assert_awaited_once_with(7)
-    client.get_manual_import.assert_awaited_once_with(
-        folder="/tv/Show/Season 01", series_id=7
-    )
+    client.parse_file.assert_awaited_once_with(untracked)
 
 
 @pytest.mark.asyncio
@@ -375,28 +368,11 @@ async def test_evaluate_unavailable_when_media_not_matched(test_db):
 
 
 @pytest.mark.asyncio
-async def test_evaluate_unavailable_when_file_unknown(test_db):
-    client = radarr_client_mock()
-    client.get_manual_import.return_value = []
-    ranker = ArrQualityRanker(test_db)
-
-    with patch.object(ranker.radarr_service, "_get_client", return_value=client):
-        with pytest.raises(ArrQualityUnavailable, match="does not know file"):
-            await ranker.evaluate(
-                MediaType.MOVIE,
-                [
-                    "/movies/Film (2020)/Film.WEBDL-1080p.mkv",
-                    "/downloads/Film.2020.Remux-1080p.mkv",
-                ],
-            )
-
-
-@pytest.mark.asyncio
 async def test_evaluate_unavailable_when_quality_unparsed(test_db):
     client = radarr_client_mock()
-    client.get_manual_import.return_value = [
-        resource("/downloads/Film.2020.Remux-1080p.mkv", 0, "Unknown")
-    ]
+    client.parse_file.return_value = resource(
+        "/downloads/Film.2020.Remux-1080p.mkv", 0, "Unknown"
+    )
     ranker = ArrQualityRanker(test_db)
 
     with patch.object(ranker.radarr_service, "_get_client", return_value=client):
@@ -421,6 +397,36 @@ async def test_evaluate_unavailable_when_arr_unreachable(test_db):
             await ranker.evaluate(MediaType.MOVIE, ["/movies/Film (2020)/a.mkv"])
 
     client.close.assert_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_class, parsed_info",
+    [(RadarrClient, "parsedMovieInfo"), (SonarrClient, "parsedEpisodeInfo")],
+)
+async def test_parse_file_reads_the_quality_from_the_file_name(
+    client_class, parsed_info
+):
+    """/parse answers with the quality under a key of its own for each *arr."""
+    quality = {"quality": {"id": 7, "name": "Bluray-1080p"}}
+    requests = []
+
+    def answer(request):
+        requests.append(request)
+        return httpx.Response(
+            200, json={parsed_info: {"quality": quality}, "customFormatScore": 500}
+        )
+
+    client = client_class(base_url="http://arr", api_key="key")
+    client._client = httpx.AsyncClient(
+        base_url="http://arr/api/v3", transport=httpx.MockTransport(answer)
+    )
+
+    parsed = await client.parse_file("/movies/Film (2020)/Film.1080p.BluRay.mkv")
+
+    assert requests[0].url.params["title"] == "Film.1080p.BluRay.mkv"
+    assert parsed["quality"] == quality
+    assert parsed["customFormatScore"] == 500
 
 
 @pytest.mark.asyncio
@@ -481,7 +487,7 @@ async def test_evaluate_unavailable_when_arr_not_configured(test_db):
 async def _create_set(test_db, arr_ranker, caplog) -> DuplicateSet:
     files = [
         metadata("/movies/Film (2020)/Film.2020.1080p.WEB-DL.x265.mkv", size=4 * 2**30),
-        metadata("/movies/Film (2020)/Film.2020.1080p.BluRay.x264.mkv", size=2**30),
+        metadata("/movies/Film (2020)/Film.2020.1080p.WEBRip.x264.mkv", size=2**30),
     ]
     with caplog.at_level(logging.INFO):
         await create_duplicate_set(
@@ -510,14 +516,14 @@ async def test_create_set_keeps_arr_preferred_file(test_db, caplog):
         "/movies/Film (2020)/Film.2020.1080p.WEB-DL.x265.mkv": arr_quality(
             0, cf_score=-10000
         ),
-        "/movies/Film (2020)/Film.2020.1080p.BluRay.x264.mkv": arr_quality(2),
+        "/movies/Film (2020)/Film.2020.1080p.WEBRip.x264.mkv": arr_quality(2),
     }
 
     dup_set = await _create_set(test_db, ranker, caplog)
 
     kept = [f for f in dup_set.files if f.keep]
     assert [f.file_path for f in kept] == [
-        "/movies/Film (2020)/Film.2020.1080p.BluRay.x264.mkv"
+        "/movies/Film (2020)/Film.2020.1080p.WEBRip.x264.mkv"
     ]
     # Deduparr alone would keep the larger x265 WEB-DL
     web = next(f for f in dup_set.files if "WEB-DL" in f.file_path)
@@ -575,7 +581,7 @@ async def test_client_get_quality_profile():
 @pytest.mark.asyncio
 async def test_existing_set_rerank_uses_arr_ranker(test_db):
     web = metadata("/movies/Film (2020)/Film.2020.1080p.WEB-DL.x265.mkv", 4 * 2**30)
-    bluray = metadata("/movies/Film (2020)/Film.2020.1080p.BluRay.x264.mkv", 2**30)
+    bluray = metadata("/movies/Film (2020)/Film.2020.1080p.WEBRip.x264.mkv", 2**30)
     gone = metadata("/movies/Film (2020)/Film.2020.720p.HDTV.mkv", 2**29)
     await create_duplicate_set(
         test_db,

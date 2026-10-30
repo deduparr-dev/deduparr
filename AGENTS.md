@@ -226,7 +226,7 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
 - **Encrypted secrets**: tokens, API keys and passwords are stored encrypted with Fernet (`cryptography`), under a key derived from the key file; startup converts older signed or plain values. The API returns a set secret only as `SECRET_MASK`, and sending the mask or a blank back keeps the stored one. A connection test sends a stored secret only to the server stored with it
 - **File-based key**: stored in `/app/data/.encryption_key` (separate from database). Losing it loses the secrets, which are then entered again
 - **No CORS**: the frontend is same-origin, so another site in the browser cannot call the API; there is still no login
-- **Secure Logging**: Sensitive data sanitized in logs (shows only first/last few chars)
+- **Secure Logging**: secrets are never logged, not even in part; a logging filter masks known patterns
 
 **Critical:** 
 - For **Plex**, never use direct server URLs and never support manual token
@@ -303,8 +303,7 @@ stages, tracked in `DeletionHistory`:
 
 1. `deleted_from_arr`: delete through Radarr/Sonarr, which removes the file
 2. `deleted_from_qbit`: remove the torrent holding the file, with its data -
-   unless the kept file has a torrent, or the torrent holds other videos too
-   (a season pack)
+   unless the torrent holds other videos too (a season pack, or the kept file)
 3. `deleted_from_disk`: delete the file if still on disk, then the side files
    named after it (.nfo, subtitles, artwork), and the release's
    Sample/Subs/Proof/Extras folders once no other video shares the directory,
@@ -527,7 +526,13 @@ duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets
   - `post_command()`: Execute commands (RescanMovie, RescanSeries)
   - `update_movie()` / `update_series()`: Send an item back changed, e.g. a new path
 
-Behaviour read from Radarr's and Sonarr's source, which the rescans rely on:
+Behaviour read from Radarr's and Sonarr's source and their real APIs, which
+Deduparr relies on:
+- A delete answers 200 with an empty body, not JSON.
+- `/manualimport` with the item's id answers "Unknown" for a file not imported
+  yet, and Sonarr gives no quality at all without it; `/parse?title=<file name>`
+  reads the quality and custom formats on both.
+- Sonarr's episode files do not name their episodes.
 - `RescanMovie`/`RescanSeries` re-read one item from disk, or every item when
   given no id.
 - `DownloadedMoviesScan`/`DownloadedEpisodesScan` refuse a folder that belongs

@@ -328,3 +328,17 @@ def test_test_connection_failure(mock_account_class, mock_token_manager):
 
     assert result["success"] is False
     assert "Connection failed" in result["error"]
+
+
+def test_get_libraries_gives_the_key_as_text():
+    """plexapi's section key is a number; the setup API's response takes text."""
+    service = PlexService(encrypted_token="encrypted_token", server_name="Test Server")
+    server = Mock()
+    server.library.sections.return_value = [
+        Mock(key=1, title="Movies", type="movie", totalSize=3)
+    ]
+
+    with patch.object(service, "_get_server", return_value=server):
+        assert service.get_libraries() == [
+            {"key": "1", "title": "Movies", "type": "movie", "count": 3}
+        ]

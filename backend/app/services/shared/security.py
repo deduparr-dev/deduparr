@@ -20,12 +20,6 @@ Usage Examples:
         encrypted_sonarr = tm.encrypt("sonarr-api-key-789")
         decrypted_sonarr = tm.decrypt(encrypted_sonarr)
 
-    Sanitizing Sensitive Data for Logs:
-        from app.services.shared.security import sanitize_log_data
-
-        logger.info(f"Authenticated with token: {sanitize_log_data(api_key)}")
-        # Output: "Authenticated with token: abcd...xyz"
-
     OAuth PIN Flow (for services that support it):
         from app.services.shared.security import pin_cache
 
@@ -364,32 +358,6 @@ class PinCache:
 
 # Global PIN cache instance (shared across OAuth flows)
 pin_cache = PinCache()
-
-
-def sanitize_log_data(data: str) -> str:
-    """
-    Sanitize sensitive data for logging by showing only first/last few characters.
-
-    Use this for tokens, API keys, passwords, or any sensitive strings in logs.
-
-    Args:
-        data: Sensitive string to sanitize
-
-    Returns:
-        Sanitized string showing only first and last few characters
-
-    Example:
-        "abcdefghijklmnop" -> "abcd...mnop"
-        "short" -> "***"
-    """
-    if not data or len(data) <= 8:
-        return "***"
-
-    visible_chars = min(4, len(data) // 3)
-    if len(data) <= visible_chars * 2:
-        return "***"
-
-    return f"{data[:visible_chars]}...{data[-visible_chars:]}"
 
 
 class SensitiveDataFilter(logging.Filter):

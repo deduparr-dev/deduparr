@@ -451,7 +451,8 @@ class DeletionPipeline:
 
         The torrent stays, and the disk stage removes just the file, when
         removing it would take more than this file:
-        - the kept file has a torrent, which may be this one and should keep seeding
+        - it is the torrent of the kept file, which a copy of the same name and
+          size also matches, and which should keep seeding
         - the torrent holds other videos too, as a season pack does
         - there is no kept file and this is the only torrent holding the file
 
@@ -475,12 +476,13 @@ class DeletionPipeline:
                 return None
 
             if kept_file:
-                if await self.qbit_service.find_item_by_file_path(
+                kept_match = await self.qbit_service.find_item_by_file_path(
                     kept_file.file_path, kept_file.file_size
-                ):
+                )
+                if kept_match and kept_match.hash == match.hash:
                     logger.info(
-                        "Kept file has a torrent in qBittorrent. Skipping qBittorrent deletion "
-                        "to preserve seeding. Will delete unwanted file via disk cleanup only."
+                        f"Torrent {match.hash} holds the kept file. Leaving it in "
+                        "qBittorrent; the disk stage removes only this file."
                     )
                     history.deleted_from_qbit = True
                     return None
@@ -516,7 +518,6 @@ class DeletionPipeline:
                     f"Removed item {match.hash} from qBittorrent and deleted files"
                 )
             history.deleted_from_qbit = True
-            history.deleted_from_disk = True
             return match.hash
 
         except ValueError as e:
@@ -598,7 +599,7 @@ class DeletionPipeline:
                     series_id = episode["seriesId"]
 
                     logger.info(
-                        f"Found '{episode.get('title')}' in Sonarr (series {series_id}). "
+                        f"Found {file_path} in Sonarr (series {series_id}). "
                         f"Deleting this version via Sonarr API (includes disk deletion)."
                     )
 
@@ -851,7 +852,7 @@ class DeletionPipeline:
                     f"Found {arr_type} media ID {arr_media_id} from deletion history for duplicate set {duplicate_set_id}"
                 )
             else:
-                logger.warning(
+                logger.info(
                     f"No {arr_type} media ID found in deletion history for duplicate set {duplicate_set_id}"
                 )
 

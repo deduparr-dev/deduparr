@@ -201,15 +201,18 @@ pytest --cov=app tests/  # With coverage
 
 ```bash
 cd frontend
-npm test
+npm run type-check && npm run lint
+npm run test:e2e  # Playwright end-to-end tests
 ```
+
+`bash scripts/test.sh` formats and lints both halves and runs the backend tests. It is heavy, so run it once, before opening a pull request.
 
 ## Pull Request Process
 
 1. **Update documentation** if you're adding features
 2. **Add tests** for new functionality
 3. **Ensure all tests pass**
-4. **Update CHANGELOG.md** (if applicable)
+4. **Write a clear title**: it appears as written in the release notes' list of changes ([releases](docs/releases/))
 5. **Request review** from maintainers
 
 ### PR Checklist

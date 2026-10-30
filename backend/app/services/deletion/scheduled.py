@@ -55,6 +55,7 @@ class ScheduledDeletionService:
                 "sets_processed": 0,
                 "files_deleted": 0,
                 "errors": [],
+                "warnings": [],
                 "dry_run": dry_run,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
@@ -66,6 +67,7 @@ class ScheduledDeletionService:
         sets_processed = 0
         files_deleted = 0
         errors = []
+        warnings = []
 
         for duplicate_set in pending_sets:
             if all(f.keep for f in duplicate_set.files):
@@ -85,6 +87,7 @@ class ScheduledDeletionService:
 
             files_deleted += outcome.files_deleted
             errors.extend(outcome.errors)
+            warnings.extend(outcome.warnings)
             if not outcome.errors:
                 sets_processed += 1
 
@@ -96,6 +99,7 @@ class ScheduledDeletionService:
             "sets_processed": sets_processed,
             "files_deleted": files_deleted,
             "errors": errors,
+            "warnings": list(dict.fromkeys(warnings)),
             "dry_run": dry_run,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
@@ -155,6 +159,11 @@ class ScheduledDeletionService:
                 content += f"<p style='margin: 5px 0; font-size: 14px;'>... and {len(summary['errors']) - 5} more errors</p>"
 
             content += "</div>"
+
+        if summary["warnings"]:
+            content += "<p><strong>Notes:</strong></p>"
+            for note in summary["warnings"][:5]:
+                content += f"<p style='margin: 5px 0; font-size: 14px;'>• {note}</p>"
 
         # Send email
         html_content = email_service.build_email_template(

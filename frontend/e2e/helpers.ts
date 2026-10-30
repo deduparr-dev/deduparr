@@ -80,7 +80,7 @@ export async function seedDuplicateSets(
 export async function getPendingSets(
   request: APIRequestContext
 ): Promise<{ id: number; title: string; status: string }[]> {
-  const res = await request.get(`${BACKEND_URL}/api/scan/duplicates?status=pending`);
+  const res = await request.get(`${BACKEND_URL}/api/scan/duplicates?status=pending&limit=1000`);
   expect(res.ok()).toBeTruthy();
   return res.json();
 }

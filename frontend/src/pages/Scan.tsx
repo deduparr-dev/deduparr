@@ -581,7 +581,7 @@ export default function Scan() {
   const isScanning = startScanMutation.isPending;
 
   // Delete All covers every pending set, not only the pages loaded
-  const pendingSets = scanStatus?.pending_sets ?? 0;
+  const setsToDelete = scanStatus?.sets_to_delete ?? 0;
   const pendingFilesToDelete = scanStatus?.pending_files_to_delete ?? 0;
   const pendingSpace = scanStatus?.total_space_reclaimable ?? 0;
 
@@ -732,7 +732,7 @@ export default function Scan() {
       <div className="space-y-3 md:space-y-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
           <h3 className="text-base md:text-lg font-semibold">Duplicate Sets Found</h3>
-          {pendingSets > 0 && (
+          {setsToDelete > 0 && (
             <Button
               size="sm"
               variant="destructive"
@@ -746,7 +746,7 @@ export default function Scan() {
               ) : (
                 <Trash2 className="w-3 h-3 md:w-4 md:h-4 mr-2" />
               )}
-              Delete All ({pendingSets})
+              Delete All ({setsToDelete})
             </Button>
           )}
         </div>
@@ -758,9 +758,9 @@ export default function Scan() {
             description={
               <>
                 This will delete <strong>{pendingFilesToDelete}</strong> file
-                {pendingFilesToDelete === 1 ? "" : "s"} across <strong>{pendingSets}</strong> set
-                {pendingSets === 1 ? "" : "s"}, keeping the highest ranked file in each, and reclaim
-                about <strong>{formatBytes(pendingSpace)}</strong>.
+                {pendingFilesToDelete === 1 ? "" : "s"} across <strong>{setsToDelete}</strong> set
+                {setsToDelete === 1 ? "" : "s"}, keeping the highest ranked file in each, and
+                reclaim about <strong>{formatBytes(pendingSpace)}</strong>.
               </>
             }
             dryRun={deleteAllDryRun}

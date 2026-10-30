@@ -74,43 +74,6 @@ export default function Dashboard() {
 </PageContainer>
 ```
 
-### 2. Page with Form
-```tsx
-<PageContainer>
-  <PageHeader title="Settings" />
-  <ActionCard title="Configuration" highlight>
-    <form>
-      {/* Form fields */}
-      <FormActions>
-        <Button variant="outline">Cancel</Button>
-        <Button>Save</Button>
-      </FormActions>
-    </form>
-  </ActionCard>
-</PageContainer>
-```
-
-### 3. Page with Expandable Items
-```tsx
-<PageContainer>
-  <PageHeader 
-    title="Scan Results" 
-    action={<Button>Start Scan</Button>}
-  />
-  <Card className="overflow-hidden">
-    <div className="p-3 md:p-4 bg-muted/50">
-      <ExpandableCardHeader
-        expanded={expanded}
-        onToggle={() => setExpanded(!expanded)}
-        title="Item Name"
-        badges={<Badge>Status</Badge>}
-        action={<Button>Delete</Button>}
-      />
-    </div>
-  </Card>
-</PageContainer>
-```
-
 ## Key Benefits
 
 1. **Consistency**: Same layout across all pages
@@ -125,10 +88,7 @@ When creating a new page:
 - [ ] Wrap in `PageContainer`
 - [ ] Add `PageHeader` with title
 - [ ] Use `StatsGrid` for metrics
-- [ ] Use `ActionCard` for forms
 - [ ] Use `ContentGrid` for content sections
-- [ ] Use `FormActions` for button groups
-- [ ] Use `ExpandableCardHeader` for collapsible items
 
 ## Migration Guide
 

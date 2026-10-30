@@ -31,7 +31,7 @@ if [ "$MODE" == "dev" ]; then
     echo ""
 
     echo "🗑️  Removing database and encryption key..."
-    rm -f config/deduparr.db config/deduparr.db-shm config/deduparr.db-wal config/.encryption_key
+    rm -f config/deduparr.db config/deduparr.db-shm config/deduparr.db-wal data/.encryption_key
     echo "✅ Database and encryption key removed"
     echo ""
 
@@ -79,7 +79,7 @@ echo ""
 
 # 3. Remove database and encryption key
 echo "🗑️  Removing database and encryption key..."
-rm -f config/deduparr.db config/deduparr.db-shm config/deduparr.db-wal config/.encryption_key
+rm -f config/deduparr.db config/deduparr.db-shm config/deduparr.db-wal data/.encryption_key
 echo "✅ Database and encryption key removed"
 echo ""
 

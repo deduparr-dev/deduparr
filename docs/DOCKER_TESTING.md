@@ -12,7 +12,7 @@ bash scripts/rebuild-docker.sh --prod
 This script handles:
 1. Port cleanup (stops and removes containers using port 8655)
 2. Docker compose down
-3. Database removal (`config/deduparr.db`; the key in `data/.encryption_key` is kept)
+3. Database and encryption key removal (`config/deduparr.db`, `data/.encryption_key`)
 4. Docker system prune
 5. Image rebuild (no cache)
 6. Container startup
@@ -34,7 +34,7 @@ bash scripts/rebuild-docker.sh --dev
 
 This script handles:
 1. Stopping the development services and removing the `deduparr-dev` pod
-2. Database removal (`config/deduparr.db`; the key in `data/.encryption_key` is kept)
+2. Database and encryption key removal (`config/deduparr.db`, `data/.encryption_key`)
 3. Removing both development images
 4. Pod startup with hot reload, which rebuilds both images through the `.build` units (see [quadlet/README.md](../quadlet/README.md))
 

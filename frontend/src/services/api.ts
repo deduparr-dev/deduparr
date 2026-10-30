@@ -2,11 +2,9 @@
  * API client for Deduparr backend
  */
 
-// In production (no Vite dev server), use relative paths for nginx proxy
-// In development, use localhost:3001 for backend
-const API_BASE_URL =
-  (import.meta.env.VITE_API_URL as string | undefined) ||
-  (import.meta.env.DEV ? "http://localhost:3001" : "");
+// Relative /api: nginx proxies it in production, and Vite's dev and preview
+// servers proxy it to VITE_PROXY_TARGET (vite.config.ts)
+const API_BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) || "";
 
 export interface DashboardStats {
   total_duplicates: number; // Number of unique items (movies/episodes) with duplicates

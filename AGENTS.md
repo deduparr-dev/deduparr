@@ -394,7 +394,9 @@ Production uses multi-stage build: frontend → backend → nginx+supervisor run
 - CI runs on the pull request, not on a pushed branch.
 - Pull requests are squash-merged, so the commit subject ends with `(#n)`: the
   release notes find the pull request from it.
-- Dependabot's pull requests merge themselves once CI passes
+- Rulesets: `develop` takes a pull request with an approval and passing CI;
+  `main` and the `v*` tags change only when a version is cut.
+- Dependabot's pull requests approve and merge themselves once CI passes
   ([docs/DEPENDABOT_AUTO_MERGE.md](docs/DEPENDABOT_AUTO_MERGE.md)).
 
 ### Releases

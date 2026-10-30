@@ -213,7 +213,7 @@ npm run test:e2e  # Playwright end-to-end tests
 2. **Add tests** for new functionality
 3. **Ensure all tests pass**
 4. **Write a clear title**: it appears as written in the release notes' list of changes ([releases](docs/releases/))
-5. **Request review** from maintainers
+5. **Request review**: a pull request merges into `develop` once a maintainer approves it and CI passes
 
 ### PR Checklist
 

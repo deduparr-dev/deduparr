@@ -1,8 +1,7 @@
 name: Dependabot Auto-Merge
 
-# Merges a Dependabot pull request once CI has passed on it. develop requires
-# no checks, so merging when the pull request opened took updates in before
-# CI had finished.
+# Approves and merges a Dependabot pull request once CI has passed on it:
+# develop requires an approval and passing checks before a merge.
 on:
   workflow_run:
     workflows: [CI/CD]
@@ -19,12 +18,15 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.actor.login == 'dependabot[bot]'
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.workflow_run.pull_requests[0].number }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
+      # The repository allows GitHub Actions to approve pull requests
+      - name: Approve the pull request
+        run: gh pr review "$PR" --repo "$REPO" --approve
       # Only the commit CI passed on: a newer one waits for its own run
       - name: Merge the pull request
         run: gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.workflow_run.pull_requests[0].number }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}

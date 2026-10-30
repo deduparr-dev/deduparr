@@ -7,7 +7,7 @@
 
 **Name:** Deduparr (Deduplication + *arr)
 
-**Purpose:** A Docker-based web application that finds and manages duplicate media files across Plex, Radarr, Sonarr, and qBittorrent with a modern GUI.
+**Purpose:** A Docker-based web application that finds and manages duplicate media files across Plex or Jellyfin, Radarr, Sonarr, and qBittorrent with a modern GUI.
 
 **Core Philosophy:** Safe, transparent, and integrates seamlessly with the existing *arr ecosystem.
 
@@ -18,13 +18,14 @@
 ### **Technology Stack**
 
 **Backend:**
-- **Python 3.14** with FastAPI (async/await for performance)
+- **Python 3.15** with FastAPI (async/await for performance)
 - **SQLite** (default) or **PostgreSQL** (optional) for database
   - SQLite with WAL mode for better concurrency
   - PostgreSQL option for power users (>50k items, multi-user)
   - SQLAlchemy ORM for database abstraction (supports both)
 - **APScheduler** for scheduled tasks
 - **PlexAPI** for Plex integration
+- **jellyfin-apiclient-python** for Jellyfin integration
 - **qBittorrent-API** for library management
 - **httpx** for Radarr/Sonarr API clients (custom async implementation)
 
@@ -33,7 +34,7 @@
 - **TailwindCSS** for styling
 - **shadcn/ui** components (modern, accessible)
 - **React Query** for data fetching
-- **Recharts** for statistics/graphs
+- **Recharts** for statistics/graphs (a dependency; no charts yet)
 
 **Infrastructure:**
 - **Docker** + Docker Compose
@@ -44,46 +45,47 @@
 
 ## 📋 **Core Features**
 
-### **Phase 1: MVP (Minimum Viable Product)** ✅ **COMPLETE**
+### **Phase 1: MVP (Minimum Viable Product)** ✅ **MOSTLY COMPLETE**
 
 #### **1.1 Duplicate Detection**
-- [x] Scan Plex libraries for duplicates
+- [x] Scan Plex and Jellyfin libraries for duplicates
 - [x] Support for both Movies and TV Shows
-- [x] Configurable scoring system (similar to plex_dupefinder):
+- [x] Scoring system (similar to plex_dupefinder), with fixed weights for:
   - File size
   - Video resolution (4K > 1080p > 720p > SD)
   - Video codec (HEVC/H.265 > H.264 > others)
-  - Audio codec (TrueHD/DTS-MA > AC3 > AAC)
-  - Bitrate
+  - Audio codec (TrueHD/DTS-MA > DTS > AC3 = AAC)
+  - ~~Bitrate~~ (stored, not scored)
   - Source (Remux > BluRay > WEB-DL > HDTV)
 - [x] Manual file path pattern scoring (regex-based)
 - [x] Quick actions
 
 #### **1.2 Review & Approval System**
 - [x] **Dry-run mode by default**
-- [x] Web UI showing all detected duplicates
+- [x] Web UI showing detected duplicates (the newest 100 sets; no paging yet)
 - [x] Side-by-side comparison view:
   - File paths
   - File sizes
   - Quality metrics
   - Scores
   - ~~Preview thumbnails (from Plex)~~ (moved to Phase 2)
+- [x] Bulk deletion ("Delete All" on the Scan page, for every pending set)
 - [ ] Bulk actions (approve all, reject all, selective approval)
 - [x] Individual delete per duplicate set
 - [ ] "Keep both" option with reason logging
 
 #### **1.3 Deletion Pipeline**
-- [x] Multi-stage deletion process:
+- [x] Multi-stage deletion process (stages 1-4 run for each file, in this order; stage 5 runs once per set, after all of its files):
   1. **Stage 1 - Radarr/Sonarr API:** Delete file via *arr API
   2. **Stage 2 - qBittorrent API:** Remove torrent item (with file deletion)
-  3. **Stage 3 - *arr Rescan:** Refresh *arr library to update state
-  4. **Stage 4 - Fallback Disk Cleanup:** Direct filesystem cleanup for:
+  3. **Stage 3 - Disk Cleanup:** Delete the file if it is still on disk, then clean up:
      - Manually added media files (not managed by *arr)
      - Associated files (.srt subtitles, .nfo metadata, fanart, etc.)
      - Common subdirectories (Sample, Subs, Proof, Extras)
      - Empty parent directories (recursive cleanup)
-  5. **Stage 5 - Plex Refresh:** Update Plex library
-- [x] Transaction-like behavior (rollback on failure)
+  4. **Stage 4 - Media Server Refresh:** Refresh the item on Plex or Jellyfin
+  5. **Stage 5 - *arr Rescan:** Have Radarr/Sonarr import the kept file
+- [ ] Transaction-like behavior (rollback on failure): nothing is rolled back yet; a file that could not be deleted leaves its set pending, so the deletion can be retried
 - [x] Detailed logging for each step
 - [x] Activity history/audit log
 - [x] Configurable media mount permissions (`:ro` for API-only, `:rw` for full cleanup)
@@ -91,11 +93,11 @@
 #### **1.4 Configuration Management**
 - [x] Setup wizard on first run
 - [x] Database selection (SQLite default, optional PostgreSQL)
-- [x] API connection testing (Plex, Radarr, Sonarr, qBittorrent)
-- [x] Library selection (which Plex libraries to scan)
+- [x] API connection testing (Plex, Jellyfin, Radarr, Sonarr, qBittorrent)
+- [x] Library selection (which Plex and Jellyfin libraries to scan)
 - [x] Scoring rules customization
 - [x] Safe mode toggles (dry-run)
-- [ ] Export/import configuration
+- [x] Export/import configuration (API only: `GET /api/config/export/all`, `POST /api/config/import/all`)
 
 #### **1.5 Dashboard**
 - [x] Statistics overview:
@@ -103,13 +105,14 @@
   - Space that can be reclaimed
   - Processing history
 - [x] Recent activity log
-- [x] Quick actions
+- [ ] Quick actions
 
 #### **1.6 Automation** ✅ **COMPLETE**
 - [x] Scheduled scans (interval-based with APScheduler)
 - [x] Environment variable configuration (`ENABLE_SCHEDULED_SCANS`, `SCAN_INTERVAL_HOURS`)
 - [x] Background scanning without blocking UI
-- [x] Detects duplicates automatically (manual approval still required for deletion)
+- [x] Detects duplicates automatically
+- [x] Optional scheduled deletion: deletes the extra copies in the pending sets 30 minutes after each scheduled scan
 - [x] Configurable scan intervals (6h, 12h, 24h, 48h, weekly, etc.)
 - [x] Quick actions
 
@@ -139,9 +142,9 @@
 
 #### **2.3 Notifications & Integrations**
 - [ ] Webhook notifications (Discord, Slack, etc.)
-- [ ] Email notifications
+- [x] Email notifications (after scheduled scans and scheduled deletions)
 - [ ] Notifiarr integration
-- [ ] Export/import configuration
+- [x] Export/import configuration (API only)
 - [ ] API for external integrations
 
 #### **2.3 Enhanced Integrations**
@@ -185,64 +188,7 @@
 
 ## 🗂️ **Project Structure**
 
-```
-deduparr/
-├── docker/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── backend/
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py                 # FastAPI app
-│   │   ├── api/
-│   │   │   ├── routes/             # API endpoints
-│   │   │   │   ├── duplicates.py
-│   │   │   │   ├── config.py
-│   │   │   │   ├── history.py
-│   │   │   │   └── stats.py
-│   │   │   └── deps.py             # Dependencies
-│   │   ├── core/
-│   │   │   ├── config.py           # App configuration
-│   │   │   ├── database.py         # SQLite setup
-│   │   │   └── scheduler.py        # APScheduler
-│   │   ├── services/
-│   │   │   ├── plex_service.py
-│   │   │   ├── radarr_service.py
-│   │   │   ├── sonarr_service.py
-│   │   │   ├── qbittorrent_service.py
-│   │   │   ├── duplicate_finder.py
-│   │   │   ├── scoring_engine.py
-│   │   │   └── deletion_pipeline.py
-│   │   ├── models/
-│   │   │   ├── duplicate.py
-│   │   │   ├── config.py
-│   │   │   └── history.py
-│   │   └── utils/
-│   │       ├── logger.py
-│   │       └── helpers.py
-│   ├── requirements.txt
-│   └── tests/
-├── frontend/
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── DuplicateList.tsx
-│   │   │   ├── DuplicateComparison.tsx
-│   │   │   ├── Settings.tsx
-│   │   │   └── History.tsx
-│   │   ├── hooks/
-│   │   ├── services/
-│   │   │   └── api.ts
-│   │   ├── types/
-│   │   ├── App.tsx
-│   │   └── main.tsx
-│   ├── package.json
-│   └── vite.config.ts
-├── config/
-│   └── config.example.yml
-├── README.md
-└── LICENSE
-```
+See the [project structure in CONTRIBUTING.md](../CONTRIBUTING.md#project-structure).
 
 ---
 
@@ -260,7 +206,7 @@ deduparr/
 ```
 Scan Request
     ↓
-Plex API: Get all items (or from smart collection)
+Plex or Jellyfin: items that have more than one file
     ↓
 Group by duplicate (same movie/episode)
     ↓
@@ -270,15 +216,16 @@ Identify files to keep/delete
     ↓
 Present to user
     ↓
-[User Approval]
+[User Approval, or scheduled deletion]
     ↓
-For each approved deletion:
-    1. Find item in qBittorrent (by file path hash)
-    2. Remove torrent
-    3. Call Radarr/Sonarr delete file endpoint
-    4. Verify file deleted from disk
-    5. Trigger Plex library scan
-    6. Log result
+For each file to delete:
+    1. Call Radarr/Sonarr delete file endpoint
+    2. Remove its torrent from qBittorrent (found by path, or by name and size)
+    3. Delete the file from disk if still there, and what it leaves behind
+    4. Refresh the item on the media server
+    5. Log result
+    ↓
+Once per set: Radarr/Sonarr rescan, importing the kept file
     ↓
 Show completion summary
 ```
@@ -308,65 +255,7 @@ PRAGMA mmap_size = 268435456;
 
 ### **Schema (SQLAlchemy models):**
 
-```sql
--- Configuration
-CREATE TABLE config (
-    key TEXT PRIMARY KEY,
-    value TEXT,
-    updated_at TIMESTAMP
-);
-
--- Duplicate sets found
-CREATE TABLE duplicate_sets (
-    id INTEGER PRIMARY KEY,
-    plex_item_id TEXT,
-    title TEXT,
-    media_type TEXT, -- 'movie' or 'episode'
-    found_at TIMESTAMP,
-    status TEXT, -- 'pending', 'approved', 'rejected', 'processed'
-    space_to_reclaim BIGINT,
-    INDEX idx_status (status),
-    INDEX idx_found_at (found_at)
-);
-
--- Individual duplicate files
-CREATE TABLE duplicate_files (
-    id INTEGER PRIMARY KEY,
-    set_id INTEGER,
-    file_path TEXT,
-    file_size BIGINT,
-    score INTEGER,
-    keep BOOLEAN,
-    metadata JSON, -- video/audio codec, resolution, etc. (JSONB in PostgreSQL)
-    FOREIGN KEY (set_id) REFERENCES duplicate_sets(id) ON DELETE CASCADE,
-    INDEX idx_set_id (set_id),
-    INDEX idx_file_path (file_path)
-);
-
--- Deletion history
-CREATE TABLE deletion_history (
-    id INTEGER PRIMARY KEY,
-    duplicate_file_id INTEGER,
-    deleted_at TIMESTAMP,
-    deleted_from_qbit BOOLEAN,
-    deleted_from_arr BOOLEAN,
-    deleted_from_disk BOOLEAN,
-    error TEXT,
-    FOREIGN KEY (duplicate_file_id) REFERENCES duplicate_files(id) ON DELETE CASCADE,
-    INDEX idx_deleted_at (deleted_at)
-);
-
--- Scoring rules (user-defined)
-CREATE TABLE scoring_rules (
-    id INTEGER PRIMARY KEY,
-    rule_type TEXT, -- 'filename_pattern', 'codec', 'resolution'
-    pattern TEXT,
-    score_modifier INTEGER,
-    enabled BOOLEAN,
-    created_at TIMESTAMP,
-    INDEX idx_enabled (enabled)
-);
-```
+The tables are defined by the models in [backend/app/models](../backend/app/models/), and created by the Alembic migrations in [backend/alembic/versions](../backend/alembic/versions/).
 
 ### **When to Use PostgreSQL:**
 - Library size > 50,000 items
@@ -379,46 +268,7 @@ CREATE TABLE scoring_rules (
 
 ## 🐳 **Docker Setup**
 
-### **docker-compose.yml (SQLite - Default)**
-```yaml
-**docker-compose.dev.yml**:
-```yaml
-services:
-  backend:
-```
-
-### **docker-compose.yml (PostgreSQL - Optional)**
-```yaml
-services:
-  deduparr:
-    image: deduparr/deduparr:latest
-    container_name: deduparr
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Etc/UTC
-      - DATABASE_TYPE=postgres
-      - DATABASE_URL=postgresql://deduparr:deduparr@postgres:5432/deduparr
-    volumes:
-      - ./config:/config
-      - /path/to/media:/media:ro
-    ports:
-      - 8655:8655
-    depends_on:
-      - postgres
-    restart: unless-stopped
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: deduparr-postgres
-    environment:
-      - POSTGRES_USER=deduparr
-      - POSTGRES_PASSWORD=deduparr
-      - POSTGRES_DB=deduparr
-    volumes:
-      - ./postgres-data:/var/lib/postgresql/data
-    restart: unless-stopped
-```
+Deployment, PostgreSQL included, is in [DEPLOYMENT.md](../DEPLOYMENT.md); the development stack runs as Podman quadlets, in [quadlet/README.md](../quadlet/README.md).
 
 ---
 
@@ -478,7 +328,7 @@ services:
 
 4. **API-First:** Should we prioritize API endpoints for headless operation (like other *arr apps)?
 
-5. **License:** Open source (GPL/MIT/Apache) or proprietary?
+5. **License:** Decided: MIT (see [LICENSE](../LICENSE)).
 
 ---
 
@@ -509,18 +359,13 @@ services:
 **Implementation:**
 - Configurable via `DATABASE_TYPE` environment variable
 - Same SQLAlchemy models work for both
-- Migration path provided for users who outgrow SQLite
+- No migration path from SQLite yet: the configuration export/import carries settings and scoring rules over, not duplicate sets or deletion history
 
 ---
 
 ## 💡 **Next Steps**
 
-If you approve this plan, we can:
-1. Create the initial project structure
-2. Set up Docker environment
-3. Build the backend API framework
-4. Create a basic React frontend
-5. Implement core duplicate detection logic
+The original next steps (project structure, Docker environment, backend API, React frontend, core duplicate detection) are done; what is left is unchecked above.
 
 ---
 

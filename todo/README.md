@@ -8,18 +8,10 @@ This directory contains implementation plans, development notes, and work-in-pro
 
 - **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)** - Complete feature roadmap and technical design
   - Phase 1 (MVP): Core duplicate detection, review system, deletion pipeline ✅ **MOSTLY COMPLETE**
-  - Phase 2 (Advanced): Automation, smart detection, enhanced integrations 🚧 **PLANNED**
+  - Phase 2 (Advanced): Smart detection, enhanced integrations 🚧 **IN PROGRESS**
   - Phase 3 (Enterprise): Multi-user support, advanced analytics 💡 **FUTURE**
-  - Database schema and architecture decisions
+  - Database strategy and architecture decisions
   - Technology stack justification
-
-### Development Notes
-
-- **[FRONTEND_API_INTEGRATION.md](FRONTEND_API_INTEGRATION.md)** - Frontend-backend integration status
-  - Completed API integrations ✅
-  - Type definitions and API client structure
-  - Integration checklist
-  - Next steps for Settings and SetupWizard pages
 
 ## 🎯 Purpose
 
@@ -51,11 +43,12 @@ See `IMPLEMENTATION_PLAN.md` for the complete feature matrix and roadmap.
 - Deletion pipeline ✅
 - API endpoints ✅
 - Dashboard & Scan pages ✅
-- Settings page (partial) ⏳
-- Setup wizard (partial) ⏳
+- Settings page ✅
+- Setup wizard ✅
+- Scheduled scans and deletion ✅
 
-🚧 **Phase 2 (Advanced) - Planned**
-- Scheduled scans
+🚧 **Phase 2 (Advanced) - In Progress**
+- Email notifications ✅
 - Auto-approve rules
 - Webhook notifications
 - Advanced quality detection
@@ -71,8 +64,7 @@ If you're working on a new feature:
 
 1. Check `IMPLEMENTATION_PLAN.md` to see if it's already planned
 2. Update the relevant section with your progress
-3. Add implementation notes to `FRONTEND_API_INTEGRATION.md` if working on frontend
-4. Create new markdown files here for complex features that need detailed planning
+3. Create new markdown files here for complex features that need detailed planning
 
 ## 📝 Related Documentation
 

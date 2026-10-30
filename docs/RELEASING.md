@@ -31,7 +31,7 @@ per item, glanceable in seconds. Write them in this order:
 1. **Generate the list of changes**, which also ends the notes with the Full Changelog link:
 
    ```bash
-   bash scripts/release-changes.sh vX.Y.Z vX.Y.W origin/develop
+   bash scripts/release-changes.sh <previous tag> vX.Y.Z origin/develop
    ```
 
 2. **Read every pull request and commit in it**, then write the Summary and the bullets from them.
@@ -64,7 +64,7 @@ A second paragraph only if updating changes something or needs an action.
 
 </details>
 
-**Full Changelog**: https://github.com/deduparr-dev/deduparr/compare/vX.Y.Z...vX.Y.W
+**Full Changelog**: https://github.com/deduparr-dev/deduparr/compare/<previous tag>...vX.Y.Z
 ```
 
 - **Summary**: one or two short paragraphs on the highlights and the largest changes. Mention the
@@ -84,8 +84,9 @@ A second paragraph only if updating changes something or needs an action.
 - No callout blocks, no known-issues essay, no explanation of the release process.
 - The reasoning and the measurements belong in the pull requests and commit messages, which stay
   fully detailed. The release note is for someone glancing at it.
-- **Source of truth is the diff between tags**, not a pull request's description:
-  `git log --oneline --no-merges vX.Y.Z..vX.Y.W` and `git diff vX.Y.Z..vX.Y.W`.
+- **Source of truth is the diff since the previous tag**, not a pull request's description:
+  `git log --oneline --no-merges <previous tag>..origin/develop` and
+  `git diff <previous tag>..origin/develop`.
 - **Describe the net change against the previous release.** A bug introduced and fixed between two
   releases is not a fix, and claiming it is puts a false statement in a public note. Check the old
   tag, not the pull request that introduced the intermediate state.

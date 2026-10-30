@@ -5,7 +5,7 @@ former `docker-compose.dev.yml`.
 
 ## Requirements
 
-- Podman **5.0+** (the `.build` units need it)
+- Podman **5.2+** (the `.build` units need it)
 - A user systemd session (`systemctl --user`). Quadlets *are* systemd units —
   they do not work in a container without systemd.
 

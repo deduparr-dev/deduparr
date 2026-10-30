@@ -10,18 +10,20 @@ bash scripts/rebuild-docker.sh --prod
 ```
 
 This script handles:
-1. Port cleanup (stops containers using port 8655)
+1. Port cleanup (stops and removes containers using port 8655)
 2. Docker compose down
-3. Database and encryption key removal
+3. Database removal (`config/deduparr.db`; the key in `data/.encryption_key` is kept)
 4. Docker system prune
 5. Image rebuild (no cache)
 6. Container startup
+
+The script works on the checkout at `/workspaces/deduparr`, wherever it is run from.
 
 **Access the Setup Wizard:** http://127.0.0.1:8655/setup
 
 ---
 
-## Development Docker Setup
+## Development Setup (Podman Quadlets)
 
 For development with hot reload, use the development rebuild script:
 
@@ -31,17 +33,15 @@ bash scripts/rebuild-docker.sh --dev
 ```
 
 This script handles:
-1. Port cleanup (stops containers using ports 3000 and 3001)
-2. Docker compose down
-3. Database and encryption key removal
-4. Docker system prune
-5. Image rebuild (no cache) for both frontend and backend
-6. Container startup with hot reload
+1. Stopping the development services and removing the `deduparr-dev` pod
+2. Database removal (`config/deduparr.db`; the key in `data/.encryption_key` is kept)
+3. Removing both development images
+4. Pod startup with hot reload, which rebuilds both images through the `.build` units (see [quadlet/README.md](../quadlet/README.md))
 
 **Access Points:**
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:3001
-- API Docs: http://localhost:3001/docs
+- API Docs: http://localhost:3001/api/docs
 
 ### Development Without Rebuild
 
@@ -87,22 +87,22 @@ docker ps
 docker ps -a
 
 # Stop a container
-docker stop deduparr-test
+docker stop deduparr
 
 # Start a stopped container
-docker start deduparr-test
+docker start deduparr
 
 # Remove a container
-docker rm deduparr-test
+docker rm deduparr
 
 # View container logs
-docker logs deduparr-test
+docker logs deduparr
 
 # Follow logs in real-time
-docker logs -f deduparr-test
+docker logs -f deduparr
 
 # Execute command in running container
-docker exec -it deduparr-test /bin/bash
+docker exec -it deduparr /bin/bash
 ```
 
 ### Image Management
@@ -126,7 +126,7 @@ docker image prune
 
 ```bash
 # Stop and remove all Deduparr containers
-docker stop deduparr-test && docker rm deduparr-test
+docker stop deduparr && docker rm deduparr
 
 # Remove all stopped containers
 docker container prune
@@ -142,7 +142,7 @@ docker system prune -a --volumes
 
 ## VS Code Docker Extension
 
-The tutorial recommends using the **Docker extension for VS Code**:
+The **Docker extension for VS Code** helps manage containers:
 
 1. Install: Search "Docker" in VS Code extensions
 2. View containers: Click Docker icon in sidebar
@@ -169,7 +169,7 @@ The tutorial recommends using the **Docker extension for VS Code**:
 - [ ] Both frontend and backend containers start
 - [ ] Frontend accessible at http://localhost:3000
 - [ ] Backend API accessible at http://localhost:3001
-- [ ] API docs load at http://localhost:3001/docs
+- [ ] API docs load at http://localhost:3001/api/docs
 - [ ] Hot reload works when making code changes
 
 ---
@@ -178,16 +178,16 @@ The tutorial recommends using the **Docker extension for VS Code**:
 
 **"Cannot connect to Docker daemon"**
 - Ensure Docker Desktop is running
-- Check: `docker --version`
+- Check: `docker info`
 
 **"Port already in use"**
-- The rebuild script automatically stops containers using the relevant ports
+- The rebuild script frees the ports it uses: `--prod` removes containers using port 8655, `--dev` removes the development pod
 - For manual cleanup: `docker stop <container>`
 - Or use different port in docker-compose.yml
 
 **"Build fails"**
 - Check Docker logs for specific errors
-- The rebuild script uses `--no-cache` to ensure fresh builds
+- The production rebuild uses `--no-cache` to ensure fresh builds
 - Verify all dependencies are available
 
 **"Container exits immediately"**

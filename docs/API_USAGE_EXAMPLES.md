@@ -229,7 +229,7 @@ Files are then ranked the way Radarr/Sonarr rank upgrades:
 3. **Custom format score** - As calculated by the quality profile
 4. **Deduparr score** - Only breaks ties
 
-Radarr is used for movies and Sonarr for episodes; Radarr is called on `/api/v3`, Sonarr on `/api/v5` with a fallback to `/api/v3`. Tracked files are read from `moviefile` or `episodefile`. Files the *arr does not track yet are evaluated with `manualimport` against the item's own quality profile. When the kept file is untracked, the deletion pipeline's existing rescan makes the *arr import it.
+Radarr is used for movies and Sonarr for episodes; Radarr is called on `/api/v3`, Sonarr on `/api/v5` with a fallback to `/api/v3`. Tracked files are read from `moviefile` or `episodefile`. Files the *arr does not track yet are read from their names with `parse`, against the item's own quality profile. When the kept file is untracked, the deletion pipeline's existing rescan makes the *arr import it.
 
 If any file in a duplicate set cannot be evaluated (no matching movie/series, *arr not configured or unreachable, or a quality the *arr cannot parse), the **whole set** uses Deduparr's score and the reason is logged. The two scales are never mixed within one set. Files ranked by the *arr show their quality and custom format score in the duplicate set (`file_metadata.arr_quality` and `file_metadata.arr_custom_format_score`).
 
@@ -244,7 +244,7 @@ When deletion is executed (non-dry-run), each file to delete goes through these 
 1. **\*arr Removal** - Delete through Radarr/Sonarr
    - Skipped if Radarr/Sonarr is not configured, or does not track the file
 2. **qBittorrent Removal** - Remove the torrent holding the file
-   - Skipped if qBittorrent is not configured. The torrent stays when the kept file has a torrent too, so it keeps seeding, or when the torrent holds other videos, as a season pack does
+   - Skipped if qBittorrent is not configured. The torrent stays when it also holds the kept file, or other videos as a season pack does
 3. **Disk Deletion** - Delete the file if still there, and what it leaves behind
 4. **Media Server Refresh** - Refresh the item on Plex or Jellyfin
 

@@ -3,6 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PlexServerSelect } from "@/components/PlexServerSelect";
 import {
   AlertCircle,
   Check,
@@ -554,23 +555,12 @@ function PlexSettings({
             </div>
           </div>
 
-          <div>
-            <Label htmlFor="server">Select Plex Server</Label>
-            <select
-              id="server"
-              value={selectedServer}
-              onChange={(e) => setSelectedServer(e.target.value)}
-              className="mt-2 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              disabled={!serversData}
-            >
-              <option value="">Choose a server...</option>
-              {servers.map((server) => (
-                <option key={server.client_identifier} value={server.name}>
-                  {server.name} ({server.platform})
-                </option>
-              ))}
-            </select>
-          </div>
+          <PlexServerSelect
+            servers={servers}
+            value={selectedServer}
+            onChange={setSelectedServer}
+            disabled={!serversData}
+          />
 
           {selectedServer && (
             <Button

@@ -528,24 +528,30 @@ class DiskScanService:
                 key = f"{normalized}|{year}" if year else normalized
                 return key
         else:
+            # Every show has an S01E01: the key holds the show's folder too
+            show_dir = os.path.dirname(file_path)
+            if re.fullmatch(r"(?i)season[\s._-]*\d+|specials", parent_dir):
+                show_dir = os.path.dirname(show_dir)
+            show = os.path.basename(show_dir).lower()
+
             # For episodes, try filename first
             episode_info = self._extract_episode_info(filename)
 
             if episode_info:
-                return episode_info
+                return f"{show}|{episode_info}"
 
             # Level 2: Try directory + filename for episodes
             combined = f"{parent_dir} {filename}"
             episode_info = self._extract_episode_info(combined)
 
             if episode_info:
-                return episode_info
+                return f"{show}|{episode_info}"
 
             # Level 3: Try directory name only
             episode_info = self._extract_episode_info(parent_dir)
 
             if episode_info:
-                return episode_info
+                return f"{show}|{episode_info}"
 
         return None
 

@@ -2,6 +2,7 @@
 Tests for Sonarr service
 """
 
+import httpx
 import pytest
 from unittest.mock import ANY, AsyncMock, patch
 
@@ -61,16 +62,6 @@ async def test_find_episode_by_file_path_found(test_db):
         "id": 100,
         "path": file_path,
         "seriesId": 1,
-        "episodeFileId": 100,
-        "episodeIds": [10],  # This is required for the service to find episodes
-    }
-    mock_episode = {
-        "id": 10,
-        "title": "Test Episode",
-        "seriesId": 1,
-        "seasonNumber": 1,
-        "episodeNumber": 1,
-        "episodeFileId": 100,
     }
 
     with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
@@ -80,16 +71,25 @@ async def test_find_episode_by_file_path_found(test_db):
         mock_client.get_episode_files_by_series_id = AsyncMock(
             return_value=[mock_episode_file]
         )
-        mock_client.get_episode = AsyncMock(return_value=mock_episode)
 
         result = await service.find_episode_by_file_path(file_path)
 
         assert result is not None
-        assert result["title"] == "Test Episode"
+        assert result["seriesId"] == 1
         assert result["episodeFile"]["path"] == file_path
         # Verify we iterate through series to get episode files
         mock_client.get_episode_files_by_series_id.assert_called_once_with(1)
-        mock_client.get_episode.assert_called_once_with(10)
+
+
+@pytest.mark.asyncio
+async def test_sonarr_client_delete_reads_an_answer_without_a_body():
+    """Radarr and Sonarr answer a delete with 200 and an empty body."""
+    client = SonarrClient(base_url="http://sonarr:8989", api_key="key")
+    client._client = httpx.AsyncClient(
+        base_url="http://sonarr:8989/api/v3",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200)),
+    )
+    await client.delete_episode_file(100)
 
 
 @pytest.mark.asyncio
@@ -104,18 +104,11 @@ async def test_find_episode_by_file_path_not_found(test_db):
     service = SonarrService(test_db)
 
     mock_series = {"id": 1, "title": "Test Series"}
-    mock_episode = {
-        "id": 10,
-        "title": "Test Episode",
-        "seriesId": 1,
-        "episodeFile": {"id": 100, "path": "/media/tv/Test Series/S01E01.mkv"},
-    }
-
     with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.get_series = AsyncMock(return_value=[mock_series])
-        mock_client.get_episode = AsyncMock(return_value=[mock_episode])
+        mock_client.get_episode_files_by_series_id = AsyncMock(return_value=[])
 
         result = await service.find_episode_by_file_path(
             "/media/tv/Test Series/S01E02.mkv"
@@ -136,13 +129,11 @@ async def test_find_episode_no_episode_file(test_db):
     service = SonarrService(test_db)
 
     mock_series = {"id": 1, "title": "Test Series"}
-    mock_episode = {"id": 10, "title": "Test Episode", "seriesId": 1}
-
     with patch("app.services.arr.sonarr_service.SonarrClient") as mock_client_class:
         mock_client = AsyncMock()
         mock_client_class.return_value = mock_client
         mock_client.get_series = AsyncMock(return_value=[mock_series])
-        mock_client.get_episode = AsyncMock(return_value=[mock_episode])
+        mock_client.get_episode_files_by_series_id = AsyncMock(return_value=[])
 
         result = await service.find_episode_by_file_path(
             "/media/tv/Test Series/S01E01.mkv"
@@ -242,13 +233,3 @@ async def test_test_connection_failure(test_db):
 
         assert result["success"] is False
         assert "error" in result
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("response", [{"id": 10}, [{"id": 10}]])
-async def test_sonarr_client_get_episode_reads_either_answer(response):
-    """Some Sonarr versions answer an episode lookup with a list holding it."""
-    client = SonarrClient(base_url="http://sonarr:8989", api_key="key")
-    with patch.object(client, "_request", AsyncMock(return_value=response)) as req:
-        assert await client.get_episode(10) == {"id": 10}
-    req.assert_awaited_once_with("GET", "/episode/10")

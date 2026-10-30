@@ -26,7 +26,6 @@ from app.services.shared.security import (
     InvalidTokenError,
     get_token_manager,
     pin_cache,
-    sanitize_log_data,
 )
 
 # Configure PlexAPI to identify as Deduparr
@@ -251,19 +250,12 @@ class PlexAuthService:
 
             try:
                 token_manager = get_token_manager()
-                decrypted = token_manager.decrypt(auth_token)
-                logger.info(
-                    f"Successfully decrypted auth token (length: {len(decrypted)})"
-                )
-                token_to_use = decrypted
+                token_to_use = token_manager.decrypt(auth_token)
             except Exception as e:
                 # Decryption failed - assume it's already a plaintext OAuth token
                 logger.info(f"Using token as-is, decryption failed: {type(e).__name__}")
                 token_to_use = auth_token
 
-            logger.info(
-                f"Attempting to connect to Plex with token (first 10 chars): {sanitize_log_data(token_to_use)}"
-            )
             account = MyPlexAccount(token=token_to_use)
             servers = []
 
@@ -347,9 +339,7 @@ class PlexService:
 
             try:
                 self._account = MyPlexAccount(token=decrypted_token)
-                logger.info(
-                    f"Authenticated to plex.tv as: {sanitize_log_data(self._account.username)}"
-                )
+                logger.info("Authenticated to plex.tv")
             except Unauthorized:
                 raise ValueError("Invalid or expired Plex authentication token")
             except Exception as e:
@@ -505,7 +495,7 @@ class PlexService:
 
                 libraries.append(
                     {
-                        "key": section.key,
+                        "key": str(section.key),
                         "title": section.title,
                         "type": section.type,
                         "count": section.totalSize,

@@ -10,8 +10,6 @@ Available configuration keys:
 - qbittorrent_url: qBittorrent server URL
 - qbittorrent_username: qBittorrent username
 - qbittorrent_password: Encrypted qBittorrent password
-- selected_movie_library: Name of selected Plex movie library
-- selected_tv_library: Name of selected Plex TV show library
 - enable_deep_scan: Enable filesystem-based duplicate detection (default: False)
 - enable_scheduled_scans, scan_schedule_mode, scheduled_scan_time,
   scan_interval_hours, enable_scheduled_deletion: the schedule, as Settings

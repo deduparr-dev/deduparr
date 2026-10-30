@@ -1,6 +1,6 @@
 """
 Plex service for interacting with Plex Media Server
-Uses OAuth PIN authentication via plex.tv with token encryption and CSRF protection
+Uses OAuth PIN authentication via plex.tv with token encryption
 """
 
 import logging
@@ -21,8 +21,6 @@ from app.core.config import settings
 from app.services.media_server.plex_exceptions import (
     PlexConnectionError,
     PlexPinExpiredError,
-    TokenExpiredError,
-    UnauthorizedError,
 )
 from app.services.shared.security import (
     InvalidTokenError,
@@ -93,12 +91,12 @@ class PlexLibraryData(TypedDict):
 
 
 class PlexAuthService:
-    """Handles Plex OAuth authentication via PIN login with encryption and CSRF protection"""
+    """Handles Plex OAuth authentication via PIN login, with the token encrypted"""
 
     @staticmethod
     async def initiate_auth() -> PlexAuthData:
         """
-        Initiate OAuth PIN authentication with CSRF protection
+        Initiate OAuth PIN authentication
 
         Returns:
             Dict with auth URL and PIN info
@@ -106,10 +104,6 @@ class PlexAuthService:
         try:
             # Generate unique client identifier
             client_id = str(uuid.uuid4())
-
-            # Generate CSRF state token
-            token_manager = get_token_manager()
-            state_token = token_manager.generate_state_token()
 
             # Create PIN via Plex API
             headers = {
@@ -134,18 +128,17 @@ class PlexAuthService:
 
             pin_data = response.json()
 
-            # Cache PIN state with CSRF token
+            # Cache PIN state
             pin_cache.set(
                 str(pin_data["id"]),
                 {
                     "code": pin_data["code"],
                     "client_id": client_id,
-                    "state_token": state_token,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
 
-            # Construct OAuth URL with state parameter
+            # Construct OAuth URL
             auth_url = (
                 f"https://app.plex.tv/auth#?"
                 f"clientID={client_id}"
@@ -172,36 +165,24 @@ class PlexAuthService:
             raise
 
     @staticmethod
-    async def check_auth(pin_id: str, state: Optional[str] = None) -> Optional[str]:
+    async def check_auth(pin_id: str) -> Optional[str]:
         """
         Check if user has completed OAuth authentication
 
         Args:
             pin_id: PIN ID from initiate_auth
-            state: Optional CSRF state token for validation
 
         Returns:
             Encrypted auth token if completed, None if pending
 
         Raises:
             PlexPinExpiredError: If PIN not found or expired
-            CSRFValidationError: If state validation fails
         """
         try:
             # Get cached PIN data
             cached_pin = pin_cache.get(pin_id)
             if not cached_pin:
                 raise PlexPinExpiredError("PIN not found or expired")
-
-            # Validate CSRF state if provided
-            if state:
-                stored_state = cached_pin.get("state_token")
-                token_manager = get_token_manager()
-                if not token_manager.validate_state_token(state, stored_state):
-                    logger.warning(
-                        f"CSRF state validation failed for PIN {sanitize_log_data(pin_id)}"
-                    )
-                    # Don't raise - just log for now (optional enforcement)
 
             # Check PIN status with Plex API
             headers = {
@@ -251,130 +232,6 @@ class PlexAuthService:
         except Exception as e:
             logger.error(f"Failed to check Plex auth status: {str(e)}")
             return None
-
-    @staticmethod
-    def validate_token(token: str) -> dict:
-        """
-        Validate a Plex authentication token
-
-        Args:
-            token: Plain text auth token to validate
-
-        Returns:
-            User data dict from Plex API
-
-        Raises:
-            InvalidTokenError: If token is invalid
-            TokenExpiredError: If token has expired
-            UnauthorizedError: If access is forbidden
-            PlexConnectionError: If connection to Plex fails
-        """
-        if not token:
-            raise InvalidTokenError(
-                "No authentication token provided. Please authenticate with Plex first."
-            )
-
-        try:
-            headers = {"X-Plex-Token": token, "Accept": "application/json"}
-
-            response = requests.get(
-                "https://plex.tv/api/v2/user", headers=headers, timeout=10
-            )
-
-            if response.status_code == 401:
-                raise InvalidTokenError(
-                    "Plex server rejected the authentication token. Token may be invalid or expired."
-                )
-            elif response.status_code == 403:
-                raise UnauthorizedError(
-                    "Access forbidden. Your Plex account may not have sufficient permissions."
-                )
-            elif response.status_code == 404:
-                raise PlexConnectionError(
-                    "Plex user API endpoint not found. Please check your Plex server version."
-                )
-
-            response.raise_for_status()
-            return response.json()
-
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection to Plex.tv failed: {str(e)}")
-            raise PlexConnectionError(
-                "Unable to connect to Plex.tv servers. Please check your internet connection."
-            )
-        except requests.exceptions.Timeout as e:
-            logger.error(f"Plex.tv request timed out: {str(e)}")
-            raise PlexConnectionError(
-                "Connection to Plex.tv timed out. Please try again."
-            )
-        except (
-            InvalidTokenError,
-            TokenExpiredError,
-            UnauthorizedError,
-            PlexConnectionError,
-        ):
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error validating token: {str(e)}")
-            raise PlexConnectionError(f"Failed to validate token: {str(e)}")
-
-    @staticmethod
-    async def refresh_token(encrypted_token: str) -> str:
-        """
-        Refresh/validate a stored encrypted token
-
-        Args:
-            encrypted_token: Encrypted token to validate
-
-        Returns:
-            The same encrypted token if still valid
-
-        Raises:
-            InvalidTokenError: If token is invalid
-            TokenExpiredError: If token has expired
-        """
-        if not encrypted_token:
-            raise InvalidTokenError("No authentication token provided for refresh.")
-
-        try:
-            # Decrypt token
-            token_manager = get_token_manager()
-            decrypted_token = token_manager.decrypt(encrypted_token)
-
-            # Validate with Plex
-            headers = {"X-Plex-Token": decrypted_token, "Accept": "application/json"}
-
-            response = requests.get(
-                "https://plex.tv/api/v2/ping", headers=headers, timeout=10
-            )
-
-            if response.status_code == 401:
-                raise TokenExpiredError(
-                    "Plex authentication token has expired and cannot be refreshed."
-                )
-            elif response.status_code == 403:
-                raise UnauthorizedError(
-                    "Access forbidden during token refresh. Your Plex account may not have sufficient permissions."
-                )
-
-            response.raise_for_status()
-            return encrypted_token
-
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection to Plex.tv failed during token refresh: {str(e)}")
-            raise PlexConnectionError(
-                "Unable to connect to Plex.tv servers for token refresh. Please check your internet connection."
-            )
-        except requests.exceptions.Timeout as e:
-            logger.error(f"Plex.tv token refresh timed out: {str(e)}")
-            raise PlexConnectionError(
-                "Token refresh timed out. Please try again later."
-            )
-        except Exception as e:
-            logger.error(f"Token decryption or validation failed: {str(e)}")
-            raise InvalidTokenError(
-                "Failed to decrypt or validate stored authentication token. Please re-authenticate with Plex."
-            )
 
     @staticmethod
     async def get_servers(auth_token: str) -> List[PlexServerData]:

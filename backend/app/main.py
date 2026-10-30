@@ -7,14 +7,13 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from app import DEDUPARR_VERSION
 from app.core.config import settings
-from app.core.database import init_db
+from app.core.database import AsyncSessionLocal, init_db
 from app.api.routes import config, setup, scoring, stats, scan, system
 from app.services.scheduler import get_scheduler
-from app.services.shared.security import SensitiveDataFilter
+from app.services.shared.security import SensitiveDataFilter, secure_stored_secrets
 from app.services.system_service import SystemService
 
 # Configure logging based on environment variable
@@ -45,6 +44,8 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events"""
     # Startup
     await init_db()
+    async with AsyncSessionLocal() as db:
+        await secure_stored_secrets(db)
     logger.info(
         f"✅ Deduparr v{DEDUPARR_VERSION} started successfully (log_level={settings.log_level})"
     )
@@ -91,15 +92,6 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
-)
-
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 

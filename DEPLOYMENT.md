@@ -156,7 +156,7 @@ labels:
 | Path | Purpose | Permission | Required |
 |------|---------|------------|----------|
 | `./config:/config` | Database & settings | Read/Write | Yes |
-| `./data:/app/data` | The key stored secrets are signed with | Read/Write | Yes |
+| `./data:/app/data` | The key stored secrets are encrypted with | Read/Write | Yes |
 | `/path/to/media:/path/in/media/server` | Media files scan & deletion, at the same paths your media server reports | Read-Only or Read/Write | Yes |
 
 ### Media Mount Permissions: `:ro` vs `:rw`
@@ -225,10 +225,10 @@ Scans detect duplicates in background. Deletions still require manual approval v
 ## 🔐 Security Best Practices
 
 1. **File Permissions:** The API runs as user `deduparr`, with the UID/GID set by `PUID`/`PGID` (default 1000); supervisord and the nginx master process run as root
-2. **Secrets:** API tokens/keys are stored signed, not encrypted: anyone who can reach the API or read the database can read them
+2. **Secrets:** API tokens/keys are stored encrypted, and the API never returns them. Deduparr has no login, so keep it off untrusted networks: anyone who can reach it can use it
 3. **OAuth:** Plex uses OAuth - never stores your password
 4. **Network:** Consider running behind a reverse proxy with HTTPS
-5. **Backups:** Regularly backup the `/config` and `/app/data` directories (the database, and the key stored secrets are signed with)
+5. **Backups:** Regularly backup the `/config` and `/app/data` directories (the database, and the key stored secrets are encrypted with: without it they have to be entered again)
 
 ---
 

@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.models import Config
-from app.services.shared.security import encrypt_if_sensitive
+from app.services.shared.security import (
+    LEFTOVER_TEST_KEYS,
+    encrypt_if_sensitive,
+    is_masked,
+    mask_secret,
+)
 from app.models.scoring_rule import ScoringRule
 from app.services.arr.quality import PREFER_ARR_QUALITY_PROFILE_KEY
 
@@ -98,10 +103,12 @@ async def _set_bool_config(db: AsyncSession, key: str, enabled: bool) -> None:
 async def get_all_config(db: AsyncSession = Depends(get_db)):
     """
     Get all configuration settings as a key-value dictionary
+
+    A stored secret shows as the mask, never as its value.
     """
     result = await db.execute(select(Config))
     configs = result.scalars().all()
-    return {config.key: config.value for config in configs}
+    return {config.key: mask_secret(config.key, config.value) for config in configs}
 
 
 @router.get("/deep-scan", response_model=DeepScanResponse)
@@ -324,7 +331,7 @@ async def get_config(key: str, db: AsyncSession = Depends(get_db)):
     if not config:
         raise HTTPException(status_code=404, detail=f"Config key '{key}' not found")
 
-    return config
+    return ConfigResponse(key=key, value=mask_secret(key, config.value))
 
 
 @router.put("/{key}", response_model=ConfigResponse)
@@ -338,18 +345,23 @@ async def update_config(
     config = result.scalar_one_or_none()
 
     # Secrets are encrypted here too, not only by the setup wizard, so a value
-    # written through this endpoint is never left in the clear.
-    value = encrypt_if_sensitive(key, config_update.value)
+    # written through this endpoint is never left in the clear. The mask a
+    # secret was shown as keeps the stored one.
+    if not is_masked(key, config_update.value):
+        value = encrypt_if_sensitive(key, config_update.value)
 
-    if config:
-        config.value = value
-    else:
-        config = Config(key=key, value=value)
-        db.add(config)
+        if config:
+            config.value = value
+        else:
+            config = Config(key=key, value=value)
+            db.add(config)
 
-    await db.commit()
-    await db.refresh(config)
-    return config
+        await db.commit()
+        await db.refresh(config)
+
+    return ConfigResponse(
+        key=key, value=mask_secret(key, config.value if config else None)
+    )
 
 
 @router.delete("/{key}")
@@ -378,6 +390,10 @@ async def batch_update_config(
     updated_configs = []
 
     for key, value in configs.items():
+        # The mask a secret was shown as keeps the stored one
+        if is_masked(key, value):
+            continue
+
         result = await db.execute(select(Config).where(Config.key == key))
         config = result.scalar_one_or_none()
 
@@ -396,7 +412,10 @@ async def batch_update_config(
     for config in updated_configs:
         await db.refresh(config)
 
-    return updated_configs
+    return [
+        ConfigResponse(key=config.key, value=mask_secret(config.key, config.value))
+        for config in updated_configs
+    ]
 
 
 @router.get("/export/all")
@@ -404,12 +423,16 @@ async def export_configuration(db: AsyncSession = Depends(get_db)):
     """
     Export all configuration including settings and scoring rules
 
+    A stored secret shows as the mask, which an import skips.
+
     Returns:
         JSON with all configuration data
     """
     result = await db.execute(select(Config))
     configs = result.scalars().all()
-    config_dict = {config.key: config.value for config in configs}
+    config_dict = {
+        config.key: mask_secret(config.key, config.value) for config in configs
+    }
 
     result = await db.execute(select(ScoringRule))
     scoring_rules = result.scalars().all()
@@ -440,6 +463,10 @@ async def import_configuration(
     """
     Import configuration from exported JSON
 
+    Secrets are stored encrypted. An export made before they were encrypted
+    holds them signed or as typed; a current one holds the mask instead, which
+    keeps the stored secret.
+
     Args:
         import_data: Configuration data to import
 
@@ -452,6 +479,12 @@ async def import_configuration(
     skipped_rules = 0
 
     for key, value in import_data.config.items():
+        # An old export can also hold what a failed connection test left behind
+        if is_masked(key, value) or key in LEFTOVER_TEST_KEYS:
+            skipped_configs += 1
+            continue
+        value = encrypt_if_sensitive(key, value)
+
         result = await db.execute(select(Config).where(Config.key == key))
         existing_config = result.scalar_one_or_none()
 

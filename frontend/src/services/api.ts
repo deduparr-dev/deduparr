@@ -4,7 +4,6 @@
 
 // Relative /api: nginx proxies it in production, and Vite's dev and preview
 // servers proxy it to VITE_PROXY_TARGET (vite.config.ts)
-const API_BASE_URL = (import.meta.env.VITE_API_URL as string | undefined) || "";
 
 export interface DashboardStats {
   total_duplicates: number; // Number of unique items (movies/episodes) with duplicates
@@ -194,6 +193,7 @@ export interface LogsResponse {
   limit: number;
 }
 
+/** The stored configuration; a saved token, key or password reads as a mask */
 export interface AppConfig {
   plex_auth_token?: string;
   plex_server_name?: string;
@@ -309,7 +309,7 @@ async function requestError(response: Response): Promise<Error> {
 }
 
 async function fetchAPI<T>(endpoint: string): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`);
+  const response = await fetch(endpoint);
 
   if (!response.ok) {
     throw await requestError(response);
@@ -319,7 +319,7 @@ async function fetchAPI<T>(endpoint: string): Promise<T> {
 }
 
 async function postAPI<T, U>(endpoint: string, data: U): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -335,7 +335,7 @@ async function postAPI<T, U>(endpoint: string, data: U): Promise<T> {
 }
 
 async function putAPI<T, U>(endpoint: string, data: U): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(endpoint, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",
@@ -351,7 +351,7 @@ async function putAPI<T, U>(endpoint: string, data: U): Promise<T> {
 }
 
 async function patchAPI<T, U>(endpoint: string, data: U): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+  const response = await fetch(endpoint, {
     method: "PATCH",
     headers: {
       "Content-Type": "application/json",
@@ -470,12 +470,13 @@ export const setupAPI = {
   checkPlexAuth: (pinId: string) =>
     fetchAPI<PlexAuthCheckResponse>(`/api/setup/plex/auth/check/${pinId}`),
 
+  // A blank token means the saved one
   getPlexServers: (authToken: string) =>
     postAPI<{ servers: PlexServer[] }, { auth_token: string }>("/api/setup/plex/servers", {
       auth_token: authToken,
     }),
 
-  // Service testing
+  // Service testing; a blank token, key or password tests the saved one
   testPlex: (authToken: string, serverName: string) =>
     postAPI<ServiceTestResponse, { auth_token: string; server_name: string }>(
       "/api/setup/test/plex",

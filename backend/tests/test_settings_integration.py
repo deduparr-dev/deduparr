@@ -24,32 +24,25 @@ async def test_get_setup_status(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_plex_oauth_initiate():
     """Test initiating Plex OAuth authentication"""
-    with patch(
-        "app.services.media_server.plex_service.get_token_manager"
-    ) as mock_token_manager:
-        mock_manager = MagicMock()
-        mock_manager.generate_state_token.return_value = "test-state"
-        mock_token_manager.return_value = mock_manager
+    with patch("app.services.media_server.plex_service.requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": 12345,
+            "code": "ABCD",
+        }
+        mock_response.raise_for_status = MagicMock()
+        mock_post.return_value = mock_response
 
-        with patch("app.services.media_server.plex_service.requests.post") as mock_post:
-            mock_response = MagicMock()
-            mock_response.json.return_value = {
-                "id": 12345,
-                "code": "ABCD",
-            }
-            mock_response.raise_for_status = MagicMock()
-            mock_post.return_value = mock_response
-
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                response = await client.get("/api/setup/plex/auth/initiate")
-                assert response.status_code == 200
-                data = response.json()
-                assert "pin_id" in data
-                assert "code" in data
-                assert "auth_url" in data
-                assert data["code"] == "ABCD"
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get("/api/setup/plex/auth/initiate")
+            assert response.status_code == 200
+            data = response.json()
+            assert "pin_id" in data
+            assert "code" in data
+            assert "auth_url" in data
+            assert data["code"] == "ABCD"
 
 
 @pytest.mark.asyncio

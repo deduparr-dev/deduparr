@@ -20,7 +20,11 @@ from app.services.media_server.plex_service import PlexAuthService, PlexService
 from app.services.download.qbittorrent_service import QBittorrentService
 from app.services.arr.radarr_service import RadarrService
 from app.services.arr.sonarr_service import SonarrService
-from app.services.shared.security import decrypt_if_encrypted, encrypt_if_sensitive
+from app.services.shared.security import (
+    decrypt_if_encrypted,
+    encrypt_if_sensitive,
+    is_masked,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +144,7 @@ class SetupService:
         Test Plex server connection
 
         Args:
-            auth_token: Encrypted Plex authentication token
+            auth_token: Encrypted Plex authentication token, blank for the stored one
             server_name: Name of the Plex server
 
         Returns:
@@ -150,6 +154,8 @@ class SetupService:
                   version (str), server_name (str), platform (str) if success
         """
         try:
+            auth_token = await self.secret_or_stored("plex_auth_token", auth_token)
+
             # Verify server exists in available servers
             servers = await PlexAuthService.get_servers(auth_token)
             server_found = any(s["name"] == server_name for s in servers)
@@ -180,101 +186,21 @@ class SetupService:
 
         Args:
             url: Radarr URL
-            api_key: Radarr API key
+            api_key: Radarr API key, blank for the stored one
 
         Returns:
             Dictionary with connection test results
             Keys: success (bool), version (str) if success, error (str) if failed
         """
-        try:
-            # Check if temp config entries already exist and delete them first
-            result = await self.db.execute(
-                select(Config).where(Config.key == "temp_radarr_url")
-            )
-            existing_temp_url = result.scalar_one_or_none()
-            if existing_temp_url:
-                await self.db.delete(existing_temp_url)
-
-            result = await self.db.execute(
-                select(Config).where(Config.key == "temp_radarr_api_key")
-            )
-            existing_temp_key = result.scalar_one_or_none()
-            if existing_temp_key:
-                await self.db.delete(existing_temp_key)
-
-            await self.db.commit()
-
-            # Now create new temp config entries
-            temp_config_url = Config(key="temp_radarr_url", value=url)
-            temp_config_key = Config(key="temp_radarr_api_key", value=api_key)
-            self.db.add(temp_config_url)
-            self.db.add(temp_config_key)
-            await self.db.commit()
-
-            result = await self.db.execute(
-                select(Config).where(Config.key == "radarr_url")
-            )
-            existing_url = result.scalar_one_or_none()
-            result = await self.db.execute(
-                select(Config).where(Config.key == "radarr_api_key")
-            )
-            existing_key = result.scalar_one_or_none()
-
-            if existing_url:
-                old_url = existing_url.value
-                existing_url.value = url
-            else:
-                old_url = None
-                new_config = Config(key="radarr_url", value=url)
-                self.db.add(new_config)
-
-            if existing_key:
-                old_key = existing_key.value
-                existing_key.value = api_key
-            else:
-                old_key = None
-                new_config = Config(key="radarr_api_key", value=api_key)
-                self.db.add(new_config)
-
-            await self.db.commit()
-
-            radarr_service = RadarrService(self.db)
-            result = await radarr_service.test_connection()
-
-            await self.db.execute(select(Config).where(Config.key == "temp_radarr_url"))
-            await self.db.delete(temp_config_url)
-            await self.db.execute(
-                select(Config).where(Config.key == "temp_radarr_api_key")
-            )
-            await self.db.delete(temp_config_key)
-            await self.db.commit()
-
-            if existing_url:
-                existing_url.value = old_url
-            elif old_url is None:
-                result_config = await self.db.execute(
-                    select(Config).where(Config.key == "radarr_url")
-                )
-                to_delete = result_config.scalar_one_or_none()
-                if to_delete:
-                    await self.db.delete(to_delete)
-
-            if existing_key:
-                existing_key.value = old_key
-            elif old_key is None:
-                result_config = await self.db.execute(
-                    select(Config).where(Config.key == "radarr_api_key")
-                )
-                to_delete = result_config.scalar_one_or_none()
-                if to_delete:
-                    await self.db.delete(to_delete)
-
-            await self.db.commit()
-
-            return result
-        except Exception as e:
-            logger.error(f"Radarr connection test failed: {str(e)}")
-            return {"success": False, "error": str(e)}
+        return await self._test_service(
+            RadarrService(self.db),
+            {
+                "radarr_url": url,
+                "radarr_api_key": await self.secret_or_stored(
+                    "radarr_api_key", api_key, "radarr_url", url
+                ),
+            },
+        )
 
     async def test_sonarr_connection(
         self, url: str, api_key: str
@@ -284,101 +210,21 @@ class SetupService:
 
         Args:
             url: Sonarr URL
-            api_key: Sonarr API key
+            api_key: Sonarr API key, blank for the stored one
 
         Returns:
             Dictionary with connection test results
             Keys: success (bool), version (str) if success, error (str) if failed
         """
-        try:
-            # Check if temp config entries already exist and delete them first
-            result = await self.db.execute(
-                select(Config).where(Config.key == "temp_sonarr_url")
-            )
-            existing_temp_url = result.scalar_one_or_none()
-            if existing_temp_url:
-                await self.db.delete(existing_temp_url)
-
-            result = await self.db.execute(
-                select(Config).where(Config.key == "temp_sonarr_api_key")
-            )
-            existing_temp_key = result.scalar_one_or_none()
-            if existing_temp_key:
-                await self.db.delete(existing_temp_key)
-
-            await self.db.commit()
-
-            # Now create new temp config entries
-            temp_config_url = Config(key="temp_sonarr_url", value=url)
-            temp_config_key = Config(key="temp_sonarr_api_key", value=api_key)
-            self.db.add(temp_config_url)
-            self.db.add(temp_config_key)
-            await self.db.commit()
-
-            result = await self.db.execute(
-                select(Config).where(Config.key == "sonarr_url")
-            )
-            existing_url = result.scalar_one_or_none()
-            result = await self.db.execute(
-                select(Config).where(Config.key == "sonarr_api_key")
-            )
-            existing_key = result.scalar_one_or_none()
-
-            if existing_url:
-                old_url = existing_url.value
-                existing_url.value = url
-            else:
-                old_url = None
-                new_config = Config(key="sonarr_url", value=url)
-                self.db.add(new_config)
-
-            if existing_key:
-                old_key = existing_key.value
-                existing_key.value = api_key
-            else:
-                old_key = None
-                new_config = Config(key="sonarr_api_key", value=api_key)
-                self.db.add(new_config)
-
-            await self.db.commit()
-
-            sonarr_service = SonarrService(self.db)
-            result = await sonarr_service.test_connection()
-
-            await self.db.execute(select(Config).where(Config.key == "temp_sonarr_url"))
-            await self.db.delete(temp_config_url)
-            await self.db.execute(
-                select(Config).where(Config.key == "temp_sonarr_api_key")
-            )
-            await self.db.delete(temp_config_key)
-            await self.db.commit()
-
-            if existing_url:
-                existing_url.value = old_url
-            elif old_url is None:
-                result_config = await self.db.execute(
-                    select(Config).where(Config.key == "sonarr_url")
-                )
-                to_delete = result_config.scalar_one_or_none()
-                if to_delete:
-                    await self.db.delete(to_delete)
-
-            if existing_key:
-                existing_key.value = old_key
-            elif old_key is None:
-                result_config = await self.db.execute(
-                    select(Config).where(Config.key == "sonarr_api_key")
-                )
-                to_delete = result_config.scalar_one_or_none()
-                if to_delete:
-                    await self.db.delete(to_delete)
-
-            await self.db.commit()
-
-            return result
-        except Exception as e:
-            logger.error(f"Sonarr connection test failed: {str(e)}")
-            return {"success": False, "error": str(e)}
+        return await self._test_service(
+            SonarrService(self.db),
+            {
+                "sonarr_url": url,
+                "sonarr_api_key": await self.secret_or_stored(
+                    "sonarr_api_key", api_key, "sonarr_url", url
+                ),
+            },
+        )
 
     async def test_qbittorrent_connection(
         self, url: str, username: str, password: str
@@ -389,120 +235,60 @@ class SetupService:
         Args:
             url: qBittorrent URL
             username: qBittorrent username
-            password: qBittorrent password
+            password: qBittorrent password, blank for the stored one
 
         Returns:
             Dictionary with connection test results
             Keys: success (bool), version (str) if success, error (str) if failed
         """
-        # Settings sends a saved password back already encrypted
-        encrypted_password = encrypt_if_sensitive("qbittorrent_password", password)
+        return await self._test_service(
+            QBittorrentService(self.db),
+            {
+                "qbittorrent_url": url,
+                "qbittorrent_username": username,
+                "qbittorrent_password": await self.secret_or_stored(
+                    "qbittorrent_password", password, "qbittorrent_url", url
+                ),
+            },
+        )
 
+    async def _test_service(
+        self,
+        service: RadarrService | SonarrService | QBittorrentService,
+        config: Dict[str, str],
+    ) -> Dict[str, str | bool]:
+        """Test a service with the credentials given rather than the stored ones."""
+        service._get_encrypted_config = _fixed_config(config)
         try:
-            temp_config_url = Config(key="temp_qbittorrent_url", value=url)
-            temp_config_user = Config(key="temp_qbittorrent_username", value=username)
-            temp_config_pass = Config(
-                key="temp_qbittorrent_password", value=encrypted_password
-            )
-            self.db.add(temp_config_url)
-            self.db.add(temp_config_user)
-            self.db.add(temp_config_pass)
-            await self.db.commit()
-
-            result = await self.db.execute(
-                select(Config).where(Config.key == "qbittorrent_url")
-            )
-            existing_url = result.scalar_one_or_none()
-            result = await self.db.execute(
-                select(Config).where(Config.key == "qbittorrent_username")
-            )
-            existing_user = result.scalar_one_or_none()
-            result = await self.db.execute(
-                select(Config).where(Config.key == "qbittorrent_password")
-            )
-            existing_pass = result.scalar_one_or_none()
-
-            if existing_url:
-                old_url = existing_url.value
-                existing_url.value = url
-            else:
-                old_url = None
-                new_config = Config(key="qbittorrent_url", value=url)
-                self.db.add(new_config)
-
-            if existing_user:
-                old_user = existing_user.value
-                existing_user.value = username
-            else:
-                old_user = None
-                new_config = Config(key="qbittorrent_username", value=username)
-                self.db.add(new_config)
-
-            if existing_pass:
-                old_pass = existing_pass.value
-                existing_pass.value = encrypted_password
-            else:
-                old_pass = None
-                new_config = Config(
-                    key="qbittorrent_password", value=encrypted_password
-                )
-                self.db.add(new_config)
-
-            await self.db.commit()
-
-            qbit_service = QBittorrentService(self.db)
-            result = await qbit_service.test_connection()
-
-            await self.db.execute(
-                select(Config).where(Config.key == "temp_qbittorrent_url")
-            )
-            await self.db.delete(temp_config_url)
-            await self.db.execute(
-                select(Config).where(Config.key == "temp_qbittorrent_username")
-            )
-            await self.db.delete(temp_config_user)
-            await self.db.execute(
-                select(Config).where(Config.key == "temp_qbittorrent_password")
-            )
-            await self.db.delete(temp_config_pass)
-            await self.db.commit()
-
-            if existing_url:
-                existing_url.value = old_url
-            elif old_url is None:
-                result_config = await self.db.execute(
-                    select(Config).where(Config.key == "qbittorrent_url")
-                )
-                to_delete = result_config.scalar_one_or_none()
-                if to_delete:
-                    await self.db.delete(to_delete)
-
-            if existing_user:
-                existing_user.value = old_user
-            elif old_user is None:
-                result_config = await self.db.execute(
-                    select(Config).where(Config.key == "qbittorrent_username")
-                )
-                to_delete = result_config.scalar_one_or_none()
-                if to_delete:
-                    await self.db.delete(to_delete)
-
-            if existing_pass:
-                existing_pass.value = old_pass
-            elif old_pass is None:
-                result_config = await self.db.execute(
-                    select(Config).where(Config.key == "qbittorrent_password")
-                )
-                to_delete = result_config.scalar_one_or_none()
-                if to_delete:
-                    await self.db.delete(to_delete)
-
-            await self.db.commit()
-
-            return result
+            return await service.test_connection()
         except Exception as e:
-            logger.error(f"qBittorrent connection test failed: {str(e)}")
+            logger.error(f"{type(service).__name__} connection test failed: {e}")
             return {"success": False, "error": str(e)}
+
+    async def secret_or_stored(
+        self,
+        key: str,
+        value: str,
+        target_key: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> str:
+        """
+        A secret sent for a connection test, or the stored one in its place.
+
+        The API never hands a stored secret out, so Settings sends its field
+        blank, and the mask a secret is shown as stands for it too. It goes
+        only to the server stored with it (target_key): with no login, anyone
+        could otherwise have it sent to a server of their own.
+        """
+        if value and not is_masked(key, value):
+            return value
+        result = await self.db.execute(
+            select(Config).where(Config.key.in_([key, target_key]))
+        )
+        stored = {config.key: config.value for config in result.scalars()}
+        if target_key and stored.get(target_key) != target:
+            return ""
+        return stored.get(key) or ""
 
     async def get_plex_libraries(
         self, auth_token: str, server_name: Optional[str] = None
@@ -551,6 +337,9 @@ class SetupService:
             # Skip empty values - don't save them
             if not value:
                 logger.warning(f"Skipping empty value for key: {key}")
+                continue
+            # The mask a secret was shown as keeps the stored one
+            if is_masked(key, value):
                 continue
 
             # Secrets are encrypted by the one helper every write path uses
@@ -607,7 +396,12 @@ class SetupService:
         The key has to be an administrator one, so this reports that
         explicitly rather than leaving the user with a bare 403 later.
         """
-        config_data = {"jellyfin_url": url, "jellyfin_api_key": api_key}
+        config_data = {
+            "jellyfin_url": url,
+            "jellyfin_api_key": await self.secret_or_stored(
+                "jellyfin_api_key", api_key, "jellyfin_url", url
+            ),
+        }
         adapter = JellyfinAdapter(self.db)
         adapter._get_encrypted_config = _fixed_config(config_data)
 
@@ -658,8 +452,8 @@ def _fixed_config(values: Dict[str, str]):
     """
     Feed an adapter credentials that are not in the database yet.
 
-    As with stored ones, the secret may be encrypted: Settings tests with a
-    saved key by sending it back as it loaded it.
+    As with stored ones, the secret may be encrypted: a test with its field
+    left blank runs with the stored secret.
     """
 
     async def _get(service_name: str, config_keys: Dict[str, str]) -> Dict[str, str]:

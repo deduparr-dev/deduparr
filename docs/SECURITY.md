@@ -65,7 +65,7 @@ Sensitive authentication tokens are transmitted via HTTP request bodies, not URL
 
 **Implementation:**
 - POST requests for every operation that sends a credential (the Plex sign-in starts and polls its PIN with GET requests)
-- Credentials typed in the wizard or Settings are sent as typed; stored ones, the Plex token included, travel signed, as the backend returned them
+- Credentials typed in the wizard or Settings are sent as typed. The API returns a stored one only as a mask, and a connection test uses it only with the server stored with it
 - URL parameters never contain credentials
 
 ### Development Mode Considerations
@@ -78,7 +78,7 @@ During development (`npm run dev`), Vite's hot module replacement (HMR) creates 
 
 ### Plex Token
 
-Deduparr loads no Plex thumbnails or streams, so the Plex token never appears in a URL: the backend sends it to Plex in the `X-Plex-Token` header. The stored token is signed with itsdangerous, not encrypted: Deduparr has no login, so anyone who can reach the API or read the database can read it. It is redacted from logs, and can be revoked through Plex account settings.
+Deduparr loads no Plex thumbnails or streams, so the Plex token never appears in a URL: the backend sends it to Plex in the `X-Plex-Token` header. The stored token is encrypted, and the API never returns it. It is redacted from logs, and can be revoked through Plex account settings.
 
 ### Frontend Security Utilities
 
@@ -112,7 +112,7 @@ console.log('URL:', sanitizeUrl(requestUrl));
 ### Backend Security
 
 The backend's security helpers are in `app/services/shared/security.py`:
-- Token signing and verification (TokenManager)
+- Encryption and decryption of stored secrets (TokenManager)
 - Log data sanitization (SensitiveDataFilter)
 
-API keys, authentication tokens, and passwords are signed with itsdangerous URLSafeSerializer before database storage, not encrypted: Deduparr has no login and `GET /api/config/` returns every stored value, so anyone who can reach the API or read the database can read them. Values sent to `/api/config/import/all` are stored as given. The key (`/app/data/.encryption_key`) is file-based and persists across container restarts via Docker volumes.
+API keys, authentication tokens, and passwords are encrypted with Fernet before database storage, and values sent to `/api/config/import/all` are too. `GET /api/config/` and the export return a set secret only as `********`. The key (`/app/data/.encryption_key`) is file-based and persists across container restarts via Docker volumes. Deduparr has no login, so anyone who can reach the API can still use it: keep it off untrusted networks. It sends no CORS headers, so another site open in a browser cannot call it.

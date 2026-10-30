@@ -3,7 +3,8 @@ name: Build and Publish Docker Images
 # Build Strategy:
 # - Push to main: Build only (test CI/CD, no publish)
 # - Push to develop: Build and publish 'dev' + SHA tags
-# - Version tags (v*.*.*): Build and publish as 'latest' + semver tags (e.g., 0.1.2, 0.1)
+# - Version tags (v*.*.*): Build and publish as 'latest' + semver tags (e.g., 0.1.2, 0.1), then the GitHub release
+# - Releases: their notes are docs/releases/<tag>.md; pushes to develop publish changed notes (docs/RELEASING.md)
 # - Nightly schedule: Build and publish 'dev' + SHA tags from develop branch (also publishes Dependabot's merges, which start no push build)
 # - Manual dispatch: develop publishes 'dev' + SHA tags, main builds only
 
@@ -136,3 +137,24 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.docker_build.outputs.digest }}
           push-to-registry: true
+
+  release:
+    name: Publish GitHub Releases
+    # After the image, so a release never announces one that failed. On develop it publishes
+    # changed notes, and the releases of older tags
+    needs: build-and-push
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # The tags tell which notes have been released
+
+      - name: Publish the notes in docs/releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/publish-releases.sh

@@ -42,6 +42,7 @@ Welcome to the Deduparr documentation! This directory contains technical guides 
 ### For Developers
 - [Contributing](../CONTRIBUTING.md) - Development guidelines
 - [Docker Testing](DOCKER_TESTING.md) - Local development with Docker
+- [Releasing](RELEASING.md) - Cutting a version, and its release notes in [releases/](releases/)
 - [Implementation Plan](../todo/IMPLEMENTATION_PLAN.md) - Feature roadmap and technical design
 
 ### For DevOps

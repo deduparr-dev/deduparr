@@ -64,7 +64,7 @@ npm run dev
 ### Branching Strategy
 
 - `develop` - Where work comes together: every pull request targets it
-- `main` - Releases only: `develop` is merged into it when a version is cut
+- `main` - Releases only: `develop` is merged into it when a version is cut ([how](docs/RELEASING.md))
 - `feature/your-feature-name` - Feature branches
 - `fix/bug-description` - Bug fix branches
 

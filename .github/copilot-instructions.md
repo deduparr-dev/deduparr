@@ -364,6 +364,11 @@ docker run -dp 8655:8655 deduparr:test
 
 Production uses multi-stage build: frontend → backend → nginx+supervisor runtime.
 
+### Releases
+
+How a version is cut and its notes written: [docs/RELEASING.md](../docs/RELEASING.md). Every
+release uses the notes format there; v0.6.0 is the model.
+
 ## Code Conventions
 
 ### Import Organization

@@ -181,8 +181,8 @@ function GeneralSettings({
               Enable Deep Scan
             </label>
             <p className="text-sm text-muted-foreground mt-1">
-              Scans filesystem directly alongside Plex API to find duplicates that might be missed -
-              case-sensitivity, cross-directory files, and similar.
+              Also walks the library folders on disk and logs any duplicate files the media server
+              does not list. These are only logged, not added as duplicate sets.
             </p>
             <div className="flex items-start gap-2 mt-3">
               <AlertCircle className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />

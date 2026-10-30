@@ -123,9 +123,9 @@ async def update_deep_scan_setting(
     """
     Update the deep scan setting
 
-    Deep scan enables filesystem-based duplicate detection in addition to
-    Plex API detection. This is slower but finds duplicates Plex might miss
-    (e.g., case-sensitivity differences, cross-directory duplicates).
+    Deep scan also walks the library folders on disk and logs duplicate files
+    the media server does not list. It creates no duplicate sets, and makes
+    scans slower.
 
     Args:
         update: Deep scan setting update

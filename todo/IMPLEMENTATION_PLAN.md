@@ -108,8 +108,8 @@
 - [ ] Quick actions
 
 #### **1.6 Automation** ✅ **COMPLETE**
-- [x] Scheduled scans (interval-based with APScheduler)
-- [x] Environment variable configuration (`ENABLE_SCHEDULED_SCANS`, `SCAN_INTERVAL_HOURS`)
+- [x] Scheduled scans (daily or interval, with APScheduler)
+- [x] Schedule stored from Settings, with environment variables until it is saved
 - [x] Background scanning without blocking UI
 - [x] Detects duplicates automatically
 - [x] Optional scheduled deletion: deletes the extra copies in the pending sets 30 minutes after each scheduled scan

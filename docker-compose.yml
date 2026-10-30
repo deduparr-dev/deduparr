@@ -10,7 +10,10 @@ services:
       - DATABASE_TYPE=${DATABASE_TYPE:-sqlite}
       - DATABASE_URL=${DATABASE_URL:-sqlite:////config/deduparr.db}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      # Optional: Scheduled Scans
+      # Optional: Scheduled Scans. The schedule is set in Settings (Automation);
+      # until Settings saves it, ENABLE_SCHEDULED_SCANS, SCAN_SCHEDULE_MODE,
+      # SCHEDULED_SCAN_TIME, SCAN_INTERVAL_HOURS (interval mode only) and
+      # ENABLE_SCHEDULED_DELETION apply
       - ENABLE_SCHEDULED_SCANS=${ENABLE_SCHEDULED_SCANS:-false}
       - SCAN_INTERVAL_HOURS=${SCAN_INTERVAL_HOURS:-24}
       # Optional: Override media directory if auto-detection doesn't work

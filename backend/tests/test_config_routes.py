@@ -6,9 +6,11 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.main import app
 from app.models import Config
 from app.models.scoring_rule import ScoringRule, RuleType
+from app.services.scheduler import get_scheduler
 from app.services.shared.security import (
     SECRET_MASK,
     encrypt_if_sensitive,
@@ -730,6 +732,23 @@ async def test_get_scheduler_config_with_values(test_db):
 
 
 @pytest.mark.asyncio
+async def test_get_scheduler_config_falls_back_to_the_environment(test_db, monkeypatch):
+    """A value Settings has not saved comes from the environment; a saved one wins."""
+    monkeypatch.setattr(settings, "enable_scheduled_scans", True)
+    monkeypatch.setattr(settings, "scan_interval_hours", 12)
+    test_db.add(Config(key="scan_interval_hours", value="6"))
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        data = (await client.get("/api/config/scheduler")).json()
+
+    assert data["enable_scheduled_scans"] is True
+    assert data["scan_interval_hours"] == 6
+
+
+@pytest.mark.asyncio
 async def test_update_scheduler_config_enable_scans(test_db):
     """Test enabling scheduled scans"""
     async with AsyncClient(
@@ -748,6 +767,10 @@ async def test_update_scheduler_config_enable_scans(test_db):
         config = result.scalar_one_or_none()
         assert config is not None
         assert config.value == "true"
+
+        # Running, on this test's event loop, which closes after it
+        assert get_scheduler().is_running
+        await get_scheduler().stop()
 
 
 @pytest.mark.asyncio

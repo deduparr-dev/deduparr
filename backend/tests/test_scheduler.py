@@ -3,11 +3,34 @@ Tests for the scheduler service
 """
 
 import pytest
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
+from app.core.config import settings
+from app.main import app, lifespan
 from app.services.scan.runner import ScanTotals
-from app.services.scheduler import ScanScheduler, get_scheduler
+from app.services.scheduler import (
+    ScanScheduler,
+    Schedule,
+    get_scheduler,
+    load_schedule,
+)
 from app.models import Config
+
+
+def scans(**values) -> Schedule:
+    """A schedule with scans on, daily at 02:00 unless the values say otherwise"""
+    return Schedule(
+        **{
+            "enable_scheduled_scans": True,
+            "scan_schedule_mode": "daily",
+            "scheduled_scan_time": "02:00",
+            "scan_interval_hours": 24,
+            "enable_scheduled_deletion": False,
+            **values,
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -135,10 +158,7 @@ async def test_start_daily_mode():
     scheduler = ScanScheduler()
 
     # Execute
-    await scheduler.start(
-        scan_mode="daily",
-        scan_time="02:00",
-    )
+    await scheduler.apply(scans())
 
     # Verify
     assert scheduler.is_running is True
@@ -160,10 +180,12 @@ async def test_start_interval_mode():
     scheduler = ScanScheduler()
 
     # Execute
-    await scheduler.start(
-        scan_mode="interval",
-        scan_time="00:00",
-        scan_interval_hours=6,
+    await scheduler.apply(
+        scans(
+            scan_schedule_mode="interval",
+            scheduled_scan_time="00:00",
+            scan_interval_hours=6,
+        )
     )
 
     # Verify
@@ -183,10 +205,7 @@ async def test_start_mixed_mode():
     scheduler = ScanScheduler()
 
     # Execute
-    await scheduler.start(
-        scan_mode="daily",
-        scan_time="02:00",
-    )
+    await scheduler.apply(scans(enable_scheduled_deletion=True))
 
     # Verify
     assert scheduler.is_running is True
@@ -200,16 +219,100 @@ async def test_start_mixed_mode():
 
 
 @pytest.mark.asyncio
+@patch("app.main.get_scheduler")
+@patch("app.main.AsyncSessionLocal")
+@patch("app.main.init_db", new_callable=AsyncMock)
+async def test_startup_runs_the_stored_schedule(
+    mock_init_db, mock_session_local, mock_get_scheduler, test_db
+):
+    """The schedule saved in Settings is the one running after a restart."""
+    mock_session_local.return_value.__aenter__.return_value = test_db
+    scheduler = mock_get_scheduler.return_value = ScanScheduler()
+
+    test_db.add_all(
+        [
+            Config(key="enable_scheduled_scans", value="true"),
+            Config(key="scan_schedule_mode", value="interval"),
+            Config(key="scan_interval_hours", value="6"),
+        ]
+    )
+    await test_db.commit()
+
+    async with lifespan(app):
+        trigger = scheduler.scheduler.get_job("duplicate_scan").trigger
+
+    assert trigger.interval == timedelta(hours=6)
+
+
+@pytest.mark.asyncio
+async def test_load_schedule_skips_a_saved_value_that_is_not_valid(test_db, caplog):
+    """A saved value that is not valid gives way to the environment's, with a warning."""
+    test_db.add_all(
+        [
+            Config(key="scan_schedule_mode", value="interval"),
+            Config(key="scheduled_scan_time", value="25:00"),
+            Config(key="scan_interval_hours", value="every day"),
+        ]
+    )
+    await test_db.commit()
+
+    schedule = await load_schedule(test_db)
+
+    assert schedule.scan_schedule_mode == "interval"
+    assert schedule.scheduled_scan_time == settings.scheduled_scan_time
+    assert schedule.scan_interval_hours == settings.scan_interval_hours
+    assert "scheduled_scan_time '25:00' is not valid" in caplog.text
+    assert "scan_interval_hours 'every day' is not valid" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_interval_scans_keep_to_the_grid_through_the_start_time():
+    """Every 6 hours from two hours ago runs next in four hours, not tomorrow."""
+    scheduler = ScanScheduler()
+    now = datetime.now(scheduler.scheduler.timezone)
+    start = now.replace(second=0, microsecond=0) - timedelta(hours=2)
+
+    await scheduler.apply(
+        scans(
+            scan_schedule_mode="interval",
+            scheduled_scan_time=f"{start:%H:%M}",
+            scan_interval_hours=6,
+        )
+    )
+
+    next_run = scheduler.scheduler.get_job("duplicate_scan").next_run_time
+    assert next_run == start + timedelta(hours=6)
+
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["daily", "interval"])
+async def test_scans_start_at_the_time_in_the_app_time_zone(mode):
+    """02:00 is 02:00 in the time zone the app runs in, in either mode."""
+    scheduler = ScanScheduler()
+    scheduler.scheduler.configure(timezone="Asia/Kolkata")  # UTC+05:30
+
+    await scheduler.apply(scans(scan_schedule_mode=mode, scan_interval_hours=6))
+
+    next_run = scheduler.scheduler.get_job("duplicate_scan").next_run_time
+    local = next_run.astimezone(ZoneInfo("Asia/Kolkata"))
+    assert (local.hour % 6, local.minute) == (2, 0)
+
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
 async def test_start_already_running():
     """Test that starting scheduler twice doesn't duplicate jobs"""
     scheduler = ScanScheduler()
 
     # Start first time
-    await scheduler.start(scan_mode="daily", scan_time="02:00")
+    await scheduler.apply(scans())
     jobs_count_first = len(scheduler.scheduler.get_jobs())
 
     # Try to start again
-    await scheduler.start(scan_mode="daily", scan_time="02:00")
+    await scheduler.apply(scans())
     jobs_count_second = len(scheduler.scheduler.get_jobs())
 
     # Should still have same number of jobs
@@ -225,7 +328,7 @@ async def test_stop_scheduler():
     scheduler = ScanScheduler()
 
     # Start and then stop
-    await scheduler.start(scan_mode="daily", scan_time="02:00")
+    await scheduler.apply(scans())
     assert scheduler.is_running is True
 
     await scheduler.stop()
@@ -241,19 +344,6 @@ async def test_stop_not_running():
     # Should not raise error
     await scheduler.stop()
     assert scheduler.is_running is False
-
-
-@pytest.mark.asyncio
-@patch("app.services.scheduler.ScanScheduler._run_scheduled_scan")
-async def test_run_now(mock_run_scan):
-    """Test triggering immediate scan"""
-    mock_run_scan.return_value = None
-
-    scheduler = ScanScheduler()
-    await scheduler.run_now()
-
-    # Verify scan was triggered
-    mock_run_scan.assert_called_once()
 
 
 def test_get_scheduler_singleton():

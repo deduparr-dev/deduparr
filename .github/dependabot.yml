@@ -9,6 +9,11 @@ updates:
     rebase-strategy: "auto"
     open-pull-requests-limit: 10
     versioning-strategy: increase
+    ignore:
+      # typescript-eslint cannot load TypeScript 7, which ships no compiler API
+      # (typescript-eslint/typescript-eslint#10940): stay on 6.x until it can
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
     groups:
       react:
         patterns:

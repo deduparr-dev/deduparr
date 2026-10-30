@@ -10,8 +10,7 @@ Be respectful and constructive. We're all here to build something great together
 
 ### Prerequisites
 
-- Python 3.14+ (CI and the Docker images use the Dockerfile's version)
-- Node.js 22+ (CI and the Docker images use the Dockerfile's version)
+- Python 3.15 and Node.js 26: the Dockerfile's versions, which CI and the Docker images use
 - Docker (optional, for testing)
 
 ### Development Setup
@@ -113,23 +112,24 @@ Examples:
 ```
 deduparr/
 ├── backend/          # Python FastAPI backend
+│   ├── alembic/      # Generated database migrations
 │   ├── app/
 │   │   ├── api/      # API endpoints (routes/)
 │   │   ├── core/     # Config, database
 │   │   ├── models/   # Database models
-│   │   ├── services/ # Business logic
+│   │   ├── services/ # Business logic, one package per domain (media_server, arr, scan, deletion, ...)
 │   │   └── main.py   # FastAPI app entry point
 │   └── tests/        # Backend tests
 ├── frontend/         # React TypeScript frontend
+│   ├── e2e/          # Playwright tests and stand-in services
 │   └── src/
 │       ├── components/  # UI components
 │       ├── pages/       # Page components
-│       ├── services/    # API client
-│       └── types/       # TypeScript types
-├── docs/             # User documentation
+│       └── services/    # API client (api.ts)
+├── docs/             # User documentation, and the release notes in docs/releases
+├── quadlet/          # Podman development stack
 ├── todo/             # Implementation plans and dev notes
-├── config/           # Configuration examples
-└── data/             # Runtime data (SQLite DB, encryption keys)
+└── config/           # Configuration examples
 ```
 
 ## Code Standards

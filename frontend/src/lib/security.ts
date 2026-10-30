@@ -116,21 +116,3 @@ function sanitizeObject(obj: unknown): unknown {
 
   return obj;
 }
-
-/**
- * Axios/Fetch interceptor to sanitize request URLs in DevTools Network tab
- * Note: This only affects logged URLs, not actual requests
- */
-export function sanitizeRequestUrl(config: { url?: string }): void {
-  if (config.url) {
-    // Store original URL for actual request
-    const originalUrl = config.url;
-    // Override toString to show sanitized version in DevTools
-    Object.defineProperty(config, "url", {
-      value: originalUrl,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-}

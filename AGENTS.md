@@ -218,13 +218,14 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
 
 1. Frontend calls `PlexAuthService.initiate_auth()` → returns PIN and OAuth URL
 2. User visits OAuth URL and authorizes
-3. Frontend polls `PlexAuthService.check_auth(pin_id)` → returns the **signed** token when complete
-4. Signed token stored in database (`Config` model with key `plex_auth_token`)
+3. Frontend polls `PlexAuthService.check_auth(pin_id)` → returns the **encrypted** token when complete
+4. Encrypted token stored in database (`Config` model with key `plex_auth_token`)
 5. `PlexService` reads the token back on demand to connect to Plex servers
 
 **Security Features:**
-- **Token Signing**: tokens, API keys and passwords are signed, not encrypted, with itsdangerous URLSafeSerializer before storage: whoever can read the database or call `GET /api/config/` (there is no login) can read them, and `/api/config/import/all` stores values as given
-- **File-based Signing Key**: Key stored in `/app/data/.encryption_key` (separate from database)
+- **Encrypted secrets**: tokens, API keys and passwords are stored encrypted with Fernet (`cryptography`), under a key derived from the key file; startup converts older signed or plain values. The API returns a set secret only as `SECRET_MASK`, and sending the mask or a blank back keeps the stored one. A connection test sends a stored secret only to the server stored with it
+- **File-based key**: stored in `/app/data/.encryption_key` (separate from database). Losing it loses the secrets, which are then entered again
+- **No CORS**: the frontend is same-origin, so another site in the browser cannot call the API; there is still no login
 - **Secure Logging**: Sensitive data sanitized in logs (shows only first/last few chars)
 
 **Critical:** 
@@ -232,9 +233,9 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
   entry - OAuth only. This rule is specific to Plex; Jellyfin is configured
   with a URL and an admin API key, which is the only thing it offers.
 - Always authenticate via plex.tv token first
-- Tokens/API keys are signed, not encrypted, using `services/shared/security.py`
-- Use `get_token_manager()` for signing and reading back secrets (`encrypt()`/`decrypt()`; works for any service)
-- The signing key is file-based at `/app/data/.encryption_key` (auto-generated, persists via Docker volume)
+- Tokens/API keys are encrypted using `services/shared/security.py`
+- Use `get_token_manager()` for encrypting and reading back secrets (`encrypt()`/`decrypt()`; works for any service)
+- The key file is at `/app/data/.encryption_key` (auto-generated, persists via Docker volume)
 - `security.py` is service-agnostic - use it for Plex, Radarr, Sonarr, qBittorrent, etc.
 
 ### Database Models Structure
@@ -370,7 +371,7 @@ npm install
 npm run dev
 ```
 
-Backend runs via `uvicorn` with hot reload. The frontend calls `/api` on its own origin: nginx proxies it in production, and Vite's dev and preview servers proxy it to `VITE_PROXY_TARGET`, by default `http://127.0.0.1:3001` (`VITE_API_URL` overrides the base).
+Backend runs via `uvicorn` with hot reload. The frontend calls `/api` on its own origin: nginx proxies it in production, and Vite's dev and preview servers proxy it to `VITE_PROXY_TARGET`, by default `http://127.0.0.1:3001`.
 
 ### Docker Development
 
@@ -515,7 +516,7 @@ duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets
   works with the paths the media server reports
 - Errors raise `ArrClientError` or a subclass: `ArrConnectionError` (unreachable,
   timeout), `ArrAuthError` (401/403), `ArrNotFoundError` (404)
-- API keys stored in `Config` model (signed, not encrypted)
+- API keys stored in `Config` model (encrypted)
 - Responses are typed with the TypedDicts in `client.py` (`MediaItem`,
   `ArrFile`, `Episode`, `QualityProfile`, ...) for the fields Deduparr reads
 - Key methods:
@@ -562,7 +563,7 @@ when. `qbittorrent-api` sends `hash` in the POST form, encodes booleans as
 2. **Async Session Cleanup**: Always use `async with` or `try/finally` to close sessions.
 3. **Plex Media Structure**: Files are at `media.media[0].parts[0].file`, not directly on media object.
 4. **Model Imports**: Import from `app.models` package (models/__init__.py), not individual files.
-5. **Frontend API URL**: relative `/api` everywhere, proxied by nginx in production and by Vite (`VITE_PROXY_TARGET`) in development; `VITE_API_URL` overrides it.
+5. **Frontend API URL**: relative `/api` everywhere, proxied by nginx in production and by Vite (`VITE_PROXY_TARGET`) in development.
 6. **Processed sets are history**: when an item is duplicated again, the scan opens a new pending set.
 7. **Deep scan only logs**: it reports duplicates the media server does not list, and creates no sets from them.
 8. **Deduparr sees media at the media server's paths**: the scan probes each file at exactly the path the media server reports (`media_server/file_probe.py`) and skips a group with a file it cannot find; only deletion also looks under `/media`. Check both before judging advice about mounts or paths.

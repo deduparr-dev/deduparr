@@ -374,10 +374,17 @@ async def test_test_email_connection_exception(mock_email_service, test_db):
 
 @pytest.mark.asyncio
 @patch("app.services.notifications.service.EmailService")
-async def test_test_email_connection_with_encrypted_password(
+async def test_test_email_connection_with_the_saved_password(
     mock_email_service, test_db
 ):
-    """A saved password Settings sends back encrypted is used decrypted"""
+    """A blank password field tests with the saved password, decrypted"""
+    test_db.add_all(
+        [
+            Config(key="smtp_host", value="smtp.gmail.com"),
+            Config(key="smtp_password", value=encrypt_test_password("app-pass")),
+        ]
+    )
+    await test_db.commit()
     mock_email_service.return_value.send_test_email.return_value = (True, None)
 
     async with AsyncClient(
@@ -389,10 +396,10 @@ async def test_test_email_connection_with_encrypted_password(
                 "smtp_host": "smtp.gmail.com",
                 "smtp_port": 587,
                 "smtp_user": "user@gmail.com",
-                "smtp_password": encrypt_test_password("app-password"),
+                "smtp_password": "",
                 "notification_email": "test@example.com",
             },
         )
 
     assert response.json()["success"] is True
-    assert mock_email_service.call_args.kwargs["smtp_password"] == "app-password"
+    assert mock_email_service.call_args.kwargs["smtp_password"] == "app-pass"

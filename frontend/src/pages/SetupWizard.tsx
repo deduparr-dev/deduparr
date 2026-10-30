@@ -396,6 +396,7 @@ export default function SetupWizard() {
         // to see the new configuration before the dashboard loads.
         await queryClient.invalidateQueries({ queryKey: ["config"] });
         queryClient.invalidateQueries({ queryKey: ["mediaLibraries"] });
+        queryClient.invalidateQueries({ queryKey: ["plexServers"] });
         queryClient.invalidateQueries({ queryKey: ["dashboardStats"] });
         navigate("/");
       } catch (error) {

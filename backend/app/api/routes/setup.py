@@ -172,18 +172,23 @@ class PlexServersRequest(BaseModel):
 
 
 @router.post("/plex/servers")
-async def get_plex_servers(request: PlexServersRequest):
+async def get_plex_servers(
+    request: PlexServersRequest, db: AsyncSession = Depends(get_db)
+):
     """
     Get available Plex servers for the authenticated user
 
     Args:
-        request: Request containing encrypted auth token
+        request: Request containing encrypted auth token, blank for the stored one
 
     Returns:
         List of available Plex servers
     """
     try:
-        servers = await PlexAuthService.get_servers(request.auth_token)
+        auth_token = await SetupService(db).secret_or_stored(
+            "plex_auth_token", request.auth_token
+        )
+        servers = await PlexAuthService.get_servers(auth_token)
         return {"servers": servers}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -327,12 +332,14 @@ async def test_email_connection(
     from app.services.notifications.service import EmailService
 
     try:
+        smtp_password = await SetupService(db).secret_or_stored(
+            "smtp_password", request.smtp_password, "smtp_host", request.smtp_host
+        )
         email_service = EmailService(
             smtp_host=request.smtp_host,
             smtp_port=request.smtp_port,
             smtp_user=request.smtp_user,
-            # Settings sends a saved password back encrypted
-            smtp_password=decrypt_if_encrypted(request.smtp_password),
+            smtp_password=decrypt_if_encrypted(smtp_password),
         )
 
         # Send test email

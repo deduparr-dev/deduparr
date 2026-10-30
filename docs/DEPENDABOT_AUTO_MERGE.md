@@ -37,8 +37,9 @@ The workflow runs from `main`'s copy, as every `workflow_run` workflow does, so
 a change to it takes effect when a version is cut.
 
 CI is what stands between an update and `develop`: backend lint and tests,
-frontend lint and build, the end-to-end tests, and building the Docker image
-and starting it. Every kind of update is merged when all of that passes, major
+frontend lint and build, the end-to-end tests, building the Docker image and
+starting it, and the security audit's `pip-audit` (its `npm audit` only
+reports). Every kind of update is merged when all of that passes, major
 versions included.
 
 A merge made with the workflow's token starts no workflow on `develop`, so the

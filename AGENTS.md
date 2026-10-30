@@ -44,7 +44,7 @@ Be critical. Base everything on facts: code you read, a command you ran, the API
    - Verify logic matches intended behavior 100%
    - Compare actual implementation against documented requirements
 9. **Issue Reporting**: List discovered issues at end of analysis for discussion - don't auto-fix without approval.
-10. **Self-Sufficiency**: Use available tools (grep_search, read_file, semantic_search) instead of asking users to run commands.
+10. **Self-Sufficiency**: Use the tools you have to search and read the code instead of asking users to run commands.
 
 ## Project Overview
 
@@ -52,7 +52,7 @@ Deduparr is a duplicate media management system for the *arr ecosystem (Plex/Jel
 
 **Tech Stack:**
 - Backend: Python 3.15 + FastAPI + SQLAlchemy (async)
-- Frontend: React 19.2 + TypeScript + Vite + TailwindCSS
+- Frontend: React 19 + TypeScript + Vite + TailwindCSS
 - Database: SQLite (default) or PostgreSQL
 - Deployment: Docker multi-stage builds
 
@@ -65,7 +65,7 @@ Deduparr is a duplicate media management system for the *arr ecosystem (Plex/Jel
 
 **IMPORTANT**: When changing or adding functionality related to these services, **always consult their API documentation** to ensure correct usage, parameter validation, and error handling.
 
-## React 19.2 Best Practices
+## React 19 Best Practices
 
 ### Modern React Patterns
 
@@ -174,13 +174,15 @@ async def endpoint(db: AsyncSession = Depends(get_db)):
 
 Deduparr reads libraries from Plex, Jellyfin, or both at once. Everything above
 `app/services/media_server/` works against one contract and never touches a
-server SDK:
+server SDK, except the setup wizard, which lists Plex libraries through
+`PlexService` (`setup_service.get_plex_libraries`):
 
 - `base.py` - the `MediaServer` protocol and `DuplicateGroup`, which carries an
   item id, a title and the `MediaMetadata` of each file
 - `plex_adapter.py` / `jellyfin_adapter.py` - one per server
-- `file_probe.py` - sample detection and the stat/inode probe both adapters and
-  the disk scanner share
+- `file_probe.py` - sample detection and video extensions, which both adapters
+  and the disk scanner share, and the stat/inode probe (`probe_file`) the
+  adapters use
 - `__init__.py` - `get_media_servers(db)`, and `selected_libraries()` for the
   per-server `plex_libraries` / `jellyfin_libraries` selection
 
@@ -212,19 +214,17 @@ without a Jellyfin install; demo.jellyfin.org is a real one to check against.
 
 ### Plex OAuth Authentication Flow
 
-Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token entry, this project uses **plex.tv OAuth with PIN login ONLY** with enterprise-grade security:
+Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token entry, this project uses **plex.tv OAuth with PIN login ONLY**:
 
 1. Frontend calls `PlexAuthService.initiate_auth()` → returns PIN and OAuth URL
 2. User visits OAuth URL and authorizes
-3. Frontend polls `PlexAuthService.check_auth(pin_id)` → returns **encrypted** token when complete
-4. Encrypted token stored in database (`Config` model with key `plex_auth_token`)
-5. `PlexService` decrypts token on demand to connect to Plex servers
+3. Frontend polls `PlexAuthService.check_auth(pin_id)` → returns the **signed** token when complete
+4. Signed token stored in database (`Config` model with key `plex_auth_token`)
+5. `PlexService` reads the token back on demand to connect to Plex servers
 
 **Security Features:**
-- **Token Encryption**: All tokens/API keys encrypted with itsdangerous URLSafeSerializer before storage
-- **File-based Encryption Key**: Key stored in `/app/data/.encryption_key` (separate from database)
-- **CSRF Protection**: State tokens validate OAuth flow authenticity
-- **Token Validation**: Periodic validation ensures tokens remain valid
+- **Token Signing**: tokens, API keys and passwords are signed, not encrypted, with itsdangerous URLSafeSerializer before storage: whoever can read the database or call `GET /api/config/` (there is no login) can read them, and `/api/config/import/all` stores values as given
+- **File-based Signing Key**: Key stored in `/app/data/.encryption_key` (separate from database)
 - **Secure Logging**: Sensitive data sanitized in logs (shows only first/last few chars)
 
 **Critical:** 
@@ -232,9 +232,9 @@ Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token
   entry - OAuth only. This rule is specific to Plex; Jellyfin is configured
   with a URL and an admin API key, which is the only thing it offers.
 - Always authenticate via plex.tv token first
-- All tokens/API keys encrypted using `services/shared/security.py`
-- Use `get_token_manager()` for all encryption/decryption operations (works for any service)
-- Encryption key is file-based at `/app/data/.encryption_key` (auto-generated, persists via Docker volume)
+- Tokens/API keys are signed, not encrypted, using `services/shared/security.py`
+- Use `get_token_manager()` for signing and reading back secrets (`encrypt()`/`decrypt()`; works for any service)
+- The signing key is file-based at `/app/data/.encryption_key` (auto-generated, persists via Docker volume)
 - `security.py` is service-agnostic - use it for Plex, Radarr, Sonarr, qBittorrent, etc.
 
 ### Database Models Structure
@@ -248,7 +248,8 @@ Five core models with specific relationships:
 - `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`).
   `media_server` + `item_id` say which server reported it and its id there
   (`item_id` is stored as `plex_item_id`, the column's 0.5.7 name)
-- `DuplicateFile`: Individual file in duplicate set (has one `DeletionHistory`)
+- `DuplicateFile`: Individual file in duplicate set (its `deletion_history` is a
+  list; the pipeline keeps one row per file)
 - `DeletionHistory`: Tracks multi-stage deletion (*arr → qBittorrent → disk → media server refresh)
 - `ScoringRule`: User-defined regex patterns for scoring
 - `Config`: Key-value settings store
@@ -303,17 +304,18 @@ stages, tracked in `DeletionHistory`:
 2. `deleted_from_qbit`: remove the torrent holding the file, with its data -
    unless the kept file has a torrent, or the torrent holds other videos too
    (a season pack)
-3. *arr rescan, once per set: `RescanMovie`/`RescanSeries` re-reads the item
-   from disk, importing the kept file - or the whole library when the *arr
-   tracks neither file, as it may hold one under its own mount. A kept file
-   directly in a root folder cannot be imported; it is never moved, and the
-   result says so
-4. `deleted_from_disk`: delete the file if still on disk, then the side files
+3. `deleted_from_disk`: delete the file if still on disk, then the side files
    named after it (.nfo, subtitles, artwork), and the release's
    Sample/Subs/Proof/Extras folders once no other video shares the directory,
    then the folders left empty - up to the library folder the media server
    reports, never it, and none when the server cannot list its libraries
-5. `media_server_refreshed`: refresh the item on the server that reported it
+4. `media_server_refreshed`: refresh the item on the server that reported it
+
+Once every file of the set is done, and if any was deleted, the *arr rescans
+once for the set: `RescanMovie`/`RescanSeries` re-reads the item from disk,
+importing the kept file - or the whole library when the *arr tracks neither
+file, as it may hold one under its own mount. A kept file directly in a root
+folder cannot be imported; it is never moved, and the result says so.
 
 A file is only ever identified by more than its name, since other titles share
 names like `S01E01.mkv`: on disk by the media server's path, or that path's
@@ -347,13 +349,7 @@ bash scripts/rebuild-docker.sh --prod
 bash scripts/rebuild-docker.sh --dev
 ```
 
-The script handles:
-1. Port cleanup (stops containers using relevant ports)
-2. Docker compose down
-3. Database and encryption key removal
-4. Docker system prune
-5. Image rebuild (no cache)
-6. Container startup
+What each mode stops, deletes and rebuilds is in `scripts/rebuild-docker.sh` (`--dev` drives the Podman quadlets).
 
 **Never** manually run `docker build`, `docker compose build`, or similar commands. The rebuild script ensures proper cleanup and consistency.
 
@@ -365,6 +361,7 @@ cd backend
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+export DATABASE_URL="sqlite:///$PWD/deduparr.db"  # the default, /config/deduparr.db, needs root
 python -m app.main
 
 # Frontend (port 3000)
@@ -373,7 +370,7 @@ npm install
 npm run dev
 ```
 
-Backend runs via `uvicorn` with hot reload. Frontend proxies API requests to `http://localhost:3001`.
+Backend runs via `uvicorn` with hot reload. In dev the frontend calls the API at `http://localhost:3001` directly (`VITE_API_URL` overrides it); `vite preview` proxies `/api` to `VITE_PROXY_TARGET`, by default `http://127.0.0.1:3001`.
 
 ### Docker Development
 
@@ -410,11 +407,14 @@ release uses the notes format there; v0.6.0 is the model.
 ### Layout and Naming
 
 - Backend services are grouped by domain under `app/services/`: `media_server`,
-  `arr`, `scan`, `deletion`, `notifications`, `download`, `shared`. A file is
-  named for its role (`pipeline.py`, `runner.py`), and for its thing and role
-  where several share one (`plex_adapter.py`, `radarr_service.py`).
+  `arr`, `scan`, `deletion`, `notifications`, `download`, `shared`, with
+  `scheduler.py`, `setup_service.py`, `stats_service.py` and `system_service.py`
+  still at its top level. A file is named for its role (`pipeline.py`,
+  `runner.py`), and for its thing and role where several share one
+  (`plex_adapter.py`, `radarr_service.py`).
 - Every frontend API call goes through `src/services/api.ts`, and the stored
-  configuration is one React Query key, `["config"]`.
+  configuration is cached under `["config"]` (`["config", "deep-scan"]` for
+  deep scan), except the scheduler settings, under `["schedulerConfig"]`.
 - No dead code paths: reconnect them or remove them.
 - Prefer the clean design over compatibility layers: Deduparr has few users,
   and existing data moves with a generated migration.
@@ -490,16 +490,16 @@ The end-to-end suite (`frontend/e2e/`) runs against stand-ins for Jellyfin,
 Radarr, Sonarr and qBittorrent (`fake-jellyfin/`, `fake-services/`), which
 behave like the real APIs wherever Deduparr depends on them, quirks included.
 Its database is never reset, so each spec works on a title unique to its run
-(`uniqueTitle`). Playwright reuses whatever already listens on its ports. Select
-by `data-testid` and assert `toHaveCount(1)`; a toast's text appears twice, in
-the toast and in its live announcer. The `/api/scan/dev/*` endpoints that seed
+(`uniqueTitle`). Outside CI, Playwright reuses whatever already listens on its
+ports. Select by `data-testid` and assert `toHaveCount(1)`; a toast's text
+appears twice, in the toast and in its live announcer. The `/api/scan/dev/*` endpoints that seed
 duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets.
 
 ## Integration Points
 
 ### Plex API (`plexapi`)
 
-- OAuth via `MyPlexPinLogin` and `MyPlexAccount`
+- OAuth PIN through plex.tv's `/api/v2/pins` (with `requests`), then `MyPlexAccount`
 - Server connection via `account.resource(name).connect()`
 - Media objects: `Movie`, `Show`, `Episode` with nested `.media[0].parts[0]`
 - Refresh libraries: `library.update()`
@@ -513,8 +513,9 @@ duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets
 - With path mappings set (`app.services.arr.path_mapping.PathMapper`), the
   client translates every path it exchanges with the *arr, so the code above it
   works with the paths the media server reports
-- Error handling via `ArrConnectionError` exception
-- API keys stored in `Config` model (encrypted)
+- Errors raise `ArrClientError` or a subclass: `ArrConnectionError` (unreachable,
+  timeout), `ArrAuthError` (401/403), `ArrNotFoundError` (404)
+- API keys stored in `Config` model (signed, not encrypted)
 - Responses are typed with the TypedDicts in `client.py` (`MediaItem`,
   `ArrFile`, `Episode`, `QualityProfile`, ...) for the fields Deduparr reads
 - Key methods:
@@ -538,13 +539,13 @@ Behaviour read from Radarr's and Sonarr's source, which the rescans rely on:
 
 **Usage Pattern:**
 ```python
-from app.services.arr.client import RadarrClient, ArrConnectionError
+from app.services.arr.client import RadarrClient, ArrClientError
 
 client = RadarrClient(base_url="http://localhost:7878", api_key="xxx")
 try:
     movies = await client.get_movie()
     await client.post_command("RescanMovie", movieId=movies[0]["id"])
-except ArrConnectionError as e:
+except ArrClientError as e:
     logger.error(f"Radarr API error: {e}")
 ```
 
@@ -564,6 +565,7 @@ when. `qbittorrent-api` sends `hash` in the POST form, encodes booleans as
 5. **Frontend API URL**: Uses env var `VITE_API_URL`, defaults to `http://localhost:3001` in dev.
 6. **Processed sets are history**: when an item is duplicated again, the scan opens a new pending set.
 7. **Deep scan only logs**: it reports duplicates the media server does not list, and creates no sets from them.
+8. **Deduparr sees media at the media server's paths**: the scan probes each file at exactly the path the media server reports (`media_server/file_probe.py`) and skips a group with a file it cannot find; only deletion also looks under `/media`. Check both before judging advice about mounts or paths.
 
 ## Status and Roadmap
 

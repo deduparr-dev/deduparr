@@ -116,7 +116,7 @@ import {
   ContentGrid,
   SectionHeader,
   FormActions,
-} from "@/components/PageLayout";
+} from "@/components/DefaultPageLayout";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Film, Clock, HardDrive } from "lucide-react";
@@ -173,8 +173,9 @@ export default function ExamplePage() {
 All components are responsive by default:
 
 - **Mobile**: Full width, stacked layout, smaller text
-- **Tablet (md)**: 2-column grids, horizontal layouts
-- **Desktop (lg)**: Full grid columns, optimal spacing
+- **Small tablet (sm)**: 2-column stat grids, headers and buttons in a row
+- **Tablet (md)**: expandable card headers in a row
+- **Desktop (lg)**: 3- or 4-column stat grids, 2-column content grids
 
 ### Breakpoints
 - `sm`: 640px (small tablets)

@@ -47,6 +47,7 @@ Terminal 1 (Backend):
 ```bash
 cd backend
 source venv/bin/activate
+export DATABASE_URL="sqlite:///$PWD/deduparr.db"  # the default, /config/deduparr.db, needs root
 python -m app.main
 # API runs on http://localhost:3001
 ```
@@ -117,7 +118,7 @@ deduparr/
 │   │   ├── api/      # API endpoints (routes/)
 │   │   ├── core/     # Config, database
 │   │   ├── models/   # Database models
-│   │   ├── services/ # Business logic, one package per domain (media_server, arr, scan, deletion, ...)
+│   │   ├── services/ # Business logic, mostly one package per domain (media_server, arr, scan, deletion, ...)
 │   │   └── main.py   # FastAPI app entry point
 │   └── tests/        # Backend tests
 ├── frontend/         # React TypeScript frontend
@@ -126,15 +127,17 @@ deduparr/
 │       ├── components/  # UI components
 │       ├── pages/       # Page components
 │       └── services/    # API client (api.ts)
+├── docker/           # nginx, supervisor and entrypoint of the image
 ├── docs/             # User documentation, and the release notes in docs/releases
 ├── quadlet/          # Podman development stack
+├── scripts/          # Test, migration, release and rebuild scripts
 ├── todo/             # Implementation plans and dev notes
 └── config/           # Configuration examples
 ```
 
 ## Code Standards
 
-### TypeScript/React Rules (React 19.2)
+### TypeScript/React Rules (React 19)
 
 **FORBIDDEN:**
 - ❌ `any` type - **NEVER use `any`**
@@ -241,7 +244,7 @@ See [docs/DEPENDABOT_AUTO_MERGE.md](docs/DEPENDABOT_AUTO_MERGE.md) for details.
 
 ## Questions?
 
-- [GitHub Discussions](https://github.com/deduparr-dev/deduparr/discussions) - Ask questions and get help
+- [GitHub Issues](https://github.com/deduparr-dev/deduparr/issues) - Ask questions and get help
 
 ## License
 

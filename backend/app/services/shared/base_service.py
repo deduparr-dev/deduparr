@@ -4,7 +4,7 @@ Provides common functionality for encrypted config retrieval and connection test
 """
 
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,20 @@ class BaseExternalService:
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    async def _get_optional_config(self, key: str) -> Optional[str]:
+        """
+        Get an optional configuration value
+
+        Args:
+            key: Database config key
+
+        Returns:
+            The stored value, or None if the key is missing or empty
+        """
+        result = await self.db.execute(select(Config).where(Config.key == key))
+        config = result.scalar_one_or_none()
+        return str(config.value) if config and config.value else None
 
     async def _get_encrypted_config(
         self, service_name: str, config_keys: Dict[str, str]

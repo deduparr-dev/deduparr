@@ -15,6 +15,7 @@ test.describe("settings", () => {
     await markConfigured(request);
     await setConfig(request, "enable_deep_scan", "false");
     await setConfig(request, "prefer_arr_quality_profile", "false");
+    await setConfig(request, "radarr_path_mappings", "");
   });
 
   test("renders the configuration sections", async ({ page }) => {
@@ -64,6 +65,29 @@ test.describe("settings", () => {
         timeout: 10_000,
       })
       .toBe("true");
+  });
+
+  test("Radarr path mappings are saved, and can be cleared", async ({ page, request }) => {
+    await gotoApp(page, "/settings");
+    await page.getByRole("button", { name: "Radarr" }).click();
+
+    const mappings = page.locator("#path-mappings");
+    await mappings.fill("/data/movies=/movies");
+    await page.getByRole("button", { name: "Save Configuration" }).click();
+
+    await expect
+      .poll(async () => (await getConfig(request)).radarr_path_mappings, { timeout: 10_000 })
+      .toBe("/data/movies=/movies");
+
+    await gotoApp(page, "/settings");
+    await page.getByRole("button", { name: "Radarr" }).click();
+    await expect(page.locator("#path-mappings")).toHaveValue("/data/movies=/movies");
+
+    await page.locator("#path-mappings").fill("");
+    await page.getByRole("button", { name: "Save Configuration" }).click();
+    await expect
+      .poll(async () => (await getConfig(request)).radarr_path_mappings, { timeout: 10_000 })
+      .toBe("");
   });
 
   test("a saved setting survives a full page reload", async ({ page }) => {

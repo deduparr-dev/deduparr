@@ -193,6 +193,21 @@ labels:
 
 **Note:** Stage 4 only runs as fallback for files missed by API deletion. All deletions require manual approval (dry-run by default).
 
+### When Plex and Radarr/Sonarr See Different Paths
+
+Deduparr matches the files your media server (Plex or Jellyfin) reports with the movies and episodes Radarr and Sonarr track by comparing their paths. If the containers mount the same library under different paths (for example `/movies` in Plex and `/data/movies` in Radarr), nothing matches: Deduparr cannot tell which files Radarr/Sonarr track, so the *arr quality profile ranking falls back to Deduparr's own score, and files are removed as if the *arr did not know them.
+
+Fix it in **Settings → Radarr** (and **Sonarr**) under **Path mappings**. Write one mapping per line, as `path in the *arr=path in the media server`:
+
+```
+/data/movies=/movies
+/data/cartoons=/cartoons
+```
+
+A mapping applies to a whole directory, and the most specific one wins. To drop a common prefix from every path, map it to the root: `/data=/`. Mount the media in the Deduparr container at the paths your **media server** sees (here `/movies`, `/cartoons`, ...), since those are the paths Deduparr works with. Paths exchanged with Radarr/Sonarr are translated in both directions, so nothing changes in Radarr, Sonarr or the media server. Leave the field empty when they all see the same paths.
+
+To check it, start a scan and run a dry-run deletion: the log must say `Found movie '...' in Radarr`, not `Movie not tracked in Radarr (orphaned/old file)`.
+
 ### Scheduled Automated Scans
 
 Enable automatic duplicate detection:

@@ -28,10 +28,27 @@ async def test_sonarr_client_initialization(test_db):
 
         client = await service._get_client()
 
-        mock_client_class.assert_called_once_with(
-            base_url="http://localhost:8989", api_key="test_api_key"
-        )
+        mock_client_class.assert_called_once()
+        kwargs = mock_client_class.call_args.kwargs
+        assert kwargs["base_url"] == "http://localhost:8989"
+        assert kwargs["api_key"] == "test_api_key"
+        assert kwargs["path_mapper"].is_empty
         assert client == mock_client
+
+
+@pytest.mark.asyncio
+async def test_sonarr_client_uses_configured_path_mappings(test_db):
+    """Path mappings stored in the config are handed to the client"""
+    test_db.add(Config(key="sonarr_url", value="http://localhost:8989"))
+    test_db.add(Config(key="sonarr_api_key", value="test_api_key"))
+    test_db.add(Config(key="sonarr_path_mappings", value="/data/movies=/movies"))
+    await test_db.commit()
+
+    service = SonarrService(test_db)
+    client = await service._get_client()
+
+    assert client.path_mapper.to_plex("/data/movies/Film/a.mkv") == "/movies/Film/a.mkv"
+    assert client.path_mapper.to_arr("/movies/Film/a.mkv") == "/data/movies/Film/a.mkv"
 
 
 @pytest.mark.asyncio

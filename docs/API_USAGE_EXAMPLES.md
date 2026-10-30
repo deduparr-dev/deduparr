@@ -56,7 +56,8 @@ curl "http://localhost:3001/api/scan/duplicates"
 [
   {
     "id": 1,
-    "plex_item_id": "12345",
+    "media_server": "plex",
+    "item_id": "12345",
     "title": "The Matrix",
     "media_type": "movie",
     "found_at": "2025-11-07T10:30:00Z",
@@ -240,7 +241,7 @@ If any file in a duplicate set cannot be evaluated (no matching movie/series, *a
 
 The setting applies when a duplicate set is created, or re-ranked because its files changed. Existing pending sets and keep choices made by hand are left as they are.
 
-> **Paths:** Deduparr matches files by the path Plex reports, so Plex and Radarr/Sonarr must see your media under the same paths, as for deletion.
+> **Paths:** Deduparr matches files by the path the media server reports, so the media server and Radarr/Sonarr must see your media under the same paths, as for deletion.
 
 ## Deletion Pipeline Stages
 

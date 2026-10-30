@@ -10,8 +10,7 @@ Be respectful and constructive. We're all here to build something great together
 
 ### Prerequisites
 
-- Python 3.14+ (CI and the Docker images use the Dockerfile's version)
-- Node.js 22+ (CI and the Docker images use the Dockerfile's version)
+- Python 3.15 and Node.js 26: the Dockerfile's versions, which CI and the Docker images use
 - Docker (optional, for testing)
 
 ### Development Setup
@@ -64,7 +63,7 @@ npm run dev
 ### Branching Strategy
 
 - `develop` - Where work comes together: every pull request targets it
-- `main` - Releases only: `develop` is merged into it when a version is cut
+- `main` - Releases only: `develop` is merged into it when a version is cut ([how](docs/RELEASING.md))
 - `feature/your-feature-name` - Feature branches
 - `fix/bug-description` - Bug fix branches
 
@@ -113,23 +112,24 @@ Examples:
 ```
 deduparr/
 ├── backend/          # Python FastAPI backend
+│   ├── alembic/      # Generated database migrations
 │   ├── app/
 │   │   ├── api/      # API endpoints (routes/)
 │   │   ├── core/     # Config, database
 │   │   ├── models/   # Database models
-│   │   ├── services/ # Business logic
+│   │   ├── services/ # Business logic, one package per domain (media_server, arr, scan, deletion, ...)
 │   │   └── main.py   # FastAPI app entry point
 │   └── tests/        # Backend tests
 ├── frontend/         # React TypeScript frontend
+│   ├── e2e/          # Playwright tests and stand-in services
 │   └── src/
 │       ├── components/  # UI components
 │       ├── pages/       # Page components
-│       ├── services/    # API client
-│       └── types/       # TypeScript types
-├── docs/             # User documentation
+│       └── services/    # API client (api.ts)
+├── docs/             # User documentation, and the release notes in docs/releases
+├── quadlet/          # Podman development stack
 ├── todo/             # Implementation plans and dev notes
-├── config/           # Configuration examples
-└── data/             # Runtime data (SQLite DB, encryption keys)
+└── config/           # Configuration examples
 ```
 
 ## Code Standards
@@ -179,7 +179,7 @@ bash scripts/new-migration.sh "Short description"
 To rename a column, rename only the attribute and keep the column's name
 (`item_id = Column("plex_item_id", ...)`): autogenerate would otherwise drop
 the column and its data. The full rules are in
-[.github/copilot-instructions.md](.github/copilot-instructions.md#database-migrations).
+[AGENTS.md](AGENTS.md#database-migrations).
 
 ### TypeScript (Frontend)
 
@@ -201,15 +201,18 @@ pytest --cov=app tests/  # With coverage
 
 ```bash
 cd frontend
-npm test
+npm run type-check && npm run lint
+npm run test:e2e  # Playwright end-to-end tests
 ```
+
+`bash scripts/test.sh` formats and lints both halves and runs the backend tests. It is heavy, so run it once, before opening a pull request.
 
 ## Pull Request Process
 
 1. **Update documentation** if you're adding features
 2. **Add tests** for new functionality
 3. **Ensure all tests pass**
-4. **Update CHANGELOG.md** (if applicable)
+4. **Write a clear title**: it appears as written in the release notes' list of changes ([releases](docs/releases/))
 5. **Request review** from maintainers
 
 ### PR Checklist

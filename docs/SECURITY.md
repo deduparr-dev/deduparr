@@ -39,7 +39,7 @@ If you discover a security vulnerability, please email hello@deduparr.com or ope
 
 ## Code Security Standards
 
-Per `.github/copilot-instructions.md`:
+Per `AGENTS.md`:
 
 1. **NO `any` type**: Always use specific types
    - ✅ `Record<string, string>` 

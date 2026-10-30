@@ -143,7 +143,8 @@ This is useful for testing a build, or for rebuilding `dev` without a new commit
 bash scripts/release.sh 0.1.3
 ```
 
-Creates tags: `latest`, `0.1.3`, `0.1` (no `0`, no SHA)
+Creates tags: `latest`, `0.1.3`, `0.1` (no `0`, no SHA), then the GitHub release. The whole
+process is in [RELEASING.md](RELEASING.md).
 
 ##  Resources
 

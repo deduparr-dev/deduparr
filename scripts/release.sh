@@ -47,6 +47,14 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
     exit 1
 fi
 
+# The tag's build publishes these notes as the GitHub release
+NOTES="docs/releases/$TAG.md"
+if ! grep -q "^\*\*Full Changelog\*\*: https://github.com/deduparr-dev/deduparr/compare/v.*\.\.\.$TAG$" "$NOTES" 2>/dev/null; then
+    echo "Error: $NOTES is missing, or its Full Changelog link does not end at $TAG"
+    echo "Write it as docs/RELEASING.md describes, and merge it into develop first"
+    exit 1
+fi
+
 # Update version in manifest.json
 echo "Updating version in manifest.json to $VERSION"
 sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" manifest.json
@@ -91,4 +99,5 @@ git push origin "$TAG"
 
 echo "Release $TAG created and pushed successfully"
 echo "Monitor build: https://github.com/deduparr-dev/deduparr/actions"
+echo "The GitHub release follows the image, with $NOTES as its notes"
 

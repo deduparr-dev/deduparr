@@ -85,4 +85,4 @@ If you're working on a new feature:
 - [Main README](../README.md) - Project overview
 - [API Examples](../docs/API_USAGE_EXAMPLES.md) - How to use the API
 - [Contributing Guidelines](../CONTRIBUTING.md) - Development standards
-- [Copilot Instructions](../.github/copilot-instructions.md) - AI coding agent guidelines
+- [Agent instructions](../AGENTS.md) - AI coding agent guidelines

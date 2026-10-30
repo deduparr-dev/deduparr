@@ -122,5 +122,6 @@ backend/manifest.json
 # Playwright E2E
 frontend/test-results/
 frontend/playwright-report/
+.playwright-mcp/
 frontend/blob-report/
 frontend/e2e/.tmp/

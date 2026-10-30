@@ -210,6 +210,10 @@ npm run test:e2e  # Playwright end-to-end tests
 
 `bash scripts/test.sh` formats and lints both halves and runs the backend tests. It is heavy, so run it once, before opening a pull request.
 
+### Test it on real services
+
+These suites guard behaviour, and the end-to-end one runs against stand-ins so CI needs no servers. Neither shows that a change works. Run it against real Plex or Jellyfin, Radarr, Sonarr and qBittorrent, as a user would, and check what happened to the files and in each service: [The Real Stack](AGENTS.md#the-real-stack). Use throwaway media, since deleting is real.
+
 ## Pull Request Process
 
 1. **Update documentation** if you're adding features
@@ -222,6 +226,7 @@ npm run test:e2e  # Playwright end-to-end tests
 
 - [ ] Code follows project style guidelines
 - [ ] Tests added/updated and passing
+- [ ] Tested on real services, and the pull request says how and what was not
 - [ ] Documentation updated
 - [ ] Commit messages follow convention
 - [ ] Model changes come with a migration from `scripts/new-migration.sh`

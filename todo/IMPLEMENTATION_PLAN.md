@@ -62,7 +62,7 @@
 
 #### **1.2 Review & Approval System**
 - [x] **Dry-run mode by default**
-- [x] Web UI showing detected duplicates (the newest 100 sets; no paging yet)
+- [x] Web UI showing detected duplicates, 100 sets at a time
 - [x] Side-by-side comparison view:
   - File paths
   - File sizes

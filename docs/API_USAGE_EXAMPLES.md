@@ -52,6 +52,9 @@ curl "http://localhost:8655/api/scan/duplicates"
 - `?status=pending` - Filter by status (pending, approved, rejected, processed)
 - `?media_type=movie` - Filter by media type (movie, episode)
 - `?limit=50` - Limit results (default: 100, max: 1000)
+- `?offset=100` - Skip that many results, for the next page
+
+The `X-Total-Count` response header holds how many sets match in all.
 
 **Response:**
 ```json

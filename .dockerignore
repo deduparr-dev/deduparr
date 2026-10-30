@@ -36,7 +36,6 @@ LICENSE
 
 # Config examples
 .env.example
-config/config.example.yml
 
 # Testing
 backend/tests/

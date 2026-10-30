@@ -138,7 +138,8 @@ Once every file of the set is done, and if any was deleted, the *arr rescans
 once for the set: `RescanMovie`/`RescanSeries` re-reads the item from disk,
 importing the kept file - or the whole library when the *arr tracks neither
 file, as it may hold one under its own mount. A kept file directly in a root
-folder cannot be imported; it is never moved, and the result says so.
+folder cannot be imported, nor one in a folder that no path mapping or root
+folder of the *arr covers; it is never moved, and the result says so.
 
 Plex and Jellyfin list the same files as two sets, each with its own choice of
 what to keep. So a set deletes nothing unless a file it keeps is on disk, a keep

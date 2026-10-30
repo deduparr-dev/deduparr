@@ -201,5 +201,5 @@ The **Docker extension for VS Code** helps manage containers:
 1. Test the basic Docker setup
 2. Verify backend API works
 3. Test frontend UI
-4. Integrate with actual Plex/Radarr/Sonarr instances
+4. Integrate with actual Plex/Jellyfin/Radarr/Sonarr instances
 5. Test duplicate detection workflow

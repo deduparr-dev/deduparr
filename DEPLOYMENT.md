@@ -271,11 +271,12 @@ rm -f config/deduparr.db
 docker-compose restart
 ```
 
-### Plex connection fails
+### Plex or Jellyfin connection fails
 
-- Ensure Plex is accessible from the Docker network
+- Ensure the media server is accessible from the Docker network
 - Check firewall rules
-- Verify Plex Server is running on the expected address
+- Verify the media server is running on the expected address
+- Jellyfin: use an API key created on an administrator account
 
 ---
 

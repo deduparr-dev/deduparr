@@ -28,8 +28,13 @@ was ever proposed.
 
 [dependabot-auto-merge.yml](../.github/workflows/dependabot-auto-merge.yml)
 runs when the CI/CD workflow finishes on a Dependabot pull request. If CI
-passed, it squash-merges the pull request, and only the commit CI passed on: if
-Dependabot pushed a newer one in the meantime, that one waits for its own run.
+passed, it approves the pull request, since `develop` requires an approval, and
+squash-merges it, but only the commit CI passed on: if Dependabot pushed a newer
+one in the meantime, that one waits for its own run. Approving needs the
+repository setting "Allow GitHub Actions to create and approve pull requests".
+
+The workflow runs from `main`'s copy, as every `workflow_run` workflow does, so
+a change to it takes effect when a version is cut.
 
 CI is what stands between an update and `develop`: backend lint and tests,
 frontend lint and build, the end-to-end tests, and building the Docker image

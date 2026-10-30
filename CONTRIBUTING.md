@@ -179,7 +179,7 @@ bash scripts/new-migration.sh "Short description"
 To rename a column, rename only the attribute and keep the column's name
 (`item_id = Column("plex_item_id", ...)`): autogenerate would otherwise drop
 the column and its data. The full rules are in
-[.github/copilot-instructions.md](.github/copilot-instructions.md#database-migrations).
+[AGENTS.md](AGENTS.md#database-migrations).
 
 ### TypeScript (Frontend)
 

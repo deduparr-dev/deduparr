@@ -1,10 +1,25 @@
-# Deduparr AI Coding Agent Instructions
+# Deduparr Agent Instructions
+
+## How We Work
+
+Be critical. Base everything on facts: code you read, a command you ran, the API documentation. Do not guess.
+
+1. **Check the entire codebase first.** Stay consistent with what is there, and reuse shared components, helpers and services wherever it makes sense. We build a deduplication app: duplicate code is a defect.
+2. **Understand before changing.** Read whole files, and check `git blame`, old pull requests and issues for how the code is supposed to work.
+3. **Correct, tight and minimal.** Implement it correctly and to best practice, with no more code than it needs.
+4. **Review your own change.** Look for bugs, and list what you find and what could improve at the end, for discussion, rather than fixing beyond the task.
+5. **Test against the real stack, as a user would.** Run the Podman stack ([quadlet/](quadlet/README.md)) and test every server and service with real calls and real logs, the backend API directly, and every flow through the frontend (port 3000) with Playwright. Conclusions are reproducible defects in the current code, not speculative edge cases.
+6. **Only the tests and comments that are needed.** No debug output or clutter in the code.
+7. **The full suite is heavy.** Run the tests you touch while working, and `scripts/test.sh` once, before committing a pull request.
+8. **No AI attribution** in commits, pull requests or code.
+9. **No summary or report documents** in the repository: the reasoning goes in commit messages and pull requests.
+10. **Reference project**: [maintainerr](https://github.com/Maintainerr/Maintainerr) solves the same media server and *arr problems. Look at how it does things; do not copy it.
 
 ## Coding Standards
 
 ### Code Quality Principles
 
-1. **No Duplicate Code**: We're building a deduplication app - our code must exemplify this. Always reuse existing functionality and logic. Extract common patterns into shared utilities. DRY (Don't Repeat Yourself) is mandatory.
+1. **No Duplicate Code**: Always reuse existing functionality and logic. Extract common patterns into shared utilities. DRY (Don't Repeat Yourself) is mandatory.
 2. **Professional Code Only**: No verbose comments, no attributions in code. Keep comments technical and necessary.
 3. **Modern Dependencies**: Use cutting-edge, well-maintained packages. Current stack uses Python 3.15, React 19, FastAPI latest.
 4. **Type Safety - NO `Any` TYPE**: 
@@ -32,7 +47,7 @@
 
 ## Project Overview
 
-Deduparr is a duplicate media management system for the *arr ecosystem (Radarr/Sonarr/qBittorrent/Plex). It detects duplicate movies/episodes, scores them by quality, and safely removes lower-quality versions across all services.
+Deduparr is a duplicate media management system for the *arr ecosystem (Plex/Jellyfin/Radarr/Sonarr/qBittorrent). It detects duplicate movies/episodes, scores them by quality, and safely removes lower-quality versions across all services.
 
 **Tech Stack:**
 - Backend: Python 3.15 + FastAPI + SQLAlchemy (async)
@@ -44,6 +59,7 @@ Deduparr is a duplicate media management system for the *arr ecosystem (Radarr/S
 - **Radarr API**: https://radarr.video/docs/api/
 - **Sonarr API**: https://sonarr.tv/docs/api/
 - **Plex API**: https://python-plexapi.readthedocs.io/ (using plexapi Python library)
+- **Jellyfin API**: https://api.jellyfin.org/ (using the jellyfin-apiclient-python library)
 - **qBittorrent API**: https://github.com/rmartin16/qbittorrent-api (using qbittorrent-api Python library)
 
 **IMPORTANT**: When changing or adding functionality related to these services, **always consult their API documentation** to ensure correct usage, parameter validation, and error handling.
@@ -184,9 +200,14 @@ SDK is synchronous, so every call goes through `asyncio.to_thread`. Two of its
 quirks are worth knowing: `get_system_info()` reads `System/Configuration` and
 carries no version (`get_system_info_new()` reads `System/Info`), and Jellyfin
 routes and binds query parameters case-insensitively, which the SDK relies on.
+`authenticate()` does not raise on a rejected key: the server entry keeps its
+`Id` and has no `AccessToken`, while an unreachable server has no `Id` at all.
+
+A duplicate on Jellyfin is an item with more than one `MediaSource`. Jellyfin
+reports no resolution label, so the scoring engine derives it from the height.
 
 `e2e/fake-jellyfin/` is a stand-in server so the suite can drive the adapter
-without a Jellyfin install.
+without a Jellyfin install; demo.jellyfin.org is a real one to check against.
 
 ### Plex OAuth Authentication Flow
 
@@ -269,6 +290,8 @@ hand.
   0.1.1 and 0.5.7, that a new install and upgraded 0.1.1 and 0.5.7 installs all
   match the models (`alembic check`), and that downgrading restores each
   release's schema. A model change without its migration fails there, in CI.
+- On SQLite, a release's database stores enums by name (`MOVIE`, `PENDING`)
+  and booleans as 0/1: data written for a migration test must look the same.
 
 ### Multi-Stage Deletion Pipeline
 
@@ -364,12 +387,34 @@ docker run -dp 8655:8655 deduparr:test
 
 Production uses multi-stage build: frontend → backend → nginx+supervisor runtime.
 
+### Branches and Pull Requests
+
+- One branch per piece of work, and its pull request targets `develop`. `main`
+  only receives `develop`, when a version is cut.
+- CI runs on the pull request, not on a pushed branch.
+- Pull requests are squash-merged, so the commit subject ends with `(#n)`: the
+  release notes find the pull request from it.
+- Dependabot's pull requests merge themselves once CI passes
+  ([docs/DEPENDABOT_AUTO_MERGE.md](docs/DEPENDABOT_AUTO_MERGE.md)).
+
 ### Releases
 
-How a version is cut and its notes written: [docs/RELEASING.md](../docs/RELEASING.md). Every
+How a version is cut and its notes written: [docs/RELEASING.md](docs/RELEASING.md). Every
 release uses the notes format there; v0.6.0 is the model.
 
 ## Code Conventions
+
+### Layout and Naming
+
+- Backend services are grouped by domain under `app/services/`: `media_server`,
+  `arr`, `scan`, `deletion`, `notifications`, `download`, `shared`. A file is
+  named for its role (`pipeline.py`, `runner.py`), and for its thing and role
+  where several share one (`plex_adapter.py`, `radarr_service.py`).
+- Every frontend API call goes through `src/services/api.ts`, and the stored
+  configuration is one React Query key, `["config"]`.
+- No dead code paths: reconnect them or remove them.
+- Prefer the clean design over compatibility layers: Deduparr has few users,
+  and existing data moves with a generated migration.
 
 ### Import Organization
 
@@ -433,6 +478,20 @@ async def test_function(test_db):
     # Test implementation
 ```
 
+Mocks have hidden real defects here: a patched-out pipeline hid that scheduled
+deletion deleted nothing, and an `os.path.exists` that always answered True hid
+the disk stage deleting other titles' files. Test file handling on a real
+temporary directory, and a flow end to end.
+
+The end-to-end suite (`frontend/e2e/`) runs against stand-ins for Jellyfin,
+Radarr, Sonarr and qBittorrent (`fake-jellyfin/`, `fake-services/`), which
+behave like the real APIs wherever Deduparr depends on them, quirks included.
+Its database is never reset, so each spec works on a title unique to its run
+(`uniqueTitle`). Playwright reuses whatever already listens on its ports. Select
+by `data-testid` and assert `toHaveCount(1)`; a toast's text appears twice, in
+the toast and in its live announcer. The `/api/scan/dev/*` endpoints that seed
+duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets.
+
 ## Integration Points
 
 ### Plex API (`plexapi`)
@@ -460,6 +519,17 @@ async def test_function(test_db):
   - `post_command()`: Execute commands (RescanMovie, RescanSeries)
   - `update_movie()` / `update_series()`: Send an item back changed, e.g. a new path
 
+Behaviour read from Radarr's and Sonarr's source, which the rescans rely on:
+- `RescanMovie`/`RescanSeries` re-read one item from disk, or every item when
+  given no id.
+- `DownloadedMoviesScan`/`DownloadedEpisodesScan` refuse a folder that belongs
+  to an item, and read any other folder's name as a title ("Unknown Movie").
+- `RefreshMovie`/`RefreshSeries` re-read the disk only as the *arr's "Rescan
+  after refresh" setting allows; commands sent through the API count as manual.
+- Identical queued commands are merged into one.
+- Root folders are stored with a trailing `/`, and a root folder can never be
+  an item's path.
+
 **Usage Pattern:**
 ```python
 from app.services.arr.client import RadarrClient, ArrConnectionError
@@ -476,7 +546,8 @@ except ArrConnectionError as e:
 
 `QBittorrentService` (`services/download/qbittorrent_service.py`) finds the
 torrent holding a file and removes it by hash; the deletion pipeline above says
-when.
+when. `qbittorrent-api` sends `hash` in the POST form, encodes booleans as
+`"True"`, and raises `LoginFailed` with no message; the stand-in mirrors this.
 
 ## Common Gotchas
 
@@ -485,57 +556,10 @@ when.
 3. **Plex Media Structure**: Files are at `media.media[0].parts[0].file`, not directly on media object.
 4. **Model Imports**: Import from `app.models` package (models/__init__.py), not individual files.
 5. **Frontend API URL**: Uses env var `VITE_API_URL`, defaults to `http://localhost:3001` in dev.
+6. **Processed sets are history**: when an item is duplicated again, the scan opens a new pending set.
+7. **Deep scan only logs**: it reports duplicates the media server does not list, and creates no sets from them.
 
-## Phase 1 Implementation Status
+## Status and Roadmap
 
-**Fully Implemented ✅:**
-- Database models and migrations (all 5 core models)
-- Plex OAuth authentication flow with encrypted token storage
-- Complete duplicate detection for movies and episodes
-- Plex library scanning and media info extraction
-- Scoring engine with configurable regex rules
-- Multi-stage deletion pipeline with rollback support
-- Complete API endpoints:
-  - Setup routes (OAuth, service testing, configuration)
-  - Scan routes (duplicate detection, deletion, status)
-  - Config routes (library selection, settings)
-  - Stats routes (dashboard, activity, deletions)
-  - Scoring routes (custom rules management)
-- All backend services:
-  - PlexService (OAuth, library scanning, media detection)
-  - RadarrService (API integration, file deletion)
-  - SonarrService (API integration, episode deletion)
-  - QBittorrentService (torrent management)
-  - DeletionPipeline (multi-stage deletion with error handling)
-  - ScoringEngine (quality-based file scoring)
-  - StatsService (dashboard metrics)
-  - SetupService (wizard, connection testing)
-  - Security service (token encryption/decryption)
-- Frontend UI components with React Query integration:
-  - Dashboard with real-time statistics
-  - Scan page with duplicate management and dry-run deletion
-  - DefaultPageLayout component system for consistent UI
-- Hardlink detection in duplicate files
-- Type-safe codebase (no `any` types in TypeScript or Python)
-- Comprehensive test suite (pytest with async support)
-
-**Also implemented:**
-- Jellyfin support, alongside or instead of Plex (#470)
-- Bulk deletion of every pending set (#442)
-
-**Partially Implemented ⏳:**
-- Settings page (UI exists, needs backend integration)
-- Setup wizard (UI exists, needs OAuth flow refinement)
-
-**Not Yet Implemented ❌:**
-- Plex smart collections support
-- Kometa integration
-- Preview thumbnails from Plex
-- "Keep both" option with reason logging
-- Export/import configuration
-- Scheduled scans (automation)
-- Auto-approve rules
-- Advanced analytics
-- Webhook notifications
-
-Refer to `todo/IMPLEMENTATION_PLAN.md` for detailed roadmap and feature specifications.
+What each version shipped is in [docs/releases/](docs/releases/); the roadmap is in
+`todo/IMPLEMENTATION_PLAN.md`.

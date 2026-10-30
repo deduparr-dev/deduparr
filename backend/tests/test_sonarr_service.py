@@ -3,7 +3,7 @@ Tests for Sonarr service
 """
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 from app.services.arr.client import SonarrClient
 from app.services.arr.sonarr_service import SonarrService
@@ -29,8 +29,9 @@ async def test_sonarr_client_initialization(test_db):
         client = await service._get_client()
 
         mock_client_class.assert_called_once_with(
-            base_url="http://localhost:8989", api_key="test_api_key"
+            base_url="http://localhost:8989", api_key="test_api_key", path_mapper=ANY
         )
+        assert not mock_client_class.call_args.kwargs["path_mapper"]
         assert client == mock_client
 
 

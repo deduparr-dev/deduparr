@@ -10,12 +10,16 @@ import pytest
 
 from app.services.arr.client import RadarrClient, SonarrClient
 from app.services.arr.helpers import rescan_media_item
+from app.services.arr.path_mapping import PathMapper
 
 LOG = logging.getLogger("test")
 
 
-def _radarr(path: str = "/movies/Test Movie (2024)", root: str = "/movies/"):
+def _radarr(
+    path: str = "/movies/Test Movie (2024)", root: str = "/movies/", mappings: str = ""
+):
     client = create_autospec(RadarrClient, instance=True)
+    client.path_mapper = PathMapper.from_text(mappings)
     client.get_movie.return_value = {
         "id": 1,
         "title": "Test Movie",
@@ -43,15 +47,35 @@ async def test_rescan_media_item_rescans_the_movie_holding_the_kept_file():
 
 
 @pytest.mark.asyncio
-async def test_rescan_media_item_points_the_movie_at_a_kept_file_elsewhere():
+@pytest.mark.parametrize(
+    "mappings",
+    ["", "/data/movies=/movies", "/data/tv=/tv"],
+    ids=["no mappings", "a mapping covers it", "a root folder holds it"],
+)
+async def test_rescan_media_item_points_the_movie_at_a_kept_file_elsewhere(mappings):
     """A kept file outside the movie's folder moves the movie there first."""
-    client = _radarr(path="/movies/Old Path")
+    client = _radarr(path="/movies/Old Path", mappings=mappings)
 
     await rescan_media_item(client, 1, "/movies/New Path/movie.mkv", LOG)
 
     client.update_movie.assert_awaited_once()
     assert client.update_movie.await_args.args[0]["path"] == "/movies/New Path"
     client.post_command.assert_awaited_once_with("RescanMovie", movieId=1)
+
+
+@pytest.mark.asyncio
+async def test_rescan_media_item_leaves_a_kept_file_no_path_mapping_covers():
+    """
+    Radarr would get the folder as the media server sees it, which it may
+    not see at all: the movie keeps its path, and the user is told why.
+    """
+    client = _radarr(mappings="/data/movies=/movies")
+
+    with pytest.raises(ValueError, match="no path mapping covers /downloads/Film"):
+        await rescan_media_item(client, 1, "/downloads/Film/movie.mkv", LOG)
+
+    client.update_movie.assert_not_awaited()
+    client.post_command.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -33,9 +33,10 @@ async def rescan_media_item(
     another folder gets the item pointed at that folder first.
 
     Raises:
-        ValueError: The kept file sits directly in a root folder. The *arr
-            refuses a root folder as a movie or series path, and the kept file
-            is not moved behind the user's back.
+        ValueError: The kept file sits directly in a root folder, which the
+            *arr refuses as a movie or series path, or in a folder that no
+            path mapping covers and no root folder holds, so the *arr may not
+            see it. The kept file is not moved behind the user's back.
     """
     if isinstance(client, RadarrClient):
         arr, kind, command, id_param = "Radarr", "movie", "RescanMovie", "movieId"
@@ -55,8 +56,9 @@ async def rescan_media_item(
     current_path = item.get("path", "")
     folder = os.path.dirname(kept_file_path)
 
+    roots = await client.get_root_folder()
     # Root folders picked in the *arr's folder browser carry a trailing slash
-    for root in await client.get_root_folder():
+    for root in roots:
         if root.get("path", "").rstrip("/") == folder.rstrip("/"):
             raise ValueError(
                 f"{arr} cannot import {kept_file_path}: it sits directly in the "
@@ -65,6 +67,19 @@ async def rescan_media_item(
             )
 
     if current_path and not _within(current_path, folder):
+        # A folder no mapping covers reaches the *arr as the media server sees
+        # it, which is right only where both see the same path
+        mapper = client.path_mapper
+        if (
+            mapper
+            and not mapper.covers(folder)
+            and not any(r.get("path") and _within(r["path"], folder) for r in roots)
+        ):
+            raise ValueError(
+                f"{arr} cannot import {kept_file_path}: no path mapping covers "
+                f"{folder}, and none of {arr}'s root folders holds it. Move it "
+                f"into {current_path} and refresh the {kind} in {arr}."
+            )
         logger_instance.info(
             f"{arr} keeps this {kind} in {current_path}; pointing it at {folder}"
         )

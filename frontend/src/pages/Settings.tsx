@@ -608,6 +608,8 @@ interface ServiceSettingsProps {
   setUsername?: (value: string) => void;
   password?: string;
   setPassword?: (value: string) => void;
+  pathMappings?: string;
+  setPathMappings?: (value: string) => void;
   /** A key saved but kept out of the field; a blank field tests with it */
   storedApiKey?: string;
   result?: ConnectionTestResult;
@@ -624,6 +626,8 @@ function ServiceSettings({
   setUsername,
   password,
   setPassword,
+  pathMappings,
+  setPathMappings,
   storedApiKey,
   result,
   recordTest,
@@ -695,6 +699,28 @@ function ServiceSettings({
             onChange={(e) => setApiKey?.(e.target.value)}
             className="mt-2"
           />
+        </div>
+      )}
+
+      {setPathMappings && (
+        <div>
+          <Label htmlFor="path-mappings">Path mappings (optional)</Label>
+          <textarea
+            id="path-mappings"
+            rows={3}
+            placeholder={service === "radarr" ? "/data/movies=/movies" : "/data/series=/series"}
+            value={pathMappings || ""}
+            onChange={(e) => setPathMappings(e.target.value)}
+            className="mt-2 flex w-full rounded-md border border-border bg-card px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:border-muted-foreground"
+          />
+          <p className="text-sm text-muted-foreground mt-2">
+            Only needed when {service === "radarr" ? "Radarr" : "Sonarr"} and your media server see
+            the library under different paths. One mapping per line, written as{" "}
+            <code>
+              path in {service === "radarr" ? "Radarr" : "Sonarr"}=path in the media server
+            </code>
+            .
+          </p>
         </div>
       )}
 
@@ -777,8 +803,14 @@ function SettingsContent({
   const [selectedServer, setSelectedServer] = useState(initialConfig.plex_server_name || "");
   const [radarrUrl, setRadarrUrl] = useState(initialConfig.radarr_url || "");
   const [radarrApiKey, setRadarrApiKey] = useState(initialConfig.radarr_api_key || "");
+  const [radarrPathMappings, setRadarrPathMappings] = useState(
+    initialConfig.radarr_path_mappings || ""
+  );
   const [sonarrUrl, setSonarrUrl] = useState(initialConfig.sonarr_url || "");
   const [sonarrApiKey, setSonarrApiKey] = useState(initialConfig.sonarr_api_key || "");
+  const [sonarrPathMappings, setSonarrPathMappings] = useState(
+    initialConfig.sonarr_path_mappings || ""
+  );
   const [qbitUrl, setQbitUrl] = useState(initialConfig.qbittorrent_url || "");
   const [qbitUsername, setQbitUsername] = useState(initialConfig.qbittorrent_username || "");
   const [qbitPassword, setQbitPassword] = useState(initialConfig.qbittorrent_password || "");
@@ -850,6 +882,10 @@ function SettingsContent({
 
         await setupAPI.saveConfig(config);
 
+        // Path mappings are saved on their own so that clearing them works
+        await configAPI.setValue("radarr_path_mappings", radarrPathMappings);
+        await configAPI.setValue("sonarr_path_mappings", sonarrPathMappings);
+
         // Invalidate caches to refetch fresh data from backend
         queryClient.invalidateQueries({ queryKey: ["config"] });
         queryClient.invalidateQueries({ queryKey: ["config", "deep-scan"] });
@@ -900,6 +936,8 @@ function SettingsContent({
     setRadarrApiKey(initialConfig.radarr_api_key || "");
     setSonarrUrl(initialConfig.sonarr_url || "");
     setSonarrApiKey(initialConfig.sonarr_api_key || "");
+    setRadarrPathMappings(initialConfig.radarr_path_mappings || "");
+    setSonarrPathMappings(initialConfig.sonarr_path_mappings || "");
     setQbitUrl(initialConfig.qbittorrent_url || "");
     setQbitUsername(initialConfig.qbittorrent_username || "");
     setQbitPassword(initialConfig.qbittorrent_password || "");
@@ -1011,6 +1049,8 @@ function SettingsContent({
               setUrl={setRadarrUrl}
               apiKey={radarrApiKey}
               setApiKey={setRadarrApiKey}
+              pathMappings={radarrPathMappings}
+              setPathMappings={setRadarrPathMappings}
               result={testResults.radarr}
               recordTest={recordTest}
             />
@@ -1022,6 +1062,8 @@ function SettingsContent({
               setUrl={setSonarrUrl}
               apiKey={sonarrApiKey}
               setApiKey={setSonarrApiKey}
+              pathMappings={sonarrPathMappings}
+              setPathMappings={setSonarrPathMappings}
               result={testResults.sonarr}
               recordTest={recordTest}
             />

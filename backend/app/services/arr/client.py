@@ -16,6 +16,8 @@ from typing import List, Mapping, Optional, TypedDict, Union, cast, overload
 
 import httpx
 
+from app.services.arr.path_mapping import PathMapper
+
 logger = logging.getLogger(__name__)
 
 JsonObject = dict[str, object]
@@ -164,6 +166,7 @@ class ArrClient:
         api_key: str,
         timeout: Optional[Union[float, httpx.Timeout]] = None,
         verify_ssl: bool = True,
+        path_mapper: Optional[PathMapper] = None,
     ):
         """
         Initialize *arr client
@@ -173,9 +176,13 @@ class ArrClient:
             api_key: API key for authentication
             timeout: Request timeout in seconds (float) or httpx.Timeout object. Defaults to 30.0
             verify_ssl: Whether to verify SSL certificates. Defaults to True
+            path_mapper: Translates paths between the *arr's view and the media
+                server's view of the library. Requests and responses are translated,
+                so callers only handle the paths the media server reports.
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.path_mapper = path_mapper
         self.api_version = "v3"
         # store optional client configuration for use when creating httpx AsyncClient
         self.timeout = timeout
@@ -240,6 +247,10 @@ class ArrClient:
         """
         client = await self._get_client()
 
+        if self.path_mapper:
+            params = self.path_mapper.translate_to_arr(params)
+            json_data = self.path_mapper.translate_to_arr(json_data)
+
         try:
             response = await client.request(
                 method=method,
@@ -263,10 +274,13 @@ class ArrClient:
                 return {}
 
             try:
-                return response.json()
+                data = response.json()
             except ValueError as e:
                 # A login page or a proxy's error page, for instance
                 raise ArrClientError(f"{endpoint} did not answer with JSON: {e}")
+            if self.path_mapper:
+                data = self.path_mapper.translate_to_media_server(data)
+            return data
 
         except httpx.ConnectError as e:
             raise ArrConnectionError(f"Failed to connect to {self.base_url}: {e}")
@@ -343,9 +357,14 @@ class RadarrClient(ArrClient):
         api_key: str,
         timeout: int = 30,
         verify_ssl: bool = True,
+        path_mapper: Optional[PathMapper] = None,
     ):
         super().__init__(
-            base_url=base_url, api_key=api_key, timeout=timeout, verify_ssl=verify_ssl
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+            path_mapper=path_mapper,
         )
         self.api_version = "v3"
 
@@ -452,9 +471,14 @@ class SonarrClient(ArrClient):
         api_key: str,
         timeout: int = 30,
         verify_ssl: bool = True,
+        path_mapper: Optional[PathMapper] = None,
     ):
         super().__init__(
-            base_url=base_url, api_key=api_key, timeout=timeout, verify_ssl=verify_ssl
+            base_url=base_url,
+            api_key=api_key,
+            timeout=timeout,
+            verify_ssl=verify_ssl,
+            path_mapper=path_mapper,
         )
         # Start with v5, will auto-detect and fall back to v3 if needed
         self.api_version = "v5"

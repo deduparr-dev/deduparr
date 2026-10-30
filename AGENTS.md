@@ -510,6 +510,9 @@ duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets
 - **RadarrClient** (`app.services.arr.client.RadarrClient`): Radarr API v3 client
 - **SonarrClient** (`app.services.arr.client.SonarrClient`): Sonarr API v3/v5 client
 - Both use `httpx.AsyncClient` for async HTTP requests
+- With path mappings set (`app.services.arr.path_mapping.PathMapper`), the
+  client translates every path it exchanges with the *arr, so the code above it
+  works with the paths the media server reports
 - Error handling via `ArrConnectionError` exception
 - API keys stored in `Config` model (encrypted)
 - Responses are typed with the TypedDicts in `client.py` (`MediaItem`,

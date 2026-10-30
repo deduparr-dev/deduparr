@@ -29,7 +29,7 @@ itsdangerous==2.2.0  # Reads tokens stored signed, before they were encrypted
 psutil==7.2.2  # For system information
 
 # Development
-pytest==9.1.1
+pytest==9.2.0
 pytest-asyncio==1.4.1
 pytest-cov==7.1.0
 black==26.10.1

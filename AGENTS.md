@@ -1,20 +1,86 @@
 # Deduparr Agent Instructions
 
+Deduparr finds duplicate movies and episodes on Plex and Jellyfin, scores them by
+quality, and removes the lower-quality copies across Radarr, Sonarr and
+qBittorrent. It deletes real files, so everything here serves one question: what
+does it really do to a real library?
+
+## Documentation Map
+
+| Read | For |
+|---|---|
+| This file | How we work, and the rules for every change |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | How it is built: media servers, Plex sign-in, the data model, the deletion pipeline, what the real services do |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setting up, commit messages, the pull request checklist |
+| [quadlet/README.md](quadlet/README.md) | The Podman stack |
+| [docs/RELEASING.md](docs/RELEASING.md) | Cutting a version, and its notes |
+
 ## How We Work
 
 Be critical. Base everything on facts: code you read, a command you ran, the API documentation. Do not guess.
 
-1. **Check the entire codebase first.** Stay consistent with what is there, and reuse shared components, helpers and services wherever it makes sense. We build a deduplication app: duplicate code is a defect.
-2. **Understand before changing.** Read whole files, and check `git blame`, old pull requests and issues for how the code is supposed to work.
-3. **Correct, tight and minimal.** Implement it correctly and to best practice, with no more code than it needs.
-4. **Review your own change.** Look for bugs, and list what you find and what could improve at the end, for discussion, rather than fixing beyond the task.
-5. **Test against the real stack, as a user would.** Run the Podman stack ([quadlet/](quadlet/README.md)) and test every server and service with real calls and real logs, the backend API directly, and every flow through the frontend (port 3000) with Playwright. Conclusions are reproducible defects in the current code, not speculative edge cases.
-6. **Only the tests and comments that are needed.** No debug output or clutter in the code.
-7. **The full suite is heavy.** Run the tests you touch while working, and `scripts/test.sh` once, before committing a pull request.
-8. **No AI attribution** in commits, pull requests or code. `.claude/settings.json` turns it off for Claude Code.
-9. **No summary or report documents** in the repository: the reasoning goes in commit messages and pull requests.
-10. **Reference project**: [maintainerr](https://github.com/Maintainerr/Maintainerr) solves the same media server and *arr problems. Look at how it does things; do not copy it.
-11. **Subagents**, if you use any, run on the most capable model: Opus in Claude Code.
+1. **Check the entire codebase first.** Stay consistent with what is there, and reuse shared components, modals, helpers and services wherever it makes sense. We build a deduplication app: duplicate code is a defect.
+2. **Implement it correctly**, following this file and [ARCHITECTURE.md](ARCHITECTURE.md).
+3. **Review your own change.** Look for bugs, and list what you find and what could improve at the end, for discussion, rather than fixing beyond the task.
+4. **Test against the real stack, as a user would**: see [The Real Stack](#the-real-stack). Every server and service with real calls and real logs, the backend API directly, and every flow through the frontend with Playwright. Conclusions are reproducible defects in the current code, not speculative edge cases.
+5. **Tight, trimmed and minimal, but best practice and functional.** No more code than it needs. This one matters most.
+6. **Understand before changing.** Read whole files, and check `git blame`, old pull requests and issues for how the code is supposed to work.
+7. **Subagents**, if you use any, run on the most capable model: Opus in Claude Code.
+8. **The full suite is heavy.** Run the tests you touch while working, and `scripts/test.sh` once, before committing a pull request.
+9. **Only the tests and comments that are needed.** No debug output or clutter in the code.
+10. **No AI attribution** in commits, pull requests or code. `.claude/settings.json` turns it off for Claude Code.
+11. **No summary or report documents** in the repository: the reasoning goes in commit messages and pull requests.
+12. **Reference project**: [maintainerr](https://github.com/Maintainerr/Maintainerr) solves the same media server and *arr problems. Look at how it does things; do not copy it.
+
+### Changing Behaviour
+
+1. **Reproduce it first**, on the real stack, and keep what you saw.
+2. **Trace the whole flow** the change touches, across the frontend, the API, the services and the external APIs, including their documentation.
+3. **Say what must stay as it is**: a deletion guard, a security contract, a neighbouring flow.
+4. **Make the smallest complete fix.** Report what you find along the way separately.
+5. **Verify what a user would observe.** A 200 and a counter are what Deduparr claims, not what happened: check the files on disk, what each service now holds, the logs and the screen.
+6. **Clean up**: restore the fixtures, stop what you started. Evidence stays out of the repository and holds no credentials.
+7. **Finish what was asked** without asking again for what is already authorized.
+
+## The Real Stack
+
+Verification runs against real services, not stand-ins. A stand-in answered `{}` where Radarr answers a delete with nothing at all, and so hid that deleting any tracked file failed; another sent episode ids real Sonarr never sends. Those are the defects this rule exists for.
+
+On the maintainers' dev box a lab holds the real stack, reachable by name from that box only. Use the names: the addresses change whenever a service restarts.
+
+| Service | From the box |
+|---|---|
+| Plex, server `deduparr-plex` | `http://deduparr-plex:32400` |
+| Jellyfin | `http://deduparr-jellyfin:8096` |
+| Radarr | `http://deduparr-radarr:7878` |
+| Sonarr | `http://deduparr-sonarr:8989` |
+| qBittorrent | `http://deduparr-qbittorrent:8654` |
+
+- **Credentials** are in `/lab/creds.env` (`set -a; . /lab/creds.env; set +a`). They, and the name and email of the lab's Plex account, never appear in a commit, pull request, issue, comment or screenshot.
+- **Run Deduparr from the checkout** ([Local Development](#local-development)) with `MEDIA_DIR=/media`, on ports of its own: a dev stack may already be running. `/media` is the path every service reports, so every deletion stage runs for real. The lab's base fixtures and the way to sign in to Plex without a browser are in the box's private instructions (`~/.claude/CLAUDE.md`).
+- **Tests delete for real.** After each one, `python3 /lab/seed.py --restore` (about 30 s) puts back the files, the torrents and the *arr tracking and rescans both servers; `--verify` only checks. Restore removes anything else in `/media`, so keep nothing else there.
+- **Leave the services' settings alone**, and never add an indexer or download anything: production defaults plus a user's setup is what makes the results hold in production. A new fixture changes the base, which is the owner's call.
+- **Only use the server `deduparr-plex`**: the account sees others that are not part of the lab.
+- **Drive the frontend with Playwright**, using the browser already in `/ms-playwright`: it is shared, so never install into or change it.
+- **For each deleting test**, compare before and after: the files with their link counts, what Radarr and Sonarr track, the torrents, and the items on both servers.
+
+Without the lab, run your own real servers. If a service cannot be reached, say in the pull request what was not verified, and do not present a stand-in's pass as verification.
+
+## Writing Tests
+
+A test records approved behaviour and guards it. What earns one: a data-safety guard, a security contract, a defect that was fixed. Not worth one: constants, log text, a pass-through.
+
+- **One test for one behaviour**, on the production code path. A guard's test has to fail without the guard. Never change a test just to make it pass: fix the code, unless the behaviour changed on purpose.
+- **Backend** tests use in-memory SQLite and pytest-asyncio, mock only what lies outside the process, and open no real network or timers:
+
+  ```python
+  @pytest.mark.asyncio
+  async def test_function(test_db):
+      ...
+  ```
+
+  Test file handling on a real temporary directory. Mocks have hidden real defects here: a patched-out pipeline hid that scheduled deletion deleted nothing, and an `os.path.exists` that always answered True hid the disk stage deleting other titles' files.
+- **The end-to-end suite** (`frontend/e2e/`) is what lets CI run without servers. It runs against stand-ins for Jellyfin, Radarr, Sonarr and qBittorrent (`fake-jellyfin/`, `fake-services/`), which keep a real service's answers, quirks included: when the real one differs, correct the stand-in. Passing it verifies no integration. Its database is never reset, so each spec works on a title unique to its run (`uniqueTitle`). Outside CI, Playwright reuses whatever already listens on its ports. Select by `data-testid` and assert `toHaveCount(1)`; a toast's text appears twice, in the toast and in its live announcer. The `/api/scan/dev/*` endpoints that seed duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets.
 
 ## Coding Standards
 
@@ -32,11 +98,7 @@ Be critical. Base everything on facts: code you read, a command you ran, the API
    - For flexible objects, use specific record types: `Record<string, string>` not `Record<string, any>`
    - Example: ❌ `function process(data: any)` → ✅ `function process(data: { id: number; value: string })`
 5. **Code Formatting**: Always format code with `black` and lint with `ruff --fix` before committing. Run tests after formatting to ensure nothing broke.
-6. **Test-Driven Development**:
-   - Create tests for every feature and change
-   - Tests must validate actual production code and real scenarios
-   - Never modify tests just to make them pass - fix the production code instead
-   - Exception: When production behavior intentionally changes, update test expectations (not logic)
+6. **Tests**: every feature and fix comes with what [Writing Tests](#writing-tests) says it needs.
 7. **Thorough Analysis**: Read entire files, don't skip sections. Understand full context before making changes.
 8. **Debugging Protocol**:
    - Document findings comprehensively
@@ -45,16 +107,6 @@ Be critical. Base everything on facts: code you read, a command you ran, the API
    - Compare actual implementation against documented requirements
 9. **Issue Reporting**: List discovered issues at end of analysis for discussion - don't auto-fix without approval.
 10. **Self-Sufficiency**: Use the tools you have to search and read the code instead of asking users to run commands.
-
-## Project Overview
-
-Deduparr is a duplicate media management system for the *arr ecosystem (Plex/Jellyfin/Radarr/Sonarr/qBittorrent). It detects duplicate movies/episodes, scores them by quality, and safely removes lower-quality versions across all services.
-
-**Tech Stack:**
-- Backend: Python 3.15 + FastAPI + SQLAlchemy (async)
-- Frontend: React 19 + TypeScript + Vite + TailwindCSS
-- Database: SQLite (default) or PostgreSQL
-- Deployment: Docker multi-stage builds
 
 **External API Documentation:**
 - **Radarr API**: https://radarr.video/docs/api/
@@ -154,111 +206,18 @@ Deduparr is a duplicate media management system for the *arr ecosystem (Plex/Jel
 - Use destructuring to reduce repetition
 - Prefer explicit conditionals over inline ternary chains
 
-## Architecture Patterns
+## Development Workflows
 
-### Async-First Backend
+### Running Tests
 
-All database operations use async/await. Database sessions via `AsyncSession`, models inherit from `Base`, and the engine is `create_async_engine`. When writing new endpoints or services:
-
-```python
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        yield session
-
-# In endpoints
-async def endpoint(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Model))
+```bash
+cd backend
+pytest                          # Run all tests
+pytest --cov=app tests/         # With coverage
+pytest tests/test_plex_service.py -v  # Specific test file
 ```
 
-### Media Servers
-
-Deduparr reads libraries from Plex, Jellyfin, or both at once. Everything above
-`app/services/media_server/` works against one contract and never touches a
-server SDK, except the setup wizard, which lists Plex libraries through
-`PlexService` (`setup_service.get_plex_libraries`):
-
-- `base.py` - the `MediaServer` protocol and `DuplicateGroup`, which carries an
-  item id, a title and the `MediaMetadata` of each file
-- `plex_adapter.py` / `jellyfin_adapter.py` - one per server
-- `file_probe.py` - sample detection and video extensions, which both adapters
-  and the disk scanner share, and the stat/inode probe (`probe_file`) the
-  adapters use
-- `__init__.py` - `get_media_servers(db)`, and `selected_libraries()` for the
-  per-server `plex_libraries` / `jellyfin_libraries` selection
-
-**A server counts as configured when its credentials are present**, so there is
-no separate "which server" setting to drift out of step. Duplicate sets are
-keyed on `(media_server, item_id)`: the same title on both servers stays two
-sets, and one server's scan never discards the other's findings.
-
-Authentication is deliberately outside the protocol, because the two differ:
-
-- **Plex** uses the plex.tv OAuth PIN flow described below
-- **Jellyfin** uses a server URL and an API key, which **must belong to an
-  administrator** - library paths and scan triggers are admin-only endpoints,
-  and item queries need a user id only an admin key can look up
-
-The Jellyfin adapter uses the official `jellyfin-apiclient-python` SDK. That
-SDK is synchronous, so every call goes through `asyncio.to_thread`. Two of its
-quirks are worth knowing: `get_system_info()` reads `System/Configuration` and
-carries no version (`get_system_info_new()` reads `System/Info`), and Jellyfin
-routes and binds query parameters case-insensitively, which the SDK relies on.
-`authenticate()` does not raise on a rejected key: the server entry keeps its
-`Id` and has no `AccessToken`, while an unreachable server has no `Id` at all.
-
-A duplicate on Jellyfin is an item with more than one `MediaSource`. Jellyfin
-reports no resolution label, so the scoring engine derives it from the height.
-
-`e2e/fake-jellyfin/` is a stand-in server so the suite can drive the adapter
-without a Jellyfin install; demo.jellyfin.org is a real one to check against.
-
-### Plex OAuth Authentication Flow
-
-Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token entry, this project uses **plex.tv OAuth with PIN login ONLY**:
-
-1. Frontend calls `PlexAuthService.initiate_auth()` → returns PIN and OAuth URL
-2. User visits OAuth URL and authorizes
-3. Frontend polls `PlexAuthService.check_auth(pin_id)` → returns the **encrypted** token when complete
-4. Encrypted token stored in database (`Config` model with key `plex_auth_token`)
-5. `PlexService` reads the token back on demand to connect to Plex servers
-
-**Security Features:**
-- **Encrypted secrets**: tokens, API keys and passwords are stored encrypted with Fernet (`cryptography`), under a key derived from the key file; startup converts older signed or plain values. The API returns a set secret only as `SECRET_MASK`, and sending the mask or a blank back keeps the stored one. A connection test sends a stored secret only to the server stored with it
-- **File-based key**: stored in `/app/data/.encryption_key` (separate from database). Losing it loses the secrets, which are then entered again
-- **No CORS**: the frontend is same-origin, so another site in the browser cannot call the API; there is still no login
-- **Secure Logging**: secrets are never logged, not even in part; a logging filter masks known patterns
-
-**Critical:** 
-- For **Plex**, never use direct server URLs and never support manual token
-  entry - OAuth only. This rule is specific to Plex; Jellyfin is configured
-  with a URL and an admin API key, which is the only thing it offers.
-- Always authenticate via plex.tv token first
-- Tokens/API keys are encrypted using `services/shared/security.py`
-- Use `get_token_manager()` for encrypting and reading back secrets (`encrypt()`/`decrypt()`; works for any service)
-- The key file is at `/app/data/.encryption_key` (auto-generated, persists via Docker volume)
-- `security.py` is service-agnostic - use it for Plex, Radarr, Sonarr, qBittorrent, etc.
-
-### Database Models Structure
-
-The schema is owned by **Alembic** (`backend/alembic/`), applied on startup by
-`init_db()`. A model change reaches it as described in
-[Database Migrations](#database-migrations).
-
-Five core models with specific relationships:
-
-- `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`).
-  `media_server` + `item_id` say which server reported it and its id there
-  (`item_id` is stored as `plex_item_id`, the column's 0.5.7 name)
-- `DuplicateFile`: Individual file in duplicate set (its `deletion_history` is a
-  list; the pipeline keeps one row per file)
-- `DeletionHistory`: Tracks multi-stage deletion (*arr → qBittorrent → disk → media server refresh)
-- `ScoringRule`: User-defined regex patterns for scoring
-- `Config`: Key-value settings store
-
-`DeletionHistory.media_server_refreshed` (stored as `plex_refreshed`) records
-the final stage for whichever server owns the set.
-
-All models use timezone-aware UTC timestamps via `datetime.now(timezone.utc)`. Enums defined as `str, enum.Enum` for JSON serialization.
+What to test, and how: [Writing Tests](#writing-tests).
 
 ### Database Migrations
 
@@ -295,47 +254,6 @@ hand.
   release's schema. A model change without its migration fails there, in CI.
 - On SQLite, a release's database stores enums by name (`MOVIE`, `PENDING`)
   and booleans as 0/1: data written for a migration test must look the same.
-
-### Multi-Stage Deletion Pipeline
-
-`DeletionPipeline` (`services/deletion/pipeline.py`) deletes one file in these
-stages, tracked in `DeletionHistory`:
-
-1. `deleted_from_arr`: delete through Radarr/Sonarr, which removes the file
-2. `deleted_from_qbit`: remove the torrent holding the file, with its data -
-   unless the torrent holds other videos too (a season pack, or the kept file)
-3. `deleted_from_disk`: delete the file if still on disk, then the side files
-   named after it (.nfo, subtitles, artwork), and the release's
-   Sample/Subs/Proof/Extras folders once no other video shares the directory,
-   then the folders left empty - up to the library folder the media server
-   reports, never it, and none when the server cannot list its libraries
-4. `media_server_refreshed`: refresh the item on the server that reported it
-
-Once every file of the set is done, and if any was deleted, the *arr rescans
-once for the set: `RescanMovie`/`RescanSeries` re-reads the item from disk,
-importing the kept file - or the whole library when the *arr tracks neither
-file, as it may hold one under its own mount. A kept file directly in a root
-folder cannot be imported; it is never moved, and the result says so.
-
-A file is only ever identified by more than its name, since other titles share
-names like `S01E01.mkv`: on disk by the media server's path, or that path's
-tail under the media directory at the reported size; in qBittorrent by full
-path, or by name and size. A file counts as deleted only once it is gone from
-disk; anything less is an error and the set stays pending for a retry. The
-dashboard counts deletions the same way (`DeletionHistory.is_complete`).
-
-## Development Workflows
-
-### Running Tests
-
-```bash
-cd backend
-pytest                          # Run all tests
-pytest --cov=app tests/         # With coverage
-pytest tests/test_plex_service.py -v  # Specific test file
-```
-
-Tests use in-memory SQLite (`sqlite+aiosqlite:///:memory:`) and pytest-asyncio. Mock external services (Plex, *arr APIs) using `unittest.mock`.
 
 ### Docker Rebuild
 
@@ -463,104 +381,6 @@ try:
 except ValueError as e:
     raise HTTPException(status_code=404, detail=str(e))
 ```
-
-### Testing Patterns
-
-Use fixtures for database and mocks. Test async functions with `@pytest.mark.asyncio`:
-
-```python
-@pytest.fixture
-async def test_db():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    # ... yield session
-
-@pytest.mark.asyncio
-async def test_function(test_db):
-    # Test implementation
-```
-
-Mocks have hidden real defects here: a patched-out pipeline hid that scheduled
-deletion deleted nothing, and an `os.path.exists` that always answered True hid
-the disk stage deleting other titles' files. Test file handling on a real
-temporary directory, and a flow end to end.
-
-The end-to-end suite (`frontend/e2e/`) runs against stand-ins for Jellyfin,
-Radarr, Sonarr and qBittorrent (`fake-jellyfin/`, `fake-services/`), which
-behave like the real APIs wherever Deduparr depends on them, quirks included.
-Its database is never reset, so each spec works on a title unique to its run
-(`uniqueTitle`). Outside CI, Playwright reuses whatever already listens on its
-ports. Select by `data-testid` and assert `toHaveCount(1)`; a toast's text
-appears twice, in the toast and in its live announcer. The `/api/scan/dev/*` endpoints that seed
-duplicate sets exist only with `LOG_LEVEL=DEBUG`, which the suite's backend sets.
-
-## Integration Points
-
-### Plex API (`plexapi`)
-
-- OAuth PIN through plex.tv's `/api/v2/pins` (with `requests`), then `MyPlexAccount`
-- Server connection via `account.resource(name).connect()`
-- Media objects: `Movie`, `Show`, `Episode` with nested `.media[0].parts[0]`
-- Refresh libraries: `library.update()`
-
-### *arr APIs (httpx-based clients)
-
-**Direct httpx implementation** (migrated from PyArr):
-- **RadarrClient** (`app.services.arr.client.RadarrClient`): Radarr API v3 client
-- **SonarrClient** (`app.services.arr.client.SonarrClient`): Sonarr API v3/v5 client
-- Both use `httpx.AsyncClient` for async HTTP requests
-- With path mappings set (`app.services.arr.path_mapping.PathMapper`), the
-  client translates every path it exchanges with the *arr, so the code above it
-  works with the paths the media server reports
-- Errors raise `ArrClientError` or a subclass: `ArrConnectionError` (unreachable,
-  timeout), `ArrAuthError` (401/403), `ArrNotFoundError` (404)
-- API keys stored in `Config` model (encrypted)
-- Responses are typed with the TypedDicts in `client.py` (`MediaItem`,
-  `ArrFile`, `Episode`, `QualityProfile`, ...) for the fields Deduparr reads
-- Key methods:
-  - `get_system_status()`: Get version/status info
-  - `get_movie()` / `get_series()`: One item by ID, or all of them
-  - `get_root_folder()`: Get configured root folders
-  - `delete_movie_file()` / `delete_episode_file()`: Delete files
-  - `post_command()`: Execute commands (RescanMovie, RescanSeries)
-  - `update_movie()` / `update_series()`: Send an item back changed, e.g. a new path
-
-Behaviour read from Radarr's and Sonarr's source and their real APIs, which
-Deduparr relies on:
-- A delete answers 200 with an empty body, not JSON.
-- `/manualimport` with the item's id answers "Unknown" for a file not imported
-  yet, and Sonarr gives no quality at all without it; `/parse?title=<file name>`
-  reads the quality and custom formats on both.
-- Sonarr's episode files do not name their episodes.
-- `RescanMovie`/`RescanSeries` re-read one item from disk, or every item when
-  given no id.
-- `DownloadedMoviesScan`/`DownloadedEpisodesScan` refuse a folder that belongs
-  to an item, and read any other folder's name as a title ("Unknown Movie").
-- `RefreshMovie`/`RefreshSeries` re-read the disk only as the *arr's "Rescan
-  after refresh" setting allows; commands sent through the API count as manual.
-- Identical queued commands are merged into one.
-- Root folders are stored with a trailing `/`, and a root folder can never be
-  an item's path.
-
-**Usage Pattern:**
-```python
-from app.services.arr.client import RadarrClient, ArrClientError
-
-client = RadarrClient(base_url="http://localhost:7878", api_key="xxx")
-try:
-    movies = await client.get_movie()
-    await client.post_command("RescanMovie", movieId=movies[0]["id"])
-except ArrClientError as e:
-    logger.error(f"Radarr API error: {e}")
-```
-
-### qBittorrent (`qbittorrent-api`)
-
-`QBittorrentService` (`services/download/qbittorrent_service.py`) finds the
-torrent holding a file and removes it by hash; the deletion pipeline above says
-when. `qbittorrent-api` sends `hash` in the POST form, encodes booleans as
-`"True"`, and raises `LoginFailed` with no message; the stand-in mirrors this.
 
 ## Common Gotchas
 

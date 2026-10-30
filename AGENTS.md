@@ -370,7 +370,7 @@ npm install
 npm run dev
 ```
 
-Backend runs via `uvicorn` with hot reload. In dev the frontend calls the API at `http://localhost:3001` directly (`VITE_API_URL` overrides it); `vite preview` proxies `/api` to `VITE_PROXY_TARGET`, by default `http://127.0.0.1:3001`.
+Backend runs via `uvicorn` with hot reload. The frontend calls `/api` on its own origin: nginx proxies it in production, and Vite's dev and preview servers proxy it to `VITE_PROXY_TARGET`, by default `http://127.0.0.1:3001` (`VITE_API_URL` overrides the base).
 
 ### Docker Development
 
@@ -562,7 +562,7 @@ when. `qbittorrent-api` sends `hash` in the POST form, encodes booleans as
 2. **Async Session Cleanup**: Always use `async with` or `try/finally` to close sessions.
 3. **Plex Media Structure**: Files are at `media.media[0].parts[0].file`, not directly on media object.
 4. **Model Imports**: Import from `app.models` package (models/__init__.py), not individual files.
-5. **Frontend API URL**: Uses env var `VITE_API_URL`, defaults to `http://localhost:3001` in dev.
+5. **Frontend API URL**: relative `/api` everywhere, proxied by nginx in production and by Vite (`VITE_PROXY_TARGET`) in development; `VITE_API_URL` overrides it.
 6. **Processed sets are history**: when an item is duplicated again, the scan opens a new pending set.
 7. **Deep scan only logs**: it reports duplicates the media server does not list, and creates no sets from them.
 8. **Deduparr sees media at the media server's paths**: the scan probes each file at exactly the path the media server reports (`media_server/file_probe.py`) and skips a group with a file it cannot find; only deletion also looks under `/media`. Check both before judging advice about mounts or paths.

@@ -4,7 +4,5 @@
   "description": "Duplicate media management for the *arr ecosystem",
   "author": "hello@deduparr.com",
   "license": "MIT",
-  "repository": "https://github.com/deduparr-dev/deduparr",
-  "python_version": "3.14",
-  "node_version": "20"
+  "repository": "https://github.com/deduparr-dev/deduparr"
 }

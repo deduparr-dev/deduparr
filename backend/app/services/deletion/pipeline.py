@@ -381,9 +381,9 @@ class DeletionPipeline:
         Deletion flow:
         1. Remove from *arr and DELETE FILES (Radarr/Sonarr deletes via API)
         2. Remove item from qBittorrent and delete any remaining files
-        3. *arr rescan - once per set, after all of its files (delete_set)
-        4. Delete the file if still on disk, and what it leaves behind
-        5. Refresh the item on the media server that reported it
+        3. Delete the file if still on disk, and what it leaves behind
+        4. Refresh the item on the media server that reported it
+        5. *arr rescan - once per set, after all of its files (delete_set)
         """
         file_path = duplicate_file.file_path
         arr_type = None
@@ -416,13 +416,13 @@ class DeletionPipeline:
                 )
                 await self.db.commit()
 
-            # Stage 4: Delete the file if it is still there, and its leftovers
+            # Stage 3: Delete the file if it is still there, and its leftovers
             await self._stage_disk_removal(
                 file_path, history, located_path, library_root
             )
             await self.db.commit()
 
-            # Stage 5: Refresh the item on the media server that reported it
+            # Stage 4: Refresh the item on the media server that reported it
             await self._stage_media_server_refresh(history, duplicate_file)
 
             # Store metadata in history
@@ -658,7 +658,7 @@ class DeletionPipeline:
         library_root: Optional[str] = None,
     ):
         """
-        Stage 4: Delete the file if it is still on disk, then what it leaves behind
+        Stage 3: Delete the file if it is still on disk, then what it leaves behind
 
         An *arr or qBittorrent can report a delete and leave the file, so the
         filesystem decides. This also covers files no service knows about.
@@ -865,12 +865,12 @@ class DeletionPipeline:
         self, history: DeletionHistory, duplicate_file: DuplicateFile
     ):
         """
-        Stage 5: ask the media server that reported this set to re-read the item.
+        Stage 4: ask the media server that reported this set to re-read the item.
 
-        It runs after *arr has imported the file being kept, so the server
-        notices the deleted file is gone and picks the better version up. Only
-        the owning server is refreshed; another server configured over the same
-        media sees the change on its own next scan.
+        It runs right after the file is deleted, so the server notices it is
+        gone; the *arr rescans the set once every file is done. Only the owning
+        server is refreshed; another server configured over the same media sees
+        the change on its own next scan.
         """
         duplicate_set = duplicate_file.duplicate_set
 

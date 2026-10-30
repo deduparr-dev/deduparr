@@ -1,5 +1,5 @@
 # Builds the backend development image from backend/Dockerfile.dev.
-# Requires Podman 5.0 or newer (.build quadlets).
+# Requires Podman 5.2 or newer (.build quadlets).
 #
 # REPO_ROOT: adjust File= if the checkout is not at /workspaces/deduparr.
 

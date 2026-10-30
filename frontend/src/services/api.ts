@@ -74,9 +74,18 @@ export interface DuplicateSet {
   files: DuplicateFile[];
 }
 
+/** Duplicate sets, newest first, from an offset */
+export interface DuplicateSetPage {
+  sets: DuplicateSet[];
+  /** How many there are across every page */
+  total: number;
+}
+
 export interface ScanStatus {
   total_duplicate_sets: number;
   pending_sets: number;
+  /** The files Delete All removes */
+  pending_files_to_delete: number;
   total_space_reclaimable: number;
 }
 
@@ -308,13 +317,18 @@ async function requestError(response: Response): Promise<Error> {
   return new Error(text || response.statusText || `Request failed (${response.status})`);
 }
 
-async function fetchAPI<T>(endpoint: string): Promise<T> {
+async function fetchResponse(endpoint: string): Promise<Response> {
   const response = await fetch(endpoint);
 
   if (!response.ok) {
     throw await requestError(response);
   }
 
+  return response;
+}
+
+async function fetchAPI<T>(endpoint: string): Promise<T> {
+  const response = await fetchResponse(endpoint);
   return response.json() as Promise<T>;
 }
 
@@ -394,12 +408,12 @@ export const scanAPI = {
       paths,
       media_type: mediaType,
     }),
-  getDuplicates: (status?: string, mediaType?: string) => {
-    const params = new URLSearchParams();
-    if (status) params.append("status", status);
-    if (mediaType) params.append("media_type", mediaType);
-    const query = params.toString() ? `?${params.toString()}` : "";
-    return fetchAPI<DuplicateSet[]>(`/api/scan/duplicates${query}`);
+  getDuplicates: async (offset: number, limit: number): Promise<DuplicateSetPage> => {
+    const response = await fetchResponse(`/api/scan/duplicates?offset=${offset}&limit=${limit}`);
+    return {
+      sets: (await response.json()) as DuplicateSet[],
+      total: Number(response.headers.get("X-Total-Count")),
+    };
   },
   getScanStatus: () => fetchAPI<ScanStatus>("/api/scan/status"),
   deleteDuplicateSet: (setId: number, dryRun: boolean) =>

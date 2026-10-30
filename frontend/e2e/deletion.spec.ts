@@ -27,7 +27,7 @@ async function deleteFromScanPage(page: Page, request: APIRequestContext, title:
   expect(set).toBeTruthy();
 
   await gotoApp(page, "/scan");
-  const card = page.getByTestId(`duplicate-set-${set.id}`);
+  const card = page.getByTestId(`duplicate-set-${set!.id}`);
   await card.getByRole("button", { name: "Delete Duplicates" }).click();
   await card.getByRole("checkbox", { name: /dry run/i }).uncheck();
   await card.getByRole("button", { name: "Delete Permanently" }).click();

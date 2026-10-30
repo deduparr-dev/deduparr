@@ -3,7 +3,7 @@ Tests for the scheduler service
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
@@ -264,6 +264,11 @@ async def test_load_schedule_skips_a_saved_value_that_is_not_valid(test_db, capl
     assert "scheduled_scan_time '25:00' is not valid" in caplog.text
     assert "scan_interval_hours 'every day' is not valid" in caplog.text
 
+    # The System page reads it every few seconds
+    caplog.clear()
+    await load_schedule(test_db)
+    assert "is not valid" not in caplog.text
+
 
 @pytest.mark.asyncio
 async def test_interval_scans_keep_to_the_grid_through_the_start_time():
@@ -344,6 +349,35 @@ async def test_stop_not_running():
     # Should not raise error
     await scheduler.stop()
     assert scheduler.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_saving_the_schedule_keeps_a_queued_deletion():
+    """Any save in Settings re-applies the schedule, which used to drop it."""
+    schedule = Schedule(
+        enable_scheduled_scans=True,
+        scan_schedule_mode="daily",
+        scheduled_scan_time="02:00",
+        scan_interval_hours=24,
+        enable_scheduled_deletion=True,
+    )
+    scheduler = ScanScheduler()
+    await scheduler.apply(schedule)
+    scheduler.scheduler.add_job(
+        lambda: None,
+        trigger="date",
+        run_date=datetime.now(timezone.utc) + timedelta(minutes=30),
+        id="scheduled_deletion",
+    )
+
+    await scheduler.apply(schedule)
+    assert scheduler.scheduler.get_job("scheduled_deletion")
+
+    await scheduler.apply(
+        schedule.model_copy(update={"enable_scheduled_deletion": False})
+    )
+    assert scheduler.scheduler.get_job("scheduled_deletion") is None
+    await scheduler.stop()
 
 
 def test_get_scheduler_singleton():

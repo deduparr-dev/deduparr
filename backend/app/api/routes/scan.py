@@ -15,6 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db
 from app.models import DuplicateFile, DuplicateSet, ScoringRule
+from app.services.stats_service import pending_unwanted_files
 from app.models.duplicate import DuplicateStatus, MediaType, encode_inode
 from app.services.deletion.pipeline import DeletionPipeline
 from app.services.deletion.scheduled import ScheduledDeletionService
@@ -257,28 +258,35 @@ async def get_scan_status(db: AsyncSession = Depends(get_db)):
             DuplicateSet.status == DuplicateStatus.PENDING
         )
     )
-    # The files Delete All removes
-    pending_files_to_delete = await db.execute(
-        select(func.count(DuplicateFile.id))
+    # What Delete All removes
+    unwanted = pending_unwanted_files()
+    files_and_space = await db.execute(
+        select(func.count(), func.sum(unwanted.c.file_size)).select_from(unwanted)
+    )
+    files_to_delete, space = files_and_space.one()
+    sets_to_delete = await db.execute(
+        select(func.count(func.distinct(DuplicateFile.set_id)))
         .join(DuplicateFile.duplicate_set)
         .where(
             DuplicateSet.status == DuplicateStatus.PENDING,
             DuplicateFile.keep.is_(False),
         )
     )
-    # Only sum space from PENDING and APPROVED sets (exclude PROCESSED)
-    total_space = await db.execute(
-        select(func.sum(DuplicateSet.space_to_reclaim)).where(
-            DuplicateSet.status.in_([DuplicateStatus.PENDING, DuplicateStatus.APPROVED])
-        )
-    )
 
     return {
         "total_duplicate_sets": total_sets.scalar() or 0,
         "pending_sets": pending_sets.scalar() or 0,
-        "pending_files_to_delete": pending_files_to_delete.scalar() or 0,
-        "total_space_reclaimable": total_space.scalar() or 0,
+        "sets_to_delete": sets_to_delete.scalar() or 0,
+        "pending_files_to_delete": files_to_delete,
+        "total_space_reclaimable": space or 0,
     }
+
+
+def _with_notes(message: str, notes: List[str], dry_run: bool) -> str:
+    """A deletion's message, with what it could not do beside deleting"""
+    if notes and not dry_run:
+        return f"{message}. Note: {'; '.join(dict.fromkeys(notes))}"
+    return message
 
 
 @router.post("/duplicates/delete-all", response_model=DeleteAllResponse)
@@ -309,7 +317,7 @@ async def delete_all_duplicate_sets(
 
     return DeleteAllResponse(
         success=not summary["errors"],
-        message=message,
+        message=_with_notes(message, summary["warnings"], summary["dry_run"]),
         dry_run=summary["dry_run"],
         sets_processed=summary["sets_processed"],
         files_deleted=summary["files_deleted"],
@@ -363,12 +371,10 @@ async def delete_duplicate_set(
         f"{'[DRY-RUN] Would delete' if delete_request.dry_run else 'Deleted'} "
         f"{outcome.files_deleted} file(s) from duplicate set '{duplicate_set.title}'"
     )
-    if outcome.warnings and not delete_request.dry_run:
-        message += f". Note: {'; '.join(dict.fromkeys(outcome.warnings))}"
 
     return DeleteResponse(
         success=not outcome.errors,
-        message=message,
+        message=_with_notes(message, outcome.warnings, delete_request.dry_run),
         dry_run=delete_request.dry_run,
         files_deleted=outcome.files_deleted,
         space_reclaimed=outcome.space_reclaimed,
@@ -512,6 +518,29 @@ async def update_file_keep_flag(
     # Recalculate space_to_reclaim for the set
     space_to_reclaim = sum(f.file_size for f in duplicate_set.files if not f.keep)
     duplicate_set.space_to_reclaim = space_to_reclaim
+
+    # Plex and Jellyfin can list the file as two sets: it is one decision, as
+    # far as the other set still keeps a file
+    others = await db.execute(
+        select(DuplicateSet)
+        .options(selectinload(DuplicateSet.files))
+        .where(
+            DuplicateSet.id != set_id,
+            DuplicateSet.status == DuplicateStatus.PENDING,
+            DuplicateSet.id.in_(
+                select(DuplicateFile.set_id).where(
+                    DuplicateFile.file_path == target_file.file_path
+                )
+            ),
+        )
+    )
+    for other in others.scalars():
+        for file in other.files:
+            if file.file_path == target_file.file_path and (
+                request.keep or any(f.keep for f in other.files if f is not file)
+            ):
+                file.keep = request.keep
+        other.space_to_reclaim = sum(f.file_size for f in other.files if not f.keep)
 
     await db.commit()
 

@@ -56,6 +56,8 @@ class DeletionPipeline:
             db: Database session
             dry_run: If True, simulate deletions without actually executing them
         """
+        # A file both servers list counts once in a run, dry or not
+        self._counted_paths: set[str] = set()
         self.db = db
         self.dry_run = dry_run
         self.qbit_service = QBittorrentService(db)
@@ -126,7 +128,7 @@ class DeletionPipeline:
                 logger.debug(f"Found {server_path} at {candidate}")
                 return candidate
 
-        logger.warning(
+        logger.debug(
             f"File not found (checked its path and {settings.media_dir}): {server_path}"
         )
         return None
@@ -237,6 +239,16 @@ class DeletionPipeline:
         for file in unwanted:
             logger.info(f"  DELETING (score {file.score}): {file.file_path}")
 
+        # Plex and Jellyfin list the same files as two sets, which can keep
+        # different copies: deleting through one can take the other's kept file
+        if not any(self._locate_file(file.file_path, file.file_size) for file in kept):
+            outcome.errors.append(
+                f"Deleted nothing from '{duplicate_set.title}': none of the files "
+                "to keep is on disk. Scan again."
+            )
+            logger.error(outcome.errors[0])
+            return outcome
+
         result = await self.db.execute(
             select(DeletionHistory.duplicate_file_id).where(
                 DeletionHistory.duplicate_file_id.in_([file.id for file in unwanted]),
@@ -248,6 +260,9 @@ class DeletionPipeline:
         for file in unwanted:
             if file.id in already_deleted:
                 continue
+            # Gone already when both servers list it and the other's set came first
+            located = self._locate_file(file.file_path, file.file_size)
+            links = os.stat(located).st_nlink if located else 0
             try:
                 history = await self.delete_file(file.id)
             except Exception as e:
@@ -261,8 +276,13 @@ class DeletionPipeline:
                 )
                 continue
 
-            outcome.files_deleted += 1
-            outcome.space_reclaimed += file.file_size
+            if located and file.file_path not in self._counted_paths:
+                self._counted_paths.add(file.file_path)
+                outcome.files_deleted += 1
+                # A hardlink's data stays until its last link goes, as in a
+                # season pack that seeds on
+                if links - 1 - bool(history.qbit_torrent_hash) <= 0:
+                    outcome.space_reclaimed += file.file_size
             if history.error:
                 outcome.warnings.append(history.error)
 
@@ -280,6 +300,9 @@ class DeletionPipeline:
 
         if not self.dry_run and not outcome.errors:
             duplicate_set.status = DuplicateStatus.PROCESSED
+            duplicate_set.space_to_reclaim = outcome.space_reclaimed + sum(
+                file.file_size for file in unwanted if file.id in already_deleted
+            )
         return outcome
 
     async def delete_file(
@@ -673,12 +696,13 @@ class DeletionPipeline:
                 folders are removed up to; None removes none
         """
         if not located_path:
-            if history.deleted_from_arr or history.deleted_from_qbit:
+            if (
+                history.deleted_from_arr
+                or history.deleted_from_qbit
+                or await self._deleted_through_another_set(file_path)
+            ):
                 history.deleted_from_disk = True
-                logger.info(
-                    f"Main file already deleted: {os.path.basename(file_path)} "
-                    f"({'by qBittorrent' if history.deleted_from_qbit else 'by *arr or manually'})"
-                )
+                logger.info(f"Main file already deleted: {file_path}")
             else:
                 error_msg = (
                     f"File not found for deletion (checked its path and "
@@ -715,6 +739,19 @@ class DeletionPipeline:
         except OSError as e:
             logger.warning(f"Could not clean up after {located_path}: {e}")
         history.deleted_from_disk = True
+
+    async def _deleted_through_another_set(self, file_path: str) -> bool:
+        """Whether the other server's set for this same file deleted it already"""
+        result = await self.db.execute(
+            select(DeletionHistory.id)
+            .join(DuplicateFile, DeletionHistory.duplicate_file_id == DuplicateFile.id)
+            .where(
+                DuplicateFile.file_path == file_path,
+                DeletionHistory.deleted_from_disk.is_(True),
+            )
+            .limit(1)
+        )
+        return result.first() is not None
 
     async def rescan_for_kept_file(
         self,

@@ -54,6 +54,12 @@ async def test_get_dashboard_stats_with_data(test_db):
         space_to_reclaim=2 * 1024 * 1024 * 1024,  # 2 GB
     )
     test_db.add_all([duplicate1, duplicate2])
+    await test_db.flush()
+    test_db.add(
+        DuplicateFile(
+            set_id=duplicate1.id, file_path="/m/a.mkv", file_size=1024 * 1024 * 1024
+        )
+    )
     await test_db.commit()
 
     async with AsyncClient(
@@ -67,7 +73,7 @@ async def test_get_dashboard_stats_with_data(test_db):
     assert data["total_duplicates"] == 2
     assert data["pending_duplicates"] == 1
     assert data["approved_duplicates"] == 1
-    assert data["space_to_reclaim"] == 3 * 1024 * 1024 * 1024
+    assert data["space_to_reclaim"] == 1024 * 1024 * 1024
 
 
 @pytest.mark.asyncio

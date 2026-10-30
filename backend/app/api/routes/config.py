@@ -2,7 +2,7 @@
 Configuration API endpoints
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 from typing_extensions import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -98,6 +98,12 @@ async def _set_bool_config(db: AsyncSession, key: str, enabled: bool) -> None:
         db.add(Config(key=key, value=value))
 
     await db.commit()
+
+
+async def _apply_schedule_if_written(db: AsyncSession, keys: Iterable[str]) -> None:
+    """Have the scheduler follow a schedule written outside its own endpoint"""
+    if set(keys) & set(Schedule.model_fields):
+        await get_scheduler().apply(await load_schedule(db))
 
 
 @router.get("/", response_model=Dict[str, Optional[str]])
@@ -273,6 +279,7 @@ async def update_config(
 
         await db.commit()
         await db.refresh(config)
+        await _apply_schedule_if_written(db, [key])
 
     return ConfigResponse(
         key=key, value=mask_secret(key, config.value if config else None)
@@ -292,6 +299,7 @@ async def delete_config(key: str, db: AsyncSession = Depends(get_db)):
 
     await db.delete(config)
     await db.commit()
+    await _apply_schedule_if_written(db, [key])
     return {"status": "deleted", "key": key}
 
 
@@ -323,6 +331,7 @@ async def batch_update_config(
         updated_configs.append(config)
 
     await db.commit()
+    await _apply_schedule_if_written(db, configs)
 
     for config in updated_configs:
         await db.refresh(config)
@@ -452,6 +461,7 @@ async def import_configuration(
                 imported_rules += 1
 
     await db.commit()
+    await _apply_schedule_if_written(db, import_data.config)
 
     return {
         "status": "success",

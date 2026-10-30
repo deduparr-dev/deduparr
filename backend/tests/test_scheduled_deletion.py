@@ -278,6 +278,7 @@ async def test_send_deletion_email_success(mock_get_email, test_db):
         "sets_processed": 5,
         "files_deleted": 12,
         "errors": [],
+        "warnings": ["Radarr cannot import the kept file"],
         "dry_run": False,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -294,6 +295,7 @@ async def test_send_deletion_email_success(mock_get_email, test_db):
     template_call = mock_email_service.build_email_template.call_args
     assert "5" in template_call.kwargs["content"]  # sets_processed
     assert "12" in template_call.kwargs["content"]  # files_deleted
+    assert "Radarr cannot import the kept file" in template_call.kwargs["content"]
 
 
 @pytest.mark.asyncio
@@ -311,6 +313,7 @@ async def test_send_deletion_email_with_errors(mock_get_email, test_db):
         "sets_processed": 3,
         "files_deleted": 7,
         "errors": ["Error 1", "Error 2", "Error 3"],
+        "warnings": [],
         "dry_run": False,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -336,6 +339,7 @@ async def test_send_deletion_email_not_configured(mock_get_email, test_db):
         "sets_processed": 1,
         "files_deleted": 2,
         "errors": [],
+        "warnings": [],
         "dry_run": False,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -457,6 +461,7 @@ async def test_dry_run_leaves_files_in_place(
 
     drop = tmp_path / "drop.mkv"
     drop.write_bytes(b"d" * 1024)
+    (tmp_path / "keep.mkv").write_bytes(b"k" * 1024)
 
     dup_set = await create_duplicate_set(title="Bulk Movie")
     await create_duplicate_file(

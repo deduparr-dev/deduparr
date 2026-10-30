@@ -2,6 +2,8 @@
 Tests for configuration API endpoints
 """
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy import select
@@ -951,3 +953,18 @@ def test_a_secret_from_another_key_file_is_left_alone(tmp_path, monkeypatch):
 
     key_file.write_text("the-other-key-of-enough-length")
     assert encrypt_if_sensitive("radarr_api_key", encrypted) == encrypted
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_written_through_the_generic_endpoints_takes_effect(test_db):
+    """It was stored and reported, while the old schedule kept running."""
+    with patch("app.api.routes.config.get_scheduler") as scheduler:
+        scheduler.return_value.apply = AsyncMock()
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            await client.put("/api/config/plex_libraries", json={"value": "Movies"})
+            scheduler.return_value.apply.assert_not_awaited()
+            await client.put("/api/config/scan_interval_hours", json={"value": "6"})
+
+    scheduler.return_value.apply.assert_awaited_once()

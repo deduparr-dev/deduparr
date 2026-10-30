@@ -23,6 +23,10 @@ from app.services.scan.runner import run_scan
 logger = logging.getLogger(__name__)
 
 
+# The System page reads the schedule every few seconds: a bad value warns once
+_reported_invalid: set[str] = set()
+
+
 class Schedule(BaseModel):
     """When scheduled scans run, and whether a deletion follows each one"""
 
@@ -46,10 +50,12 @@ async def load_schedule(db: AsyncSession) -> Schedule:
     except ValidationError as e:
         for error in e.errors():
             key = str(error["loc"][0])
-            logger.warning(
-                f"Saved {key} {values[key]!r} is not valid ({error['msg']}), "
-                f"using {getattr(settings, key)!r} until the schedule is saved again"
-            )
+            if f"{key}={values[key]}" not in _reported_invalid:
+                _reported_invalid.add(f"{key}={values[key]}")
+                logger.warning(
+                    f"Saved {key} {values[key]!r} is not valid ({error['msg']}), "
+                    f"using {getattr(settings, key)!r} until the schedule is saved again"
+                )
             values[key] = getattr(settings, key)
     return Schedule.model_validate(values)
 
@@ -142,11 +148,20 @@ class ScanScheduler:
                 logger.error(f"Scheduled deletion failed: {e}", exc_info=True)
 
     async def apply(self, schedule: Schedule) -> None:
-        """Run scans on this schedule, or none when it has them off"""
-        await self.stop()
+        """
+        Run scans on this schedule, or none when it has them off.
+
+        Every save in Settings lands here, so the deletion the last scan queued
+        stays, unless this schedule turns scans or the deletion off.
+        """
         if not schedule.enable_scheduled_scans:
+            await self.stop()
             logger.info("Scheduled scans disabled")
             return
+        if not schedule.enable_scheduled_deletion and self.scheduler.get_job(
+            "scheduled_deletion"
+        ):
+            self.scheduler.remove_job("scheduled_deletion")
 
         # Both modes read the start time in the scheduler's time zone, the TZ
         # the app runs with
@@ -178,8 +193,9 @@ class ScanScheduler:
             name="Scheduled Duplicate Scan",
             replace_existing=True,
         )
-        self.scheduler.start()
-        self.is_running = True
+        if not self.is_running:
+            self.scheduler.start()
+            self.is_running = True
 
         deletion = (
             ", each followed by a deletion 30 minutes after it completes"

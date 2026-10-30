@@ -85,6 +85,7 @@ export interface ScanStatus {
   total_duplicate_sets: number;
   pending_sets: number;
   /** The files Delete All removes */
+  sets_to_delete: number;
   pending_files_to_delete: number;
   total_space_reclaimable: number;
 }

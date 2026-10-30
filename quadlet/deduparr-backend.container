@@ -19,7 +19,9 @@ Volume=/workspaces/deduparr/data:/app/data:Z
 
 Environment=DATABASE_TYPE=sqlite
 Environment=DATABASE_URL=sqlite:////config/deduparr.db
+# A scan every hour, until the schedule is saved in Settings (Automation)
 Environment=ENABLE_SCHEDULED_SCANS=yes
+Environment=SCAN_SCHEDULE_MODE=interval
 Environment=SCAN_INTERVAL_HOURS=1
 Environment=LOG_LEVEL=DEBUG
 

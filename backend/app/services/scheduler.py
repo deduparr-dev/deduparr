@@ -10,15 +10,48 @@ from typing import Optional
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import ScanIntervalHours, ScanScheduleMode, ScanTime, settings
 from app.core.database import AsyncSessionLocal
 from app.models import Config
 from app.services.media_server import get_media_servers
 from app.services.scan.runner import run_scan
 
 logger = logging.getLogger(__name__)
+
+
+class Schedule(BaseModel):
+    """When scheduled scans run, and whether a deletion follows each one"""
+
+    enable_scheduled_scans: bool
+    scan_schedule_mode: ScanScheduleMode
+    scheduled_scan_time: ScanTime
+    scan_interval_hours: ScanIntervalHours
+    enable_scheduled_deletion: bool
+
+
+async def load_schedule(db: AsyncSession) -> Schedule:
+    """The schedule in effect: each value saved in Settings, or else the
+    environment variable of the same name, which also stands in for a saved
+    value that is not valid"""
+    keys = list(Schedule.model_fields)
+    result = await db.execute(select(Config).where(Config.key.in_(keys)))
+    values = {key: getattr(settings, key) for key in keys}
+    values.update({item.key: item.value for item in result.scalars()})
+    try:
+        return Schedule.model_validate(values)
+    except ValidationError as e:
+        for error in e.errors():
+            key = str(error["loc"][0])
+            logger.warning(
+                f"Saved {key} {values[key]!r} is not valid ({error['msg']}), "
+                f"using {getattr(settings, key)!r} until the schedule is saved again"
+            )
+            values[key] = getattr(settings, key)
+    return Schedule.model_validate(values)
 
 
 class ScanScheduler:
@@ -72,11 +105,7 @@ class ScanScheduler:
 
     async def _schedule_deletion_if_enabled(self, db: AsyncSession) -> None:
         """Queue the deletion pass that follows a scan, when it is switched on."""
-        result = await db.execute(
-            select(Config).where(Config.key == "enable_scheduled_deletion")
-        )
-        config = result.scalar_one_or_none()
-        if not (config and config.value == "true"):
+        if not (await load_schedule(db)).enable_scheduled_deletion:
             return
 
         deletion_time = datetime.now(timezone.utc) + timedelta(minutes=30)
@@ -112,64 +141,54 @@ class ScanScheduler:
             except Exception as e:
                 logger.error(f"Scheduled deletion failed: {e}", exc_info=True)
 
-    async def start(
-        self,
-        scan_mode: str = "daily",
-        scan_time: str = "02:00",
-        scan_interval_hours: int = 24,
-    ):
-        """
-        Start the scheduler
-
-        Args:
-            scan_mode: "daily" or "interval"
-            scan_time: Starting time for scans (HH:MM, 24-hour format)
-            scan_interval_hours: Hours between scans when mode is "interval" (1-168)
-
-        Note:
-            Scheduled deletion runs automatically 30 minutes after each scan completes
-            if enable_scheduled_deletion config is set to "true"
-        """
-        if self.is_running:
-            logger.warning("Scheduler is already running")
+    async def apply(self, schedule: Schedule) -> None:
+        """Run scans on this schedule, or none when it has them off"""
+        await self.stop()
+        if not schedule.enable_scheduled_scans:
+            logger.info("Scheduled scans disabled")
             return
 
-        # Configure scan job based on mode
-        if scan_mode == "daily":
-            scan_hour, scan_minute = map(int, scan_time.split(":"))
-            scan_trigger = CronTrigger(hour=scan_hour, minute=scan_minute)
-            logger.info(f"Starting scan scheduler to run daily at {scan_time}")
-        else:  # interval mode
-            scan_hour, scan_minute = map(int, scan_time.split(":"))
-            # Calculate next occurrence from now
-            now = datetime.now(timezone.utc)
-            next_run = now.replace(
-                hour=scan_hour, minute=scan_minute, second=0, microsecond=0
+        # Both modes read the start time in the scheduler's time zone, the TZ
+        # the app runs with
+        zone = self.scheduler.timezone
+        hour, minute = map(int, schedule.scheduled_scan_time.split(":"))
+        if schedule.scan_schedule_mode == "daily":
+            trigger = CronTrigger(hour=hour, minute=minute, timezone=zone)
+            when = f"daily at {schedule.scheduled_scan_time}"
+        else:
+            interval = timedelta(hours=schedule.scan_interval_hours)
+            now = datetime.now(zone)
+            start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            # Scans keep to the grid through today's start time, so a start or
+            # save skips none: from 03:15 every 6 hours, 17:20 runs next at 21:15
+            while start > now:
+                start -= interval
+            trigger = IntervalTrigger(
+                hours=schedule.scan_interval_hours, start_date=start
+            )
+            when = (
+                f"every {schedule.scan_interval_hours}h "
+                f"from {schedule.scheduled_scan_time}"
             )
 
-            # If the time has already passed today, start from tomorrow
-            if next_run <= now:
-                next_run = next_run + timedelta(days=1)
-
-            scan_trigger = IntervalTrigger(
-                hours=scan_interval_hours,
-                start_date=next_run,
-            )
-            logger.info(
-                f"Starting scan scheduler to run every {scan_interval_hours} hours starting at {scan_time}"
-            )
-
-        self.scheduler.add_job(
+        job = self.scheduler.add_job(
             self._run_scheduled_scan,
-            trigger=scan_trigger,
+            trigger=trigger,
             id="duplicate_scan",
             name="Scheduled Duplicate Scan",
             replace_existing=True,
         )
-
         self.scheduler.start()
         self.is_running = True
-        logger.info("Scan scheduler started successfully")
+
+        deletion = (
+            ", each followed by a deletion 30 minutes after it completes"
+            if schedule.enable_scheduled_deletion
+            else ""
+        )
+        logger.info(
+            f"Scheduled scans {when} ({zone}), next at {job.next_run_time}{deletion}"
+        )
 
     async def stop(self):
         """Stop the scheduler"""
@@ -187,23 +206,6 @@ class ScanScheduler:
 
         self.is_running = False
         logger.info("Scan scheduler stopped")
-
-    async def run_now(self):
-        """Trigger an immediate scan (in addition to scheduled ones)"""
-        logger.info("Triggering immediate scan")
-        await self._run_scheduled_scan()
-
-    def is_deletion_scheduled(self) -> bool:
-        """Check if a post-scan deletion is currently scheduled"""
-        job = self.scheduler.get_job("scheduled_deletion_after_scan")
-        return job is not None
-
-    def get_scheduled_deletion_time(self) -> Optional[datetime]:
-        """Get the scheduled deletion time if one is scheduled"""
-        job = self.scheduler.get_job("scheduled_deletion_after_scan")
-        if job and job.next_run_time:
-            return job.next_run_time
-        return None
 
 
 # Global scheduler instance

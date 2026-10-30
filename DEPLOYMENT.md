@@ -39,7 +39,7 @@ services:
       - PGID=1000
       - TZ=America/New_York  # Change to your timezone
       - DATABASE_TYPE=sqlite
-      # Optional: Enable scheduled scans
+      # Optional: scheduled scans, until the schedule is saved in Settings
       - ENABLE_SCHEDULED_SCANS=false  # Set to 'true' to enable
       - SCAN_INTERVAL_HOURS=24        # Only with SCAN_SCHEDULE_MODE=interval (default: daily at 02:00)
     volumes:
@@ -203,7 +203,7 @@ To check it, start a scan and run a dry-run deletion: the log must say `Found mo
 
 ### Scheduled Automated Scans
 
-Enable automatic duplicate detection:
+Set the schedule in Settings → Automation. It is stored and restored after a restart, and from then on it wins. Until it is saved, each value comes from its environment variable:
 
 ```yaml
 environment:
@@ -217,6 +217,9 @@ environment:
 - `SCAN_SCHEDULE_MODE`: `daily` or `interval` (default: `daily`)
 - `SCHEDULED_SCAN_TIME`: `HH:MM` - The daily scan, or the first one in interval mode (default: `02:00`)
 - `SCAN_INTERVAL_HOURS`: Hours between scans in interval mode, `1` to `168` (default: `24`)
+- `ENABLE_SCHEDULED_DELETION`: `true`/`false` (default: `false`). Deletes the pending sets without approval
+
+Times are in the container's time zone (`TZ`). A value the app cannot read stops it at startup, so `2:00` has to be `02:00`.
 
 Scans detect duplicates in background. Deletions still require manual approval via UI, unless scheduled deletion is enabled in Settings: it then deletes the pending sets 30 minutes after each scheduled scan.
 

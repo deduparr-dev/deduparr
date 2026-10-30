@@ -7,7 +7,7 @@ from typing_extensions import TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,7 @@ from app.services.shared.security import (
 )
 from app.models.scoring_rule import ScoringRule
 from app.services.arr.quality import PREFER_ARR_QUALITY_PROFILE_KEY
+from app.services.scheduler import Schedule, get_scheduler, load_schedule
 
 
 class ScoringRuleImportData(TypedDict, total=False):
@@ -180,33 +181,10 @@ async def update_arr_quality_profile_setting(
 
 
 # Scheduler configuration endpoints (must come before /{key} catch-all route)
-@router.get("/scheduler")
+@router.get("/scheduler", response_model=Schedule)
 async def get_scheduler_config(db: AsyncSession = Depends(get_db)):
-    """Get scheduler configuration settings"""
-    result = await db.execute(
-        select(Config).where(
-            Config.key.in_(
-                [
-                    "enable_scheduled_scans",
-                    "scan_schedule_mode",
-                    "scheduled_scan_time",
-                    "scan_interval_hours",
-                    "enable_scheduled_deletion",
-                ]
-            )
-        )
-    )
-    configs = {item.key: item.value for item in result.scalars().all()}
-
-    return {
-        "enable_scheduled_scans": configs.get("enable_scheduled_scans", "false")
-        == "true",
-        "scan_schedule_mode": configs.get("scan_schedule_mode", "daily"),
-        "scheduled_scan_time": configs.get("scheduled_scan_time", "02:00"),
-        "scan_interval_hours": int(configs.get("scan_interval_hours", "24")),
-        "enable_scheduled_deletion": configs.get("enable_scheduled_deletion", "false")
-        == "true",
-    }
+    """Get the schedule in effect"""
+    return await load_schedule(db)
 
 
 class SchedulerConfigUpdate(BaseModel):
@@ -219,103 +197,40 @@ class SchedulerConfigUpdate(BaseModel):
     enable_scheduled_deletion: Optional[bool] = None
 
 
+# Why the scheduler endpoint refuses a value, for each value it can refuse
+INVALID_SCHEDULE_VALUE = {
+    "scan_schedule_mode": "Scan schedule mode must be 'daily' or 'interval'",
+    "scheduled_scan_time": "Scan time must be in HH:MM format (00:00 - 23:59)",
+    "scan_interval_hours": "Scan interval must be between 1 and 168 hours",
+}
+
+
 @router.post("/scheduler")
 async def update_scheduler_config(
     config: SchedulerConfigUpdate, db: AsyncSession = Depends(get_db)
 ):
     """Update scheduler configuration and restart scheduler if needed"""
-    import re
+    updates = config.model_dump(exclude_none=True)
+    try:
+        Schedule.model_validate({**(await load_schedule(db)).model_dump(), **updates})
+    except ValidationError as e:
+        field = str(e.errors()[0]["loc"][0])
+        raise HTTPException(status_code=400, detail=INVALID_SCHEDULE_VALUE[field])
 
-    updates = {}
-
-    if config.enable_scheduled_scans is not None:
-        updates["enable_scheduled_scans"] = (
-            "true" if config.enable_scheduled_scans else "false"
-        )
-
-    if config.scan_schedule_mode is not None:
-        if config.scan_schedule_mode not in ["daily", "interval"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Scan schedule mode must be 'daily' or 'interval'",
-            )
-        updates["scan_schedule_mode"] = config.scan_schedule_mode
-
-    if config.scheduled_scan_time is not None:
-        # Validate time format (HH:MM)
-        if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", config.scheduled_scan_time):
-            raise HTTPException(
-                status_code=400,
-                detail="Scan time must be in HH:MM format (00:00 - 23:59)",
-            )
-        updates["scheduled_scan_time"] = config.scheduled_scan_time
-
-    if config.scan_interval_hours is not None:
-        if not (1 <= config.scan_interval_hours <= 168):
-            raise HTTPException(
-                status_code=400, detail="Scan interval must be between 1 and 168 hours"
-            )
-        updates["scan_interval_hours"] = str(config.scan_interval_hours)
-
-    if config.enable_scheduled_deletion is not None:
-        updates["enable_scheduled_deletion"] = (
-            "true" if config.enable_scheduled_deletion else "false"
-        )
-
-    # Update database
     for key, value in updates.items():
+        if isinstance(value, bool):
+            value = "true" if value else "false"
         result = await db.execute(select(Config).where(Config.key == key))
         config_item = result.scalar_one_or_none()
 
         if config_item:
-            config_item.value = value
+            config_item.value = str(value)
         else:
-            db.add(Config(key=key, value=value))
+            db.add(Config(key=key, value=str(value)))
 
     await db.commit()
 
-    # Restart scheduler with new settings
-    from app.services.scheduler import get_scheduler
-
-    scheduler = get_scheduler()
-    # Stop scheduler if running. Catch RuntimeError which can occur in tests
-    # if the event loop is already closed (defensive; scheduler is optional).
-    try:
-        await scheduler.stop()
-    except RuntimeError:
-        # Don't fail the request if the loop is closed in the test harness.
-        import logging
-
-        logging.getLogger(__name__).warning(
-            "Scheduler stop raised RuntimeError (loop closed); continuing"
-        )
-
-    # Get updated config values
-    result = await db.execute(
-        select(Config).where(
-            Config.key.in_(
-                [
-                    "enable_scheduled_scans",
-                    "scan_schedule_mode",
-                    "scheduled_scan_time",
-                    "scan_interval_hours",
-                ]
-            )
-        )
-    )
-    configs = {item.key: item.value for item in result.scalars().all()}
-
-    enable_scans = configs.get("enable_scheduled_scans", "false") == "true"
-    scan_mode = configs.get("scan_schedule_mode", "daily")
-    scan_time = configs.get("scheduled_scan_time", "02:00")
-    scan_interval_hours = int(configs.get("scan_interval_hours", "24"))
-
-    if enable_scans:
-        await scheduler.start(
-            scan_mode=scan_mode,
-            scan_time=scan_time,
-            scan_interval_hours=scan_interval_hours,
-        )
+    await get_scheduler().apply(await load_schedule(db))
 
     return {"status": "success", "message": "Scheduler configuration updated"}
 

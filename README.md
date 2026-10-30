@@ -105,7 +105,7 @@ services:
       - PGID=1000
       - TZ=Etc/UTC
       - DATABASE_TYPE=sqlite  # or 'postgres'
-      # Optional: Enable scheduled scans
+      # Optional: scheduled scans, until the schedule is saved in Settings
       - ENABLE_SCHEDULED_SCANS=false
       - SCAN_INTERVAL_HOURS=24  # Only with SCAN_SCHEDULE_MODE=interval (default: daily at 02:00)
     volumes:

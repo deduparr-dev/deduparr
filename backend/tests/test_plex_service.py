@@ -330,6 +330,28 @@ def test_test_connection_failure(mock_account_class, mock_token_manager):
     assert "Connection failed" in result["error"]
 
 
+def test_refresh_item_scans_the_folders_of_the_item():
+    """A metadata refresh leaves a deleted file listed as a version: only a scan removes it."""
+    service = PlexService(encrypted_token="encrypted_token", server_name="Test Server")
+    item = Mock(
+        locations=[
+            "/media/movies/Title/Title 1080p.mkv",
+            "/media/movies/Title/Title 720p.mkv",
+            "/media/release/Title 2160p.mkv",
+        ]
+    )
+    server = Mock()
+    server.fetchItem.return_value = item
+    with patch.object(service, "_get_server", return_value=server):
+        assert service.refresh_item("12") is True
+
+    server.fetchItem.assert_called_once_with(12)
+    scanned = sorted(
+        call.kwargs["path"] for call in item.section().update.call_args_list
+    )
+    assert scanned == ["/media/movies/Title", "/media/release"]
+
+
 def test_get_libraries_gives_the_key_as_text():
     """plexapi's section key is a number; the setup API's response takes text."""
     service = PlexService(encrypted_token="encrypted_token", server_name="Test Server")

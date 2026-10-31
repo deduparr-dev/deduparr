@@ -98,6 +98,24 @@ The `X-Total-Count` response header holds how many sets match in all.
 ]
 ```
 
+### Get the Scan Status
+
+```bash
+curl "http://localhost:8655/api/scan/status"
+```
+
+```json
+{
+  "total_duplicate_sets": 14,
+  "pending_sets": 14,
+  "sets_to_delete": 14,
+  "pending_files_to_delete": 9,
+  "total_space_reclaimable": 8546304
+}
+```
+
+`sets_to_delete` leaves out pending sets in which every file is kept. Files and space count what deleting every pending set removes, each file once when Plex and Jellyfin both list it.
+
 ### 3. Preview Deletion
 
 Preview what would be deleted for a specific duplicate set:

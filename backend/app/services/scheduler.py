@@ -173,11 +173,14 @@ class ScanScheduler:
         else:
             interval = timedelta(hours=schedule.scan_interval_hours)
             now = datetime.now(zone)
-            start = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            origin = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             # Scans keep to the grid through today's start time, so a start or
-            # save skips none: from 03:15 every 6 hours, 17:20 runs next at 21:15
-            while start > now:
-                start -= interval
+            # save skips none: from 03:15 every 6 hours, 17:20 runs next at 21:15.
+            # An interval over a day keeps to a fixed grid: through today's, every
+            # restart would push the next scan back, past it if restarts are frequent
+            if interval > timedelta(days=1):
+                origin = origin.replace(year=2000, month=1, day=1)
+            start = origin + ((now - origin) // interval) * interval
             trigger = IntervalTrigger(
                 hours=schedule.scan_interval_hours, start_date=start
             )

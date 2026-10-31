@@ -402,14 +402,8 @@ class SensitiveDataFilter(logging.Filter):
             ),
             r"\1***REDACTED***\3",
         ),
-        # Encrypted values (itsdangerous format: base64.signature)
-        (
-            re.compile(
-                r'(\()(["\'])(eyJ[a-zA-Z0-9_\-\.]{20,})\.[a-zA-Z0-9_\-]{10,}(["\'])([,)])',
-                re.IGNORECASE,
-            ),
-            r"\1\2***ENCRYPTED***\4\5",
-        ),
+        # Encrypted values (Fernet tokens)
+        (re.compile(r"gAAAAA[a-zA-Z0-9_\-]{20,}={0,2}"), "***ENCRYPTED***"),
         # HTTP Headers with tokens
         (
             re.compile(

@@ -21,7 +21,8 @@ correction is a pull request to the file.
    `chore: bump version to X.Y.Z`, and pushes the commit and the tag `vX.Y.Z`.
 5. The tag's build publishes the image as `latest`, `X.Y.Z` and `X.Y`, then the release
    `Deduparr vX.Y.Z` with the notes.
-6. Fast-forward `develop` to `main`.
+6. Bring `develop` up to `main`: fast-forward it, or merge `main` into it if Dependabot merged
+   something in the meantime, as its pull requests merge themselves.
 
 ## Release notes
 

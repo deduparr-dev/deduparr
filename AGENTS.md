@@ -11,7 +11,7 @@ does it really do to a real library?
 |---|---|
 | This file | How we work, and the rules for every change |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How it is built: media servers, Plex sign-in, the data model, the deletion pipeline, what the real services do |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Setting up, commit messages, the pull request checklist |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setting up, commit messages, the pull request process |
 | [quadlet/README.md](quadlet/README.md) | The Podman stack |
 | [docs/RELEASING.md](docs/RELEASING.md) | Cutting a version, and its notes |
 
@@ -308,11 +308,16 @@ Production uses multi-stage build: frontend → backend → nginx+supervisor run
 - One branch per piece of work, and its pull request targets `develop`. `main`
   only receives `develop`, when a version is cut.
 - CI runs on the pull request, not on a pushed branch.
+- A description is for someone who saw none of the work, in the order
+  [the template](.github/pull_request_template.md) asks: what changes for the user,
+  a table of what they see before and after when they can see it, the cause and the
+  design with their trade-offs, and last what was verified, on what, and what was not.
+  A small change gets a small description.
 - Pull requests are squash-merged, so the commit subject ends with `(#n)`: the
   release notes find the pull request from it.
-- Rulesets: `develop` takes a pull request with an approval and passing CI;
+- Rulesets: `develop` takes a pull request with a code owner's approval and passing CI;
   `main` and the `v*` tags change only when a version is cut.
-- Dependabot's pull requests approve and merge themselves once CI passes
+- Dependabot's pull requests merge themselves once CI passes
   ([docs/DEPENDABOT_AUTO_MERGE.md](docs/DEPENDABOT_AUTO_MERGE.md)).
 
 ### Releases

@@ -28,10 +28,16 @@ was ever proposed.
 
 [dependabot-auto-merge.yml](../.github/workflows/dependabot-auto-merge.yml)
 runs when the CI/CD workflow finishes on a Dependabot pull request. If CI
-passed, it approves the pull request, since `develop` requires an approval, and
-squash-merges it, but only the commit CI passed on: if Dependabot pushed a newer
-one in the meantime, that one waits for its own run. Approving needs the
-repository setting "Allow GitHub Actions to create and approve pull requests".
+passed, it waits for the other required checks and squash-merges the pull
+request, but only the commit CI passed on: if Dependabot pushed a newer one in
+the meantime, that one waits for its own run.
+
+Only a [code owner](../.github/CODEOWNERS) can approve a pull request into
+`develop`, so the merge goes through a GitHub App on `develop`'s bypass list,
+for pull requests only. The App has write access to contents, pull requests and
+workflows, and read access to actions and checks. Its ID and private key are the
+`MERGE_APP_ID` and `MERGE_APP_KEY` secrets of the `merge` environment, which only
+`main` can use, so a workflow on another branch cannot read them.
 
 The workflow runs from `main`'s copy, as every `workflow_run` workflow does, so
 a change to it takes effect when a version is cut.
@@ -42,8 +48,8 @@ starting it, and the security audit's `pip-audit` (its `npm audit` only
 reports). Every kind of update is merged when all of that passes, major
 versions included.
 
-A merge made with the workflow's token starts no workflow on `develop`, so the
-nightly build is what publishes these updates to the `dev` image.
+A merge made with the App's token is a push like any other, so it runs CI on
+`develop` and publishes the `dev` image.
 
 ## When Something Fails
 

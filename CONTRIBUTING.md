@@ -220,17 +220,8 @@ These suites guard behaviour, and the end-to-end one runs against stand-ins so C
 2. **Add tests** for new functionality
 3. **Ensure all tests pass**
 4. **Write a clear title**: it appears as written in the release notes' list of changes ([releases](docs/releases/))
-5. **Request review**: a pull request merges into `develop` once a maintainer approves it and CI passes
-
-### PR Checklist
-
-- [ ] Code follows project style guidelines
-- [ ] Tests added/updated and passing
-- [ ] Tested on real services, and the pull request says how and what was not
-- [ ] Documentation updated
-- [ ] Commit messages follow convention
-- [ ] Model changes come with a migration from `scripts/new-migration.sh`
-- [ ] Branch is up-to-date with `develop`
+5. **Complete the [template](.github/pull_request_template.md)**: what changes for the user, why, and what you verified
+6. **Request review**: a pull request merges into `develop` once a maintainer approves it and CI passes
 
 ## Automated Dependency Updates
 

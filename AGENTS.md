@@ -315,9 +315,9 @@ Production uses multi-stage build: frontend → backend → nginx+supervisor run
   A small change gets a small description.
 - Pull requests are squash-merged, so the commit subject ends with `(#n)`: the
   release notes find the pull request from it.
-- Rulesets: `develop` takes a pull request with an approval and passing CI;
+- Rulesets: `develop` takes a pull request with a code owner's approval and passing CI;
   `main` and the `v*` tags change only when a version is cut.
-- Dependabot's pull requests approve and merge themselves once CI passes
+- Dependabot's pull requests merge themselves once CI passes
   ([docs/DEPENDABOT_AUTO_MERGE.md](docs/DEPENDABOT_AUTO_MERGE.md)).
 
 ### Releases

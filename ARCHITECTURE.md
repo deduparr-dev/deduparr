@@ -12,22 +12,23 @@ Deduparr is a duplicate media management system for the *arr ecosystem (Plex/Jel
 - Database: SQLite (default) or PostgreSQL
 - Deployment: Docker multi-stage builds
 
-The main paths, by their location under `backend/app/`:
+The main paths, with services named by their folder or file under
+`backend/app/services/`:
 
 ```mermaid
 flowchart LR
     UI["React UI"] -->|"/api"| Routes["api/routes"]
 
     subgraph Backend
-        Routes --> Scan["services/scan"]
-        Routes --> Deletion["services/deletion"]
-        Scheduler["services/scheduler.py"] --> Scan
+        Routes --> Scan["scan"]
+        Routes --> Deletion["deletion"]
+        Scheduler["scheduler.py"] --> Scan
         Scheduler --> Deletion
-        Scan --> MediaServer["services/media_server"]
-        Scan --> Arr["services/arr"]
+        Scan --> MediaServer["media_server"]
+        Scan --> Arr["arr"]
         Deletion --> MediaServer
         Deletion --> Arr
-        Deletion --> Download["services/download"]
+        Deletion --> Download["download"]
     end
 
     Backend --> Database[("SQLite or PostgreSQL")]
@@ -217,6 +218,7 @@ flowchart TD
     Kept -->|Yes| Stages
 
     subgraph Stages["For each file not kept and not deleted yet"]
+        direction LR
         Arr["1. deleted_from_arr"] --> Qbit["2. deleted_from_qbit"]
         Qbit --> Disk["3. deleted_from_disk"]
         Disk --> Refresh["4. media_server_refreshed"]

@@ -129,6 +129,16 @@ async def test_get_plex_servers(test_db):
             assert data["servers"][0]["name"] == "Server1"
 
 
+async def _log_out_of_plex(sign_out_failure=None):
+    """Log out through the route, with plex.tv out of the way."""
+    with patch("app.services.setup_service.PlexService") as plex:
+        plex.return_value.sign_out.side_effect = sign_out_failure
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            return await client.post("/api/setup/plex/logout"), plex
+
+
 @pytest.mark.asyncio
 async def test_plex_logout_forgets_plex_and_nothing_else(test_db):
     """The sign-in and Plex's open sets go; other servers and history stay."""
@@ -156,17 +166,37 @@ async def test_plex_logout_forgets_plex_and_nothing_else(test_db):
         )
     await test_db.commit()
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.post("/api/setup/plex/logout")
+    response, plex = await _log_out_of_plex()
 
     assert response.status_code == 200
+    plex.assert_called_once_with(encrypted_token="token")
+    plex.return_value.sign_out.assert_called_once_with()
     test_db.expire_all()
     keys = (await test_db.execute(select(Config.key))).scalars().all()
     assert sorted(keys) == ["jellyfin_api_key", "jellyfin_url"]
     items = (await test_db.execute(select(DuplicateSet.item_id))).scalars().all()
     assert sorted(items) == ["history", "other"]
+
+
+@pytest.mark.asyncio
+async def test_plex_logout_finishes_when_plex_tv_does_not_revoke(test_db):
+    """plex.tv refuses a token already revoked, and can be out of reach."""
+    test_db.add(Config(key="plex_auth_token", value="token"))
+    await test_db.commit()
+
+    response, _ = await _log_out_of_plex(ValueError("Invalid or expired token"))
+
+    assert response.status_code == 200
+    test_db.expire_all()
+    assert not (await test_db.execute(select(Config.key))).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_plex_logout_with_no_sign_in_asks_plex_tv_for_nothing(test_db):
+    response, plex = await _log_out_of_plex()
+
+    assert response.status_code == 200
+    plex.assert_not_called()
 
 
 @pytest.mark.asyncio

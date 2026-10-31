@@ -61,6 +61,7 @@ On the maintainers' dev box a lab holds the real stack, reachable by name from t
 - **Tests delete for real.** After each one, `python3 /lab/seed.py --restore` (about 30 s) puts back the files, the torrents and the *arr tracking and rescans both servers; `--verify` only checks. Restore removes anything else in `/media`, so keep nothing else there.
 - **Leave the services' settings alone**, and never add an indexer or download anything: production defaults plus a user's setup is what makes the results hold in production. A new fixture changes the base, which is the owner's call.
 - **Only use the server `deduparr-plex`**: the account sees others that are not part of the lab.
+- **Logging out of Plex revokes the token an instance holds**: sign in with a PIN, and never copy the lab account's own token into an instance's config.
 - **Drive the frontend with Playwright**, using the browser already in `/ms-playwright`: it is shared, so never install into or change it.
 - **For each deleting test**, compare before and after: the files with their link counts, what Radarr and Sonarr track, the torrents, and the items on both servers.
 

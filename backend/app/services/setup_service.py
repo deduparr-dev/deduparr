@@ -2,6 +2,7 @@
 Setup wizard service for first-run configuration and validation
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional
 
@@ -389,7 +390,23 @@ class SetupService:
             await self.db.commit()
 
     async def clear_plex_credentials(self) -> None:
-        """Forget the Plex sign-in, and the pending sets only Plex could report on"""
+        """
+        Log out of Plex: plex.tv revokes the token, and this instance forgets it and
+        the pending sets only Plex could report on.
+
+        Logging out does not depend on plex.tv, which refuses a token already
+        revoked and can be out of reach.
+        """
+        result = await self.db.execute(
+            select(Config.value).where(Config.key == "plex_auth_token")
+        )
+        token = result.scalar_one_or_none()
+        if token:
+            try:
+                await asyncio.to_thread(PlexService(encrypted_token=token).sign_out)
+            except Exception as e:
+                logger.warning(f"plex.tv did not revoke the Plex token: {e}")
+
         await self.db.execute(
             delete(Config).where(
                 Config.key.in_(("plex_auth_token", "plex_server_name"))

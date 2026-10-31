@@ -1,32 +1,41 @@
 name: Dependabot Auto-Merge
 
-# Approves and merges a Dependabot pull request once CI has passed on it:
-# develop requires an approval and passing checks before a merge.
+# Merges a Dependabot pull request once its required checks have passed. Only a
+# code owner can approve on develop, so this goes through an App on its bypass list.
 on:
   workflow_run:
     workflows: [CI/CD]
     types: [completed]
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   merge:
     runs-on: ubuntu-latest
+    # Holds the App's key. Only main can use it, so a workflow on another branch cannot read it
+    environment: merge
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.actor.login == 'dependabot[bot]'
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
       PR: ${{ github.event.workflow_run.pull_requests[0].number }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      # The repository allows GitHub Actions to approve pull requests
-      - name: Approve the pull request
-        run: gh pr review "$PR" --repo "$REPO" --approve
+      - name: Create a token for the App
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.MERGE_APP_ID }}
+          private-key: ${{ secrets.MERGE_APP_KEY }}
+      # The App bypasses the required checks, and the security audit may still be running
+      - name: Wait for the required checks
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh pr checks "$PR" --repo "$REPO" --required --watch
       # Only the commit CI passed on: a newer one waits for its own run
       - name: Merge the pull request
-        run: gh pr merge "$PR" --repo "$REPO" --squash --match-head-commit "$HEAD_SHA"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh pr merge "$PR" --repo "$REPO" --squash --admin --match-head-commit "$HEAD_SHA"

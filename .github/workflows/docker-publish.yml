@@ -5,7 +5,7 @@ name: Build and Publish Docker Images
 # - Push to develop: Build and publish 'dev' + SHA tags
 # - Version tags (v*.*.*): Build and publish as 'latest' + semver tags (e.g., 0.1.2, 0.1), then the GitHub release
 # - Releases: their notes are docs/releases/<tag>.md; pushes to develop publish changed notes (docs/RELEASING.md)
-# - Nightly schedule: Build and publish 'dev' + SHA tags from develop branch (also publishes Dependabot's merges, which start no push build)
+# - Nightly schedule: Build and publish 'dev' + SHA tags from develop branch
 # - Manual dispatch: develop publishes 'dev' + SHA tags, main builds only
 
 on:

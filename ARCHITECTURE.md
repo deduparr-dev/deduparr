@@ -12,6 +12,34 @@ Deduparr is a duplicate media management system for the *arr ecosystem (Plex/Jel
 - Database: SQLite (default) or PostgreSQL
 - Deployment: Docker multi-stage builds
 
+The main paths, with services named by their folder or file under
+`backend/app/services/`:
+
+```mermaid
+flowchart LR
+    UI["React UI"] -->|"/api"| Routes["api/routes"]
+
+    subgraph Backend
+        Routes --> Scan["scan"]
+        Routes --> Deletion["deletion"]
+        Scheduler["scheduler.py"] --> Scan
+        Scheduler --> Deletion
+        Scan --> MediaServer["media_server"]
+        Scan --> Arr["arr"]
+        Deletion --> MediaServer
+        Deletion --> Arr
+        Deletion --> Download["download"]
+    end
+
+    Backend --> Database[("SQLite or PostgreSQL")]
+    MediaServer --> Plex["Plex, through plex.tv"]
+    MediaServer --> Jellyfin["Jellyfin"]
+    MediaServer -->|"probes"| Files[("Media files")]
+    Deletion -->|"deletes"| Files
+    Arr --> Radarr["Radarr"]
+    Arr --> Sonarr["Sonarr"]
+    Download --> QBittorrent["qBittorrent"]
+```
 
 ## Backend
 
@@ -75,11 +103,32 @@ without a Jellyfin install; demo.jellyfin.org is a real one to check against.
 
 Unlike typical Plex integrations using direct server URLs or manual X-Plex-Token entry, this project uses **plex.tv OAuth with PIN login ONLY**:
 
-1. Frontend calls `PlexAuthService.initiate_auth()` → returns PIN and OAuth URL
-2. User visits OAuth URL and authorizes
-3. Frontend polls `PlexAuthService.check_auth(pin_id)` → returns the **encrypted** token when complete
-4. Encrypted token stored in database (`Config` model with key `plex_auth_token`)
-5. `PlexService` reads the token back on demand to connect to Plex servers
+```mermaid
+sequenceDiagram
+    actor User
+    participant Wizard as Setup wizard
+    participant Backend
+    participant PlexTv as plex.tv
+
+    Wizard->>Backend: PlexAuthService.initiate_auth()
+    Backend->>PlexTv: POST /api/v2/pins
+    PlexTv-->>Backend: PIN id and code
+    Backend-->>Wizard: PIN id and OAuth URL
+    Wizard->>User: Opens the OAuth URL
+    User->>PlexTv: Signs in and authorizes
+    loop Until authorized
+        Wizard->>Backend: PlexAuthService.check_auth(pin_id)
+        Backend->>PlexTv: GET /api/v2/pins/{pin_id}
+        PlexTv-->>Backend: authToken, once authorized
+        Backend-->>Wizard: The token, encrypted
+    end
+    Wizard->>Backend: PlexAuthService.get_servers(token)
+    Backend-->>Wizard: The account's servers, for the user to pick one
+    Wizard->>Backend: POST /api/setup/save
+    Note over Backend: Stored in Config:<br/>plex_auth_token, plex_server_name
+```
+
+`PlexService` reads the token back on demand to connect to Plex servers.
 
 **Security Features:**
 - **Encrypted secrets**: tokens, API keys and passwords are stored encrypted with Fernet (`cryptography`), under a key derived from the key file; startup converts older signed or plain values. The API returns a set secret only as `SECRET_MASK`, and sending the mask or a blank back keeps the stored one. A connection test sends a stored secret only to the server stored with it
@@ -103,26 +152,85 @@ The schema is owned by **Alembic** (`backend/alembic/`), applied on startup by
 `init_db()`. A model change reaches it as described in
 [Database Migrations](AGENTS.md#database-migrations).
 
-Five core models with specific relationships:
+Five core models, with the columns that explain how they fit together:
 
-- `DuplicateSet`: Groups duplicate media items (has many `DuplicateFile`).
-  `media_server` + `item_id` say which server reported it and its id there
-  (`item_id` is stored as `plex_item_id`, the column's 0.5.7 name)
-- `DuplicateFile`: Individual file in duplicate set (its `deletion_history` is a
-  list; the pipeline keeps one row per file)
-- `DeletionHistory`: Tracks multi-stage deletion (*arr → qBittorrent → disk → media server refresh)
-- `ScoringRule`: User-defined regex patterns for scoring
-- `Config`: Key-value settings store
+```mermaid
+erDiagram
+    DuplicateSet ||--o{ DuplicateFile : files
+    DuplicateFile ||--o{ DeletionHistory : deletion_history
 
-`DeletionHistory.media_server_refreshed` (stored as `plex_refreshed`) records
-the final stage for whichever server owns the set.
+    DuplicateSet {
+        string media_server
+        string item_id "stored as plex_item_id"
+        string title
+        enum media_type
+        enum status
+    }
+    DuplicateFile {
+        int set_id FK
+        text file_path
+        bigint file_size
+        int score
+        bool keep
+    }
+    DeletionHistory {
+        int duplicate_file_id FK
+        bool deleted_from_arr
+        bool deleted_from_qbit
+        bool deleted_from_disk
+        bool media_server_refreshed "stored as plex_refreshed"
+        text error
+    }
+    ScoringRule {
+        enum rule_type
+        text pattern
+        int score_modifier
+        bool enabled
+    }
+    Config {
+        string key
+        text value
+    }
+```
+
+- `DuplicateSet`: `media_server` + `item_id` say which server reported it and its
+  id there
+- `DuplicateFile`: its `deletion_history` is a list, but the pipeline keeps one
+  row per file
+- `DeletionHistory`: tracks the stages of a deletion. `media_server_refreshed`
+  records the final one for whichever server owns the set
+- `ScoringRule`: user-defined regex patterns for scoring
+- `Config`: key-value settings store
+
+The two columns stored under another name keep their 0.5.7 names.
 
 All models use timezone-aware UTC timestamps via `datetime.now(timezone.utc)`. Enums defined as `str, enum.Enum` for JSON serialization.
 
 ### Multi-Stage Deletion Pipeline
 
-`DeletionPipeline` (`services/deletion/pipeline.py`) deletes one file in these
-stages, tracked in `DeletionHistory`:
+`DeletionPipeline` (`services/deletion/pipeline.py`) works through a set like
+this:
+
+```mermaid
+flowchart TD
+    Set["Delete a duplicate set"] --> Kept{"Is a kept file on disk?"}
+    Kept -->|"No: delete nothing"| Pending["Report an error,<br/>the set stays PENDING for a retry"]
+    Kept -->|Yes| Stages
+
+    subgraph Stages["For each file not kept and not deleted yet"]
+        direction LR
+        Arr["1. deleted_from_arr"] --> Qbit["2. deleted_from_qbit"]
+        Qbit --> Disk["3. deleted_from_disk"]
+        Disk --> Refresh["4. media_server_refreshed"]
+    end
+
+    Stages --> Rescan["If it deleted any file, the *arr rescans once for the set"]
+    Rescan --> Every{"Is every file deleted?"}
+    Every -->|No| Pending
+    Every -->|Yes| Processed["The set is PROCESSED"]
+```
+
+Each file goes through these stages, tracked in `DeletionHistory`:
 
 1. `deleted_from_arr`: delete through Radarr/Sonarr, which removes the file
 2. `deleted_from_qbit`: remove the torrent holding the file, with its data -

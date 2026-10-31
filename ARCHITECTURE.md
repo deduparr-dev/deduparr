@@ -162,7 +162,9 @@ dashboard counts deletions the same way (`DeletionHistory.is_complete`).
 - OAuth PIN through plex.tv's `/api/v2/pins` (with `requests`), then `MyPlexAccount`
 - Server connection via `account.resource(name).connect()`
 - Media objects: `Movie`, `Show`, `Episode` with nested `.media[0].parts[0]`
-- Refresh libraries: `library.update()`
+- Scan a library with `library.update()`, or one folder with `library.update(path=...)`. An item's
+  `refresh()` only re-reads its metadata: a deleted file stays listed as a version until a scan, and
+  Plex's defaults start none, so a deletion scans the item's folders
 
 ### *arr APIs (httpx-based clients)
 

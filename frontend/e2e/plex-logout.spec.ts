@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 import {
+  clearDuplicates,
   deleteConfig,
   getConfig,
   gotoApp,
@@ -19,6 +20,8 @@ test.describe("logging out of Plex", () => {
     await markConfigured(request);
     await markJellyfinUnconfigured(request);
     await deleteConfig(request, "plex_libraries");
+    // Left pending, the sets a scan found get in the way of later specs
+    await clearDuplicates(request);
   });
 
   async function logOut(page: Page) {

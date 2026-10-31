@@ -155,7 +155,9 @@ jobs:
     # from Dependabot is merged on this job passing
     - name: Start the image and wait for it to answer
       run: |
-        docker run -d --name deduparr -p 8655:8655 deduparr:test
+        # Folders that do not exist yet, which Docker creates as root, as on a first start
+        docker run -d --name deduparr -p 8655:8655 \
+          -v "$PWD/ci-config:/config" -v "$PWD/ci-data:/app/data" deduparr:test
         for _ in $(seq 60); do
           # The API's answer, through nginx: the API started and migrated the database
           curl -fsS http://localhost:8655/health | grep '"status":"ok"' && exit 0

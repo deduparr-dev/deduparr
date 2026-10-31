@@ -34,6 +34,10 @@ if [ "$PUID" != "$CURRENT_UID" ] || [ "$PGID" != "$CURRENT_GID" ]; then
         2>/dev/null || true
 fi
 
+# Docker creates a mount folder that does not exist yet as root, and the API runs
+# as deduparr, so a first start could not write its database or key
+chown -R deduparr:deduparr /config /app/data 2>/dev/null || true
+
 # Execute the command (supervisord)
 echo "Starting supervisord..."
 exec "$@"

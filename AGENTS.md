@@ -308,6 +308,11 @@ Production uses multi-stage build: frontend → backend → nginx+supervisor run
 - One branch per piece of work, and its pull request targets `develop`. `main`
   only receives `develop`, when a version is cut.
 - CI runs on the pull request, not on a pushed branch.
+- A description is for someone who saw none of the work, in the order
+  [the template](.github/pull_request_template.md) asks: what changes for the user,
+  a table of what they see before and after when they can see it, the cause and the
+  design with their trade-offs, and last what was verified, on what, and what was not.
+  A small change gets a small description.
 - Pull requests are squash-merged, so the commit subject ends with `(#n)`: the
   release notes find the pull request from it.
 - Rulesets: `develop` takes a pull request with an approval and passing CI;

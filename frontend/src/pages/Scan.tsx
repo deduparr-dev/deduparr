@@ -206,12 +206,6 @@ function DuplicateSetCard({
                 {dupSet.title}
               </h4>
               <div className="flex flex-wrap items-center gap-1.5 md:gap-2 mt-2">
-                <Badge
-                  variant={dupSet.status === "pending" ? "outline" : "default"}
-                  className="text-xs"
-                >
-                  {dupSet.status.charAt(0).toUpperCase() + dupSet.status.slice(1)}
-                </Badge>
                 <Badge variant="outline" className="text-xs">
                   {dupSet.media_type}
                 </Badge>
@@ -222,14 +216,13 @@ function DuplicateSetCard({
                   Versions: {dupSet.files.length}
                 </Badge>
                 <Badge variant="outline" className="text-xs">
-                  {dupSet.status === "processed" ? "Reclaimed" : "Can reclaim"}:{" "}
-                  {formatBytes(dupSet.space_to_reclaim)}
+                  Can reclaim: {formatBytes(dupSet.space_to_reclaim)}
                 </Badge>
               </div>
             </div>
           </button>
 
-          {dupSet.status === "pending" && !isDeleting && (
+          {!isDeleting && (
             <Button
               size="sm"
               variant="destructive"
@@ -283,15 +276,11 @@ function DuplicateSetCard({
             <div className="text-xs text-muted-foreground">
               Found: {new Date(dupSet.found_at).toLocaleString()}
             </div>
-            {dupSet.status === "pending" && (
-              <div className="text-xs text-muted-foreground">
-                Click badges to toggle keep/delete
-              </div>
-            )}
+            <div className="text-xs text-muted-foreground">Click badges to toggle keep/delete</div>
           </div>
           {dupSet.files.map((file) => {
             const isToggling = isTogglingFile === file.id;
-            const canToggle = dupSet.status === "pending" && !isDeleting && !isToggling;
+            const canToggle = !isDeleting && !isToggling;
             const isLastKeeper = file.keep && filesToKeep.length <= 1;
 
             return (
@@ -451,15 +440,21 @@ export default function Scan() {
     mutationFn: (libraries: LibrarySelection) => scanAPI.startScan({ libraries }),
     onSuccess: (data) => {
       toast({
-        title: "Scan Complete",
+        title: data.success ? "Scan Complete" : "Scan Incomplete",
         description: (
           <div>
             <div>{data.message}</div>
+            {data.skipped.map((reason) => (
+              <div key={reason} className="mt-2 text-xs break-all">
+                Skipped {reason}
+              </div>
+            ))}
             {data.duplicates_found > 0 && data.total_sets === 0 && (
               <div className="mt-2">No sets created because files are missing on disk.</div>
             )}
           </div>
         ),
+        variant: data.success ? undefined : "destructive",
       });
       refreshDuplicateQueries();
       // The selection scanned is now the stored one
@@ -628,13 +623,13 @@ export default function Scan() {
               className="text-2xl md:text-3xl font-bold text-foreground"
               data-testid="duplicate-items"
             >
-              {scanStatus?.total_duplicate_sets ?? 0}
+              {scanStatus?.pending_sets ?? 0}
             </div>
           </div>
           <div>
-            <div className="text-xs md:text-sm text-muted-foreground mb-1">Pending Review</div>
+            <div className="text-xs md:text-sm text-muted-foreground mb-1">Files to Delete</div>
             <div className="text-2xl md:text-3xl font-bold text-foreground">
-              {scanStatus?.pending_sets ?? 0}
+              {pendingFilesToDelete}
             </div>
           </div>
           <div>

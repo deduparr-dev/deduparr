@@ -453,6 +453,10 @@ class PlexService:
 
         return self._server
 
+    def sign_out(self) -> None:
+        """Have plex.tv revoke the token. The account's other sign-ins keep working."""
+        self._get_account().signout()
+
     def test_connection(
         self,
     ) -> Union[PlexConnectionTestResult, PlexConnectionTestError]:

@@ -153,6 +153,34 @@ async def test_run_scheduled_scan_queues_deletion_when_enabled(
 
 
 @pytest.mark.asyncio
+@patch("app.services.scheduler.run_scan", new_callable=AsyncMock)
+@patch("app.services.scheduler.AsyncSessionLocal")
+async def test_run_scheduled_scan_queues_no_deletion_after_skipping_something(
+    mock_session_local, mock_run_scan, test_db
+):
+    """Deletion does not act on pending sets this scan could not check."""
+    mock_session_local.return_value.__aenter__.return_value = test_db
+    mock_session_local.return_value.__aexit__.return_value = AsyncMock()
+    mock_run_scan.return_value = ScanTotals(
+        libraries_scanned=["Movies"], skipped=["Plex: rejected"]
+    )
+
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="token"),
+            Config(key="enable_scheduled_deletion", value="true"),
+        ]
+    )
+    await test_db.commit()
+
+    scheduler = ScanScheduler()
+    scheduler.scheduler = MagicMock()
+    await scheduler._run_scheduled_scan()
+
+    scheduler.scheduler.add_job.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_start_daily_mode():
     """Test scheduler starts in daily mode"""
     scheduler = ScanScheduler()

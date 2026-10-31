@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import DuplicateSet
+from app.models.duplicate import DuplicateStatus, MediaType
 from app.services.media_server import (
     DuplicateGroup,
     MediaServerError,
@@ -136,6 +137,7 @@ async def test_run_scan_carries_on_when_one_server_fails(test_db, failure):
     totals = await _scan(test_db, [broken, working], ["Movies"])
 
     assert totals.sets_created == 1
+    assert totals.skipped == [f"Jellyfin: {failure}"]
 
 
 @pytest.mark.asyncio
@@ -155,6 +157,79 @@ async def test_run_scan_drops_sets_the_server_no_longer_reports(test_db):
 
     assert not (await test_db.execute(select(DuplicateSet))).scalars().all()
     assert totals.sets_created == 0
+    assert totals.sets_removed == 1
+
+
+def _two_movie_libraries():
+    server = _server(
+        MediaServerType.JELLYFIN,
+        [
+            {"key": "1", "title": "Movies", "type": "movie", "count": 1},
+            {"key": "2", "title": "4K", "type": "movie", "count": 1},
+        ],
+    )
+    server.find_duplicate_movies.side_effect = lambda name: [
+        _group("in-movies" if name == "Movies" else "in-4k")
+    ]
+    return server
+
+
+@pytest.mark.asyncio
+async def test_run_scan_keeps_the_sets_of_every_library_of_a_type(test_db):
+    """One library's results say nothing about the sets of another of its type."""
+    await _scan(test_db, [_two_movie_libraries()], ["Movies", "4K"])
+
+    items = (await test_db.execute(select(DuplicateSet.item_id))).scalars().all()
+    assert sorted(items) == ["in-4k", "in-movies"]
+
+
+@pytest.mark.asyncio
+async def test_run_scan_keeps_the_sets_of_a_library_it_could_not_read(test_db):
+    """Going unreported is no sign of staleness when the library never answered."""
+    server = _two_movie_libraries()
+    await _scan(test_db, [server], ["Movies", "4K"])
+
+    def unreadable_4k(name):
+        if name == "4K":
+            raise MediaServerError("unreachable")
+        return [_group("in-movies")]
+
+    server.find_duplicate_movies.side_effect = unreadable_4k
+    totals = await _scan(test_db, [server], ["Movies", "4K"])
+
+    items = (await test_db.execute(select(DuplicateSet.item_id))).scalars().all()
+    assert sorted(items) == ["in-4k", "in-movies"]
+    assert totals.skipped == ["Jellyfin '4K': unreachable"]
+
+
+@pytest.mark.asyncio
+async def test_run_scan_drops_the_pending_sets_of_a_server_no_longer_set_up(test_db):
+    """Nothing can report on them again. History and disk-scan sets stay."""
+    for server, status in (
+        ("plex", DuplicateStatus.PENDING),
+        ("plex", DuplicateStatus.PROCESSED),
+        ("disk", DuplicateStatus.PENDING),
+    ):
+        test_db.add(
+            DuplicateSet(
+                media_server=server,
+                item_id=f"{server}-{status.value}",
+                title="Old",
+                media_type=MediaType.MOVIE,
+                status=status,
+            )
+        )
+    await test_db.commit()
+
+    jellyfin = _server(
+        MediaServerType.JELLYFIN,
+        [{"key": "1", "title": "Movies", "type": "movie", "count": 1}],
+    )
+    totals = await _scan(test_db, [jellyfin], ["Movies"])
+
+    items = (await test_db.execute(select(DuplicateSet.item_id))).scalars().all()
+    assert sorted(items) == ["disk-pending", "plex-processed"]
+    assert totals.sets_removed == 1
 
 
 @pytest.mark.asyncio

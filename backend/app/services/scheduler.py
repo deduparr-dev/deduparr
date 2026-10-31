@@ -104,6 +104,14 @@ class ScanScheduler:
                 except Exception as e:
                     logger.warning(f"Failed to send scheduled scan email: {e}")
 
+                # This scan could not check the pending sets of what it skipped
+                if totals.skipped:
+                    logger.warning(
+                        f"Scheduled scan skipped {'; '.join(totals.skipped)} - "
+                        "queueing no deletion"
+                    )
+                    return
+
                 await self._schedule_deletion_if_enabled(db)
 
             except Exception as e:

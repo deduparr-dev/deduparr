@@ -36,7 +36,8 @@ curl -X POST "http://localhost:8655/api/scan/start" \
   "sets_created": 8,
   "sets_updated": 2,
   "sets_removed": 0,
-  "total_sets": 10
+  "total_sets": 10,
+  "skipped": []
 }
 ```
 

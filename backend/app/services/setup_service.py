@@ -2,10 +2,11 @@
 Setup wizard service for first-run configuration and validation
 """
 
+import asyncio
 import logging
 from typing import Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -15,6 +16,7 @@ from app.services.media_server import (
     configured_types,
     get_media_servers,
 )
+from app.services.scan.runner import drop_pending_sets
 from app.services.media_server.jellyfin_adapter import JellyfinAdapter
 from app.services.media_server.plex_service import PlexAuthService, PlexService
 from app.services.download.qbittorrent_service import QBittorrentService
@@ -386,6 +388,32 @@ class SetupService:
         if config:
             config.value = "false"
             await self.db.commit()
+
+    async def clear_plex_credentials(self) -> None:
+        """
+        Log out of Plex: plex.tv revokes the token, and this instance forgets it and
+        the pending sets only Plex could report on.
+
+        Logging out does not depend on plex.tv, which refuses a token already
+        revoked and can be out of reach.
+        """
+        result = await self.db.execute(
+            select(Config.value).where(Config.key == "plex_auth_token")
+        )
+        token = result.scalar_one_or_none()
+        if token:
+            try:
+                await asyncio.to_thread(PlexService(encrypted_token=token).sign_out)
+            except Exception as e:
+                logger.warning(f"plex.tv did not revoke the Plex token: {e}")
+
+        await self.db.execute(
+            delete(Config).where(
+                Config.key.in_(("plex_auth_token", "plex_server_name"))
+            )
+        )
+        await drop_pending_sets(self.db, MediaServerType.PLEX)
+        await self.db.commit()
 
     async def test_jellyfin_connection(
         self, url: str, api_key: str

@@ -57,6 +57,8 @@ class ScanResponse(BaseModel):
     sets_updated: int
     sets_removed: int
     total_sets: int
+    # The servers and libraries the scan could not read, and why
+    skipped: List[str] = []
 
 
 class DuplicateFileResponse(BaseModel):
@@ -162,7 +164,7 @@ async def start_scan(
     )
 
     return ScanResponse(
-        success=True,
+        success=not totals.skipped,
         message=(
             f"Scanned {len(totals.libraries_scanned)} librar"
             f"{'y' if len(totals.libraries_scanned) == 1 else 'ies'}: "
@@ -174,6 +176,7 @@ async def start_scan(
         sets_updated=totals.sets_updated,
         sets_removed=totals.sets_removed,
         total_sets=total_result.scalar() or 0,
+        skipped=totals.skipped,
     )
 
 

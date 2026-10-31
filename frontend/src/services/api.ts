@@ -50,6 +50,8 @@ export interface ScanResponse {
   sets_updated: number;
   sets_removed: number;
   total_sets: number;
+  /** The servers and libraries the scan could not read, and why */
+  skipped: string[];
 }
 
 export interface DuplicateFile {
@@ -409,8 +411,11 @@ export const scanAPI = {
       paths,
       media_type: mediaType,
     }),
+  // Processed sets are history, which the Dashboard's activity lists
   getDuplicates: async (offset: number, limit: number): Promise<DuplicateSetPage> => {
-    const response = await fetchResponse(`/api/scan/duplicates?offset=${offset}&limit=${limit}`);
+    const response = await fetchResponse(
+      `/api/scan/duplicates?status=pending&offset=${offset}&limit=${limit}`
+    );
     return {
       sets: (await response.json()) as DuplicateSet[],
       total: Number(response.headers.get("X-Total-Count")),
@@ -490,6 +495,7 @@ export const setupAPI = {
     postAPI<{ servers: PlexServer[] }, { auth_token: string }>("/api/setup/plex/servers", {
       auth_token: authToken,
     }),
+  logoutPlex: () => postAPI<SaveResponse, Record<string, never>>("/api/setup/plex/logout", {}),
 
   // Service testing; a blank token, key or password tests the saved one
   testPlex: (authToken: string, serverName: string) =>

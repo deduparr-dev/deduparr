@@ -4,6 +4,7 @@ Uses OAuth PIN authentication via plex.tv with token encryption
 """
 
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -547,10 +548,11 @@ class PlexService:
 
     def refresh_item(self, item_id: str) -> bool:
         """
-        Refresh metadata for a specific Plex item (movie or episode).
+        Make Plex notice a file of a specific item (movie or episode) is gone.
 
-        This uses the item's refresh() method to update only that specific item's metadata,
-        which is much faster and more efficient than scanning the entire library.
+        A metadata refresh leaves a deleted file listed as a version of the item, and
+        only a scan removes it. Scanning just the item's folders is much faster than
+        scanning the entire library.
 
         Args:
             item_id: Plex ratingKey of the item to refresh
@@ -562,11 +564,10 @@ class PlexService:
             server = self._get_server()
             # Fetch the item by its ratingKey
             item = server.fetchItem(int(item_id))
-            # Call the item's refresh() method to update its metadata
-            item.refresh()
-            logger.info(
-                f"Triggered metadata refresh for Plex item {item_id} ('{item.title}')"
-            )
+            section = item.section()
+            for folder in {os.path.dirname(path) for path in item.locations}:
+                section.update(path=folder)
+            logger.info(f"Triggered a scan of Plex item {item_id} ('{item.title}')")
             return True
         except Exception as e:
             logger.error(f"Failed to refresh Plex item {item_id}: {str(e)}")

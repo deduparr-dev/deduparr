@@ -11,7 +11,7 @@ does it really do to a real library?
 |---|---|
 | This file | How we work, and the rules for every change |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How it is built: media servers, Plex sign-in, the data model, the deletion pipeline, what the real services do |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Setting up, commit messages, the pull request checklist |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setting up, commit messages, the pull request process |
 | [quadlet/README.md](quadlet/README.md) | The Podman stack |
 | [docs/RELEASING.md](docs/RELEASING.md) | Cutting a version, and its notes |
 

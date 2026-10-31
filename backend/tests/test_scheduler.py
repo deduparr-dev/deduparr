@@ -352,6 +352,32 @@ async def test_stop_not_running():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("hours", [48, 168])
+async def test_a_restart_does_not_push_back_a_long_interval(hours):
+    """Through today's start time, every restart moved the next scan a full interval."""
+    schedule = Schedule(
+        enable_scheduled_scans=True,
+        scan_schedule_mode="interval",
+        scheduled_scan_time="02:00",
+        scan_interval_hours=hours,
+        enable_scheduled_deletion=False,
+    )
+    next_runs = []
+    with patch("app.services.scheduler.datetime", wraps=datetime) as clock:
+        for day in (1, 2):
+            clock.now.return_value = datetime(2026, 11, day, 3, 0, tzinfo=timezone.utc)
+            scheduler = ScanScheduler()
+            scheduler.scheduler.configure(timezone=timezone.utc)
+            await scheduler.apply(schedule)
+            next_runs.append(
+                scheduler.scheduler.get_job("duplicate_scan").trigger.start_date
+            )
+            await scheduler.stop()
+
+    assert (next_runs[1] - next_runs[0]) % timedelta(hours=hours) == timedelta(0)
+
+
+@pytest.mark.asyncio
 async def test_saving_the_schedule_keeps_a_queued_deletion():
     """Any save in Settings re-applies the schedule, which used to drop it."""
     schedule = Schedule(

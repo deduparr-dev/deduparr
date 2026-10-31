@@ -308,14 +308,12 @@ class DeletionPipeline:
     async def delete_file(
         self,
         duplicate_file_id: int,
-        skip_qbit: bool = False,
     ) -> DeletionHistory:
         """
         Execute full deletion pipeline for a file
 
         Args:
             duplicate_file_id: ID of the DuplicateFile to delete
-            skip_qbit: Whether to skip qBittorrent removal (e.g., if not in library)
 
         Returns:
             DeletionHistory record
@@ -364,7 +362,7 @@ class DeletionPipeline:
                 duplicate_file_id=duplicate_file_id,
                 deleted_at=datetime.now(timezone.utc),
             )
-            await self._execute_deletion_stages(duplicate_file, history, skip_qbit)
+            await self._execute_deletion_stages(duplicate_file, history)
             # Don't commit in dry-run mode
             logger.info(
                 f"[DRY-RUN] Deletion simulation completed for file: {file_path}"
@@ -380,7 +378,7 @@ class DeletionPipeline:
             await self.db.flush()
 
         try:
-            await self._execute_deletion_stages(duplicate_file, history, skip_qbit)
+            await self._execute_deletion_stages(duplicate_file, history)
             await self.db.commit()
             logger.info(f"Deletion pipeline completed for file: {file_path}")
             return history
@@ -396,7 +394,6 @@ class DeletionPipeline:
         self,
         duplicate_file: DuplicateFile,
         history: DeletionHistory,
-        skip_qbit: bool = False,
     ):
         """
         Execute all deletion stages in optimal order
@@ -433,11 +430,10 @@ class DeletionPipeline:
             await self.db.commit()
 
             # Stage 2: Remove item from qBittorrent (deletes any remaining files)
-            if not skip_qbit:
-                item_hash = await self._stage_qbittorrent_removal(
-                    duplicate_file, history, located_path, kept_file
-                )
-                await self.db.commit()
+            item_hash = await self._stage_qbittorrent_removal(
+                duplicate_file, history, located_path, kept_file
+            )
+            await self.db.commit()
 
             # Stage 3: Delete the file if it is still there, and its leftovers
             await self._stage_disk_removal(

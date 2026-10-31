@@ -45,7 +45,6 @@ export function sanitizeUrl(url: string): string {
 
 /**
  * Sanitize log data by showing only first/last few characters
- * Matches Python backend's sanitize_log_data function
  */
 export function sanitizeLogData(data: string): string {
   if (!data || data.length <= 8) {

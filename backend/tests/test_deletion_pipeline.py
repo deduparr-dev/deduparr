@@ -305,9 +305,7 @@ async def test_delete_episode_full_pipeline_success(
         mock_plex_class.return_value = mock_plex_instance
         mock_plex_instance.refresh_library.return_value = True
 
-        history = await deletion_pipeline.delete_file(
-            episode_duplicate_file.id, skip_qbit=False
-        )
+        history = await deletion_pipeline.delete_file(episode_duplicate_file.id)
 
         assert history.deleted_from_qbit is True
         assert history.deleted_from_arr is True
@@ -329,53 +327,6 @@ async def test_delete_episode_full_pipeline_success(
 
         # Stage 4: Disk cleanup - file already deleted by *arr
         mock_remove.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_delete_file_skip_qbit(
-    deletion_pipeline, test_db, setup_configs, movie_duplicate_file
-):
-    """Test deletion pipeline with qBittorrent skipped"""
-    file_path = movie_duplicate_file.file_path
-
-    with (
-        patch("app.services.arr.radarr_service.RadarrClient") as mock_radarr,
-        patch(
-            "app.services.deletion.pipeline.get_media_server",
-            new_callable=AsyncMock,
-        ) as mock_plex_class,
-        patch("os.path.exists") as mock_exists,
-        patch("os.remove"),
-        patch("os.listdir") as mock_listdir,
-    ):
-        mock_radarr_instance = AsyncMock()
-        mock_radarr.return_value = mock_radarr_instance
-        mock_radarr_instance.get_movie = AsyncMock(
-            return_value=[
-                {
-                    "id": 1,
-                    "title": "Test Movie",
-                    "movieFile": {"id": 10, "path": file_path},
-                }
-            ]
-        )
-        mock_radarr_instance.delete_movie_file = AsyncMock()
-
-        mock_exists.return_value = True
-        mock_listdir.return_value = []  # No associated files
-
-        mock_plex_instance = AsyncMock()
-        mock_plex_class.return_value = mock_plex_instance
-        mock_plex_instance.refresh_item.return_value = True
-
-        history = await deletion_pipeline.delete_file(
-            movie_duplicate_file.id, skip_qbit=True
-        )
-
-        assert history.deleted_from_qbit is False
-        assert history.deleted_from_arr is True
-        assert history.deleted_from_disk is True
-        assert history.media_server_refreshed is True
 
 
 @pytest.mark.asyncio

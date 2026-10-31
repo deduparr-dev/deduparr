@@ -64,7 +64,6 @@ If you're working on a new feature:
 
 1. Check `IMPLEMENTATION_PLAN.md` to see if it's already planned
 2. Update the relevant section with your progress
-3. Create new markdown files here for complex features that need detailed planning
 
 ## 📝 Related Documentation
 

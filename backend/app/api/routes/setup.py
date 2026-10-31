@@ -194,6 +194,21 @@ async def get_plex_servers(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/plex/logout")
+async def logout_plex(db: AsyncSession = Depends(get_db)):
+    """
+    Log out of Plex, leaving every other setting as it is
+
+    Returns:
+        Success message
+    """
+    try:
+        await SetupService(db).clear_plex_credentials()
+        return {"status": "success", "message": "Logged out of Plex"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/test/plex", response_model=ConnectionTestResponse)
 async def test_plex_connection(
     request: PlexConnectionTest, db: AsyncSession = Depends(get_db)

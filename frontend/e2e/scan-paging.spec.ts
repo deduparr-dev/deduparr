@@ -33,7 +33,7 @@ test.describe("paging through duplicate sets", () => {
     const res = await request.get(`${BACKEND_URL}/api/scan/status`);
     expect(res.ok()).toBeTruthy();
     const status = await res.json();
-    const total = status.total_duplicate_sets;
+    const total = status.pending_sets;
 
     await gotoApp(page, "/scan");
     const sets = page.locator('[data-testid^="duplicate-set-"]');

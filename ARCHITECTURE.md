@@ -48,7 +48,9 @@ server SDK, except the setup wizard, which lists Plex libraries through
 **A server counts as configured when its credentials are present**, so there is
 no separate "which server" setting to drift out of step. Duplicate sets are
 keyed on `(media_server, item_id)`: the same title on both servers stays two
-sets, and one server's scan never discards the other's findings.
+sets, and one server's scan never discards the other's findings. A server's
+pending sets go once it is no longer set up: at a Plex logout, or at the next
+scan.
 
 Authentication is deliberately outside the protocol, because the two differ:
 

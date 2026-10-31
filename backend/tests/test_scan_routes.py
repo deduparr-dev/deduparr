@@ -454,6 +454,23 @@ async def test_start_scan_reports_what_the_run_did(client, test_db):
 
 
 @pytest.mark.asyncio
+async def test_start_scan_says_what_it_skipped(client, test_db):
+    """A scan that could not read everything does not report success."""
+    test_db.add(Config(key="plex_auth_token", value="token"))
+    await test_db.commit()
+
+    totals = ScanTotals(skipped=["Plex: rejected"])
+    with patch(
+        "app.api.routes.scan.run_scan", new_callable=AsyncMock, return_value=totals
+    ):
+        response = await client.post("/api/scan/start", json={})
+
+    body = response.json()
+    assert body["success"] is False
+    assert body["skipped"] == ["Plex: rejected"]
+
+
+@pytest.mark.asyncio
 async def test_start_scan_keeps_the_libraries_it_was_given(client, test_db):
     """
     The libraries a scan starts with become each server's stored selection,

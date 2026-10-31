@@ -4,10 +4,13 @@ Tests for setup API routes
 
 import pytest
 from httpx import AsyncClient, ASGITransport
+from sqlalchemy import select
 from unittest.mock import MagicMock, patch
 
 from app.main import app
+from app.models import DuplicateSet
 from app.models.config import Config
+from app.models.duplicate import DuplicateStatus, MediaType
 from tests.conftest import encrypt_test_password
 
 
@@ -124,6 +127,46 @@ async def test_get_plex_servers(test_db):
             data = response.json()
             assert len(data["servers"]) == 2
             assert data["servers"][0]["name"] == "Server1"
+
+
+@pytest.mark.asyncio
+async def test_plex_logout_forgets_plex_and_nothing_else(test_db):
+    """The sign-in and Plex's open sets go; other servers and history stay."""
+    test_db.add_all(
+        [
+            Config(key="plex_auth_token", value="token"),
+            Config(key="plex_server_name", value="server"),
+            Config(key="jellyfin_url", value="http://jellyfin:8096"),
+            Config(key="jellyfin_api_key", value="key"),
+        ]
+    )
+    for server, item_id, status in (
+        ("plex", "open", DuplicateStatus.PENDING),
+        ("plex", "history", DuplicateStatus.PROCESSED),
+        ("jellyfin", "other", DuplicateStatus.PENDING),
+    ):
+        test_db.add(
+            DuplicateSet(
+                media_server=server,
+                item_id=item_id,
+                title="A Movie",
+                media_type=MediaType.MOVIE,
+                status=status,
+            )
+        )
+    await test_db.commit()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/setup/plex/logout")
+
+    assert response.status_code == 200
+    test_db.expire_all()
+    keys = (await test_db.execute(select(Config.key))).scalars().all()
+    assert sorted(keys) == ["jellyfin_api_key", "jellyfin_url"]
+    items = (await test_db.execute(select(DuplicateSet.item_id))).scalars().all()
+    assert sorted(items) == ["history", "other"]
 
 
 @pytest.mark.asyncio

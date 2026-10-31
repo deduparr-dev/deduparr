@@ -7,7 +7,7 @@ scan API route and the scheduler share one implementation.
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import Dict, List, Set, Tuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,7 @@ from app.models.duplicate import DuplicateStatus, MediaType
 from app.services.arr.quality import ArrQualityRanker
 from app.services.media_server import (
     DuplicateGroup,
+    MediaServerType,
     get_media_servers,
     selected_libraries,
 )
@@ -44,6 +45,8 @@ class ScanTotals:
     # What was actually scanned, which is not the caller's request when the
     # stored per-server selection is used.
     libraries_scanned: List[str] = field(default_factory=list)
+    # The servers and libraries that could not be read, and why.
+    skipped: List[str] = field(default_factory=list)
 
 
 async def get_custom_scoring_rules(db: AsyncSession) -> List[dict]:
@@ -70,11 +73,16 @@ async def run_scan(db: AsyncSession) -> ScanTotals:
     scoring_engine = ScoringEngine()
     custom_rules = await get_custom_scoring_rules(db)
     totals = ScanTotals()
+    servers = await get_media_servers(db)
 
-    for server in await get_media_servers(db):
+    for server_type in set(MediaServerType) - {server.type for server in servers}:
+        totals.sets_removed += await drop_pending_sets(db, server_type)
+
+    for server in servers:
+        name = server.type.value
         wanted = set(await selected_libraries(db, server.type))
         if not wanted:
-            logger.info(f"No libraries selected for {server.type.value} - skipping")
+            logger.info(f"No libraries selected for {name} - skipping")
             continue
 
         orchestrator = ScanOrchestrator(server, db)
@@ -84,8 +92,14 @@ async def run_scan(db: AsyncSession) -> ScanTotals:
         except Exception as e:
             # Any failure here is specific to this server - unreachable, bad
             # credentials, an SDK error - and must not abandon the others.
-            logger.error(f"Skipping {server.type.value}: {e}")
+            logger.error(f"Skipping {name}: {e}")
+            totals.skipped.append(f"{name.title()}: {e}")
             continue
+
+        # A set belongs to a server and a type, not to a library, so what is
+        # stale only shows once every library of that type has been read.
+        found: Dict[MediaType, List[DuplicateGroup]] = {}
+        unread: Set[MediaType] = set()
 
         for library in libraries:
             if library["title"] not in wanted:
@@ -108,21 +122,25 @@ async def run_scan(db: AsyncSession) -> ScanTotals:
                 groups = await find(library["title"])
             except Exception as e:
                 logger.error(
-                    f"Could not scan '{library['title']}' on "
-                    f"{server.type.value}: {e}",
+                    f"Could not scan '{library['title']}' on {name}: {e}",
                     exc_info=True,
                 )
+                totals.skipped.append(f"{name.title()} '{library['title']}': {e}")
+                unread.add(media_type)
                 continue
 
-            await _cleanup_stale_duplicate_sets(
-                db, groups, media_type, server.type.value
-            )
-            created, updated, removed = await _process_duplicate_groups(
-                db, groups, media_type, server.type.value, scoring_engine, custom_rules
-            )
-
+            found.setdefault(media_type, []).extend(groups)
             totals.libraries_scanned.append(library["title"])
             totals.duplicates_found += sum(len(group.files) for group in groups)
+
+        for media_type, groups in found.items():
+            if media_type not in unread:
+                totals.sets_removed += await _cleanup_stale_duplicate_sets(
+                    db, groups, media_type, name
+                )
+            created, updated, removed = await _process_duplicate_groups(
+                db, groups, media_type, name, scoring_engine, custom_rules
+            )
             totals.sets_created += created
             totals.sets_updated += updated
             totals.sets_removed += removed
@@ -131,6 +149,16 @@ async def run_scan(db: AsyncSession) -> ScanTotals:
     # meant an API scan could report sets it never saved.
     await db.commit()
     return totals
+
+
+async def drop_pending_sets(db: AsyncSession, server_type: MediaServerType) -> int:
+    """Drop the pending sets of a server that can no longer report on them."""
+    dropped = 0
+    for media_type in MediaType:
+        dropped += await _cleanup_stale_duplicate_sets(
+            db, [], media_type, server_type.value
+        )
+    return dropped
 
 
 async def _cleanup_stale_duplicate_sets(

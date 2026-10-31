@@ -76,7 +76,9 @@ server SDK, except the setup wizard, which lists Plex libraries through
 **A server counts as configured when its credentials are present**, so there is
 no separate "which server" setting to drift out of step. Duplicate sets are
 keyed on `(media_server, item_id)`: the same title on both servers stays two
-sets, and one server's scan never discards the other's findings.
+sets, and one server's scan never discards the other's findings. A server's
+pending sets go once it is no longer set up: at a Plex logout, or at the next
+scan.
 
 Authentication is deliberately outside the protocol, because the two differ:
 
@@ -269,6 +271,8 @@ dashboard counts deletions the same way (`DeletionHistory.is_complete`).
 
 - OAuth PIN through plex.tv's `/api/v2/pins` (with `requests`), then `MyPlexAccount`
 - Server connection via `account.resource(name).connect()`
+- Logging out revokes the token with `account.signout()`. Only that sign-in ends:
+  the account's other tokens keep working
 - Media objects: `Movie`, `Show`, `Episode` with nested `.media[0].parts[0]`
 - Scan a library with `library.update()`, or one folder with `library.update(path=...)`. An item's
   `refresh()` only re-reads its metadata: a deleted file stays listed as a version until a scan, and

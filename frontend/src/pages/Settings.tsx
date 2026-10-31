@@ -510,15 +510,35 @@ function PlexSettings({
   // The token itself never reaches the browser: a blank one means the saved one
   const authenticated = !!initialConfig.plex_auth_token;
   const [isTesting, runTest] = useConnectionTest("plex", recordTest);
+  const [isLoggingOut, startLogout] = useTransition();
 
-  const { data: serversData } = useQuery({
+  const { data: serversData, error: serversError } = useQuery({
     queryKey: ["plexServers"],
     queryFn: () => setupAPI.getPlexServers(""),
     enabled: authenticated,
     staleTime: 5 * 60 * 1000,
+    retry: false, // plex.tv will not answer differently within seconds
   });
 
   const servers: PlexServer[] = serversData?.servers ?? [];
+
+  function logout() {
+    startLogout(async () => {
+      try {
+        await setupAPI.logoutPlex();
+        // "/" is the dashboard, or the wizard when no media server is left
+        window.location.href = "/";
+      } catch (error) {
+        toast({
+          title: "Logout failed",
+          description: (
+            <div>{error instanceof Error ? error.message : "Failed to log out of Plex"}</div>
+          ),
+          variant: "destructive",
+        });
+      }
+    });
+  }
 
   return (
     <div className="space-y-6">
@@ -539,16 +559,22 @@ function PlexSettings({
         <>
           <div className="p-4 rounded-lg bg-card border border-border">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium">Authenticated with Plex</span>
+              <div className="flex items-center gap-2" data-testid="plex-status">
+                {serversError ? (
+                  <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0" />
+                ) : (
+                  <Check className="w-4 h-4 text-primary" />
+                )}
+                <span className="text-sm font-medium">
+                  {serversError ? serversError.message : "Authenticated with Plex"}
+                </span>
               </div>
               <Button
+                data-testid="plex-logout"
                 variant="ghost"
                 size="sm"
-                onClick={() => {
-                  window.location.href = "/setup";
-                }}
+                onClick={logout}
+                disabled={isLoggingOut}
               >
                 Logout
               </Button>

@@ -88,6 +88,8 @@ export default function Dashboard() {
     );
   }
 
+  const pending = activities.filter((a) => a.status === "pending");
+
   return (
     <PageContainer>
       {/* Header */}
@@ -97,20 +99,20 @@ export default function Dashboard() {
       <StatsGrid columns={4}>
         <StatCard
           title="Movies"
-          value={activities.filter((a) => a.media_type === "movie").length}
+          value={pending.filter((a) => a.media_type === "movie").length}
           subtitle="Duplicate movie sets"
           icon={Film}
         />
         <StatCard
           title="TV Shows"
-          value={activities.filter((a) => a.media_type === "episode").length}
+          value={pending.filter((a) => a.media_type === "episode").length}
           subtitle="Duplicate episode sets"
           icon={Tv}
         />
         <StatCard
           title="Total Duplicates"
-          value={stats.total_duplicates}
-          subtitle={`${stats.total_duplicate_files} duplicate files`}
+          value={stats.pending_duplicates}
+          subtitle={`${stats.processed_duplicates} already processed`}
           icon={HardDrive}
         />
         <StatCard
@@ -131,6 +133,7 @@ export default function Dashboard() {
             {activities.map((activity) => (
               <div
                 key={activity.id}
+                data-testid={`activity-${activity.id}`}
                 className="flex flex-col sm:flex-row sm:items-start sm:justify-between p-3 md:p-4 rounded-lg border bg-card hover:bg-accent/50 transition-colors gap-2"
               >
                 <div className="flex-1 min-w-0">

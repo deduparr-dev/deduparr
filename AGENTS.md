@@ -61,6 +61,7 @@ On the maintainers' dev box a lab holds the real stack, reachable by name from t
 - **Tests delete for real.** After each one, `python3 /lab/seed.py --restore` (about 30 s) puts back the files, the torrents and the *arr tracking and rescans both servers; `--verify` only checks. Restore removes anything else in `/media`, so keep nothing else there.
 - **Leave the services' settings alone**, and never add an indexer or download anything: production defaults plus a user's setup is what makes the results hold in production. A new fixture changes the base, which is the owner's call.
 - **Only use the server `deduparr-plex`**: the account sees others that are not part of the lab.
+- **Logging out of Plex revokes the token an instance holds**: sign in with a PIN, and never copy the lab account's own token into an instance's config.
 - **Drive the frontend with Playwright**, using the browser already in `/ms-playwright`: it is shared, so never install into or change it.
 - **For each deleting test**, compare before and after: the files with their link counts, what Radarr and Sonarr track, the torrents, and the items on both servers.
 
@@ -394,7 +395,7 @@ except ValueError as e:
 3. **Plex Media Structure**: Files are at `media.media[0].parts[0].file`, not directly on media object.
 4. **Model Imports**: Import from `app.models` package (models/__init__.py), not individual files.
 5. **Frontend API URL**: relative `/api` everywhere, proxied by nginx in production and by Vite (`VITE_PROXY_TARGET`) in development.
-6. **Processed sets are history**: when an item is duplicated again, the scan opens a new pending set.
+6. **Processed sets are history**: when an item is duplicated again, the scan opens a new pending set. The Scan page and the Dashboard's counts leave them out; the Dashboard's activity lists them.
 7. **Deep scan only logs**: it reports duplicates the media server does not list, and creates no sets from them.
 8. **Deduparr sees media at the media server's paths**: the scan probes each file at exactly the path the media server reports (`media_server/file_probe.py`) and skips a group with a file it cannot find; only deletion also looks under `/media`. Check both before judging advice about mounts or paths.
 

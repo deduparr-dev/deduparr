@@ -79,7 +79,7 @@ export async function seedDuplicateSets(
 /** Pending duplicate sets, as the API reports them. */
 export async function getPendingSets(
   request: APIRequestContext
-): Promise<{ id: number; title: string; status: string }[]> {
+): Promise<{ id: number; title: string; status: string; files: { file_path: string }[] }[]> {
   const res = await request.get(`${BACKEND_URL}/api/scan/duplicates?status=pending&limit=1000`);
   expect(res.ok()).toBeTruthy();
   return res.json();

@@ -1,11 +1,13 @@
 """Tests for the scan runner shared by the scan endpoint and the scheduler"""
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.models import DuplicateSet
+from app.models import DuplicateFile, DuplicateSet
 from app.models.duplicate import DuplicateStatus, MediaType
 from app.services.media_server import (
     DuplicateGroup,
@@ -13,7 +15,7 @@ from app.services.media_server import (
     MediaServerType,
     save_selected_libraries,
 )
-from app.services.scan.runner import run_scan
+from app.services.scan.runner import ALREADY_RUNNING, run_scan
 from app.services.scan.scoring_engine import MediaMetadata
 
 
@@ -335,3 +337,136 @@ async def test_a_processed_item_duplicated_again_gets_a_new_set(test_db):
     statuses = (await test_db.execute(select(DuplicateSet.status))).scalars().all()
     assert sorted(statuses) == [DuplicateStatus.PENDING, DuplicateStatus.PROCESSED]
     assert totals.sets_created == 1
+
+
+@pytest.mark.asyncio
+async def test_run_scan_refuses_a_second_scan_while_one_is_running(test_db):
+    """
+    A scan only commits its sets at the end, so a second one started meanwhile
+    would create its own set for the first item it reaches. It is refused at once
+    instead, with the reason, and touches nothing.
+    """
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hold_the_first_scan(_db):
+        entered.set()
+        await release.wait()
+        return []
+
+    with patch(
+        "app.services.scan.runner.get_media_servers", side_effect=hold_the_first_scan
+    ):
+        first = asyncio.create_task(run_scan(test_db))
+        await entered.wait()
+
+        second = await run_scan(test_db)
+
+        release.set()
+        await first
+
+    assert second.skipped == [ALREADY_RUNNING]
+    assert second.sets_created == 0
+    assert second.libraries_scanned == []
+
+
+@pytest.mark.asyncio
+async def test_run_scan_accepts_a_new_scan_once_the_last_one_has_finished(test_db):
+    """The refusal only lasts as long as the scan that caused it, failed or not."""
+    server = _server(
+        MediaServerType.PLEX,
+        [{"key": "1", "title": "Movies", "type": "movie", "count": 1}],
+        movie_groups=[_group("again")],
+    )
+    await _scan(test_db, [server], ["Movies"])
+
+    with patch(
+        "app.services.scan.runner.get_media_servers",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("boom"),
+    ):
+        with pytest.raises(RuntimeError):
+            await run_scan(test_db)
+
+    totals = await _scan(test_db, [server], ["Movies"])
+
+    assert totals.skipped == []
+    assert totals.libraries_scanned == ["Movies"]
+
+
+async def _copy_of_set(test_db, original, status):
+    """A second set for the item of ``original``, as an overlapping scan left it."""
+    copy = DuplicateSet(
+        media_server=original.media_server,
+        item_id=original.item_id,
+        title=original.title,
+        media_type=original.media_type,
+        status=status,
+        space_to_reclaim=original.space_to_reclaim,
+    )
+    copy.files = [
+        DuplicateFile(
+            file_path=file.file_path,
+            file_size=file.file_size,
+            score=file.score,
+            keep=file.keep,
+        )
+        for file in original.files
+    ]
+    test_db.add(copy)
+    await test_db.commit()
+    return copy
+
+
+@pytest.mark.asyncio
+async def test_run_scan_repairs_an_item_that_has_several_pending_sets(test_db):
+    """
+    Overlapping scans used to leave one pending set per scan for an item, and
+    the lookup for "the" set then raised on every scan that followed. The oldest
+    is kept and the others go, with their files.
+    """
+    server = _server(
+        MediaServerType.PLEX,
+        [{"key": "1", "title": "Movies", "type": "movie", "count": 1}],
+        movie_groups=[_group("twice")],
+    )
+    await _scan(test_db, [server], ["Movies"])
+    original = (
+        await test_db.execute(
+            select(DuplicateSet).options(selectinload(DuplicateSet.files))
+        )
+    ).scalar_one()
+    await _copy_of_set(test_db, original, DuplicateStatus.PENDING)
+    await _copy_of_set(test_db, original, DuplicateStatus.PENDING)
+
+    totals = await _scan(test_db, [server], ["Movies"])
+
+    remaining = (await test_db.execute(select(DuplicateSet.id))).scalars().all()
+    assert remaining == [original.id]
+    assert totals.sets_created == 0
+    assert totals.sets_removed == 2
+    files = (await test_db.execute(select(DuplicateFile.set_id))).scalars().all()
+    assert set(files) == {original.id}
+
+
+@pytest.mark.asyncio
+async def test_run_scan_keeps_a_decided_set_beside_the_oldest(test_db):
+    """A rejected set is a record of a decision, so the repair leaves it alone."""
+    server = _server(
+        MediaServerType.PLEX,
+        [{"key": "1", "title": "Movies", "type": "movie", "count": 1}],
+        movie_groups=[_group("decided")],
+    )
+    await _scan(test_db, [server], ["Movies"])
+    original = (
+        await test_db.execute(
+            select(DuplicateSet).options(selectinload(DuplicateSet.files))
+        )
+    ).scalar_one()
+    decided = await _copy_of_set(test_db, original, DuplicateStatus.REJECTED)
+
+    totals = await _scan(test_db, [server], ["Movies"])
+
+    remaining = (await test_db.execute(select(DuplicateSet.id))).scalars().all()
+    assert sorted(remaining) == [original.id, decided.id]
+    assert totals.sets_removed == 0

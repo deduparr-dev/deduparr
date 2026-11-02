@@ -968,3 +968,28 @@ async def test_a_schedule_written_through_the_generic_endpoints_takes_effect(tes
             await client.put("/api/config/scan_interval_hours", json={"value": "6"})
 
     scheduler.return_value.apply.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_arr_follow_kept_copy_is_on_until_switched_off(test_db):
+    """The *arr following a kept copy is on by default, and can be switched off."""
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        assert (await client.get("/api/config/arr-follow-kept-copy")).json() == {
+            "enabled": True
+        }
+
+        response = await client.put(
+            "/api/config/arr-follow-kept-copy", json={"enabled": False}
+        )
+        assert response.status_code == 200
+        assert response.json() == {"enabled": False}
+        assert (await client.get("/api/config/arr-follow-kept-copy")).json() == {
+            "enabled": False
+        }
+
+        await client.put("/api/config/arr-follow-kept-copy", json={"enabled": True})
+        assert (await client.get("/api/config/arr-follow-kept-copy")).json() == {
+            "enabled": True
+        }

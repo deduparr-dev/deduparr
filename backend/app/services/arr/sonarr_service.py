@@ -70,6 +70,12 @@ class SonarrService(BaseExternalService):
         except (ArrConnectionError, ArrAuthError) as e:
             raise ValueError(f"Sonarr connection failed: {e}")
 
+    async def get_series_path(self, series_id: int) -> str:
+        """The folder Sonarr keeps a series in, as the media server sees it"""
+        client = await self._get_client()
+        series = await client.get_series(series_id)
+        return series.get("path", "")
+
     async def delete_episode_file(self, series_id: int, episode_file_id: int) -> bool:
         """
         Delete episode file from Sonarr

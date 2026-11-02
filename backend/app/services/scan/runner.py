@@ -5,6 +5,7 @@ Finds duplicates across every configured media server and records them, so the
 scan API route and the scheduler share one implementation.
 """
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Tuple
@@ -32,6 +33,14 @@ from app.services.scan.orchestrator import ScanOrchestrator
 from app.services.scan.scoring_engine import ScoringEngine
 
 logger = logging.getLogger(__name__)
+
+# Sets are only committed once a scan has read every library and stored every
+# group, so a second scan started meanwhile cannot see them and creates its own
+# set for each item it reaches first, which later scans then fail on.
+_scan_lock = asyncio.Lock()
+
+
+ALREADY_RUNNING = "A scan is already running"
 
 
 @dataclass
@@ -69,7 +78,21 @@ async def run_scan(db: AsyncSession) -> ScanTotals:
     Each server has its own stored selection, so an instance running both Plex
     and Jellyfin scans only what was chosen for each. Sets are keyed per
     server, so each one's view is kept separately.
+
+    One scan runs at a time: a request made while another is running is
+    answered at once, with the reason in ``skipped``, instead of starting a
+    second pass over the same items.
     """
+    if _scan_lock.locked():
+        logger.warning("A scan is already running - not starting another")
+        return ScanTotals(skipped=[ALREADY_RUNNING])
+
+    async with _scan_lock:
+        return await _scan_every_server(db)
+
+
+async def _scan_every_server(db: AsyncSession) -> ScanTotals:
+    """Scan every configured media server; ``run_scan`` makes sure only one does."""
     scoring_engine = ScoringEngine()
     custom_rules = await get_custom_scoring_rules(db)
     totals = ScanTotals()
@@ -240,8 +263,23 @@ async def _process_duplicate_groups(
                 # reported again is a new duplicate to review.
                 DuplicateSet.status != DuplicateStatus.PROCESSED,
             )
+            .order_by(DuplicateSet.id)
         )
-        existing_set = existing.scalar_one_or_none()
+        existing_sets = existing.scalars().all()
+        existing_set = existing_sets[0] if existing_sets else None
+
+        # Scans that overlapped, on an install from before they were serialised,
+        # left several sets for one item, and a lookup for "the" set then raised
+        # on every later scan. Keep the oldest and drop the pending others; a
+        # decided set is a record, so it stays.
+        for extra in existing_sets[1:]:
+            if extra.status == DuplicateStatus.PENDING:
+                logger.warning(
+                    f"Removing duplicate set {extra.id} of '{group.title}': "
+                    f"set {existing_set.id} already covers the item"
+                )
+                await db.delete(extra)
+                sets_removed += 1
 
         validation_error = validate_duplicate_files(group.files, group.title, logger)
         if validation_error:

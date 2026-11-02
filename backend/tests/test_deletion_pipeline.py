@@ -1264,3 +1264,88 @@ async def test_arr_stage_deletes_an_orphaned_sonarr_file(
     assert await pipeline._stage_arr_removal(unwanted, history) == ("sonarr", 7)
     pipeline.sonarr_service.delete_episode_file.assert_awaited_once_with(7, 70)
     assert history.deleted_from_arr is True
+
+
+async def _tracked_movie_with_kept_copy(
+    test_db, create_duplicate_set, create_duplicate_file, kept_path, follow
+):
+    """A movie Radarr tracks, whose set keeps a copy at ``kept_path``."""
+    if follow is not None:
+        test_db.add(Config(key="arr_follow_kept_copy", value=follow))
+        await test_db.commit()
+    dup_set = await create_duplicate_set()
+    created = await create_duplicate_file(
+        dup_set.id, file_path="/movies/Film (2020)/Film.mkv"
+    )
+    await create_duplicate_file(dup_set.id, file_path=kept_path, keep=True)
+    unwanted = (
+        await test_db.execute(
+            select(DuplicateFile)
+            .options(
+                selectinload(DuplicateFile.duplicate_set).selectinload(
+                    DuplicateSet.files
+                )
+            )
+            .where(DuplicateFile.id == created.id)
+        )
+    ).scalar_one()
+    pipeline = DeletionPipeline(test_db, dry_run=False)
+    pipeline.radarr_service = AsyncMock()
+    pipeline.radarr_service.find_movie_by_file_path.return_value = {
+        "id": 3,
+        "title": "Film",
+        "path": "/movies/Film (2020)",
+        "movieFile": {"id": 30, "path": unwanted.file_path},
+    }
+    return pipeline, unwanted, DeletionHistory(duplicate_file_id=unwanted.id)
+
+
+@pytest.mark.asyncio
+async def test_arr_stage_refuses_a_tracked_file_whose_kept_copy_is_elsewhere(
+    test_db, create_duplicate_set, create_duplicate_file
+):
+    """
+    With the *arr not allowed to follow the kept copy, deleting the file it
+    tracks would leave the movie without one, so nothing is deleted.
+    """
+    pipeline, unwanted, history = await _tracked_movie_with_kept_copy(
+        test_db,
+        create_duplicate_set,
+        create_duplicate_file,
+        "/movies/Film 2020/Film.mkv",
+        follow="false",
+    )
+
+    with pytest.raises(ValueError, match="in another folder"):
+        await pipeline._stage_arr_removal(unwanted, history)
+
+    pipeline.radarr_service.delete_movie_file.assert_not_awaited()
+    assert history.deleted_from_arr is not True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kept_path, follow",
+    [
+        ("/movies/Film (2020)/Film.mp4", "false"),
+        ("/movies/Film 2020/Film.mkv", None),
+        ("/movies/Film 2020/Film.mkv", "true"),
+    ],
+    ids=[
+        "the kept copy is in the movie's folder",
+        "following was never switched off",
+        "following is on",
+    ],
+)
+async def test_arr_stage_deletes_a_tracked_file_when_the_kept_copy_can_be_adopted(
+    test_db, create_duplicate_set, create_duplicate_file, kept_path, follow
+):
+    """The refusal is for the off setting and a kept copy elsewhere only."""
+    pipeline, unwanted, history = await _tracked_movie_with_kept_copy(
+        test_db, create_duplicate_set, create_duplicate_file, kept_path, follow
+    )
+
+    assert await pipeline._stage_arr_removal(unwanted, history) == ("radarr", 3)
+
+    pipeline.radarr_service.delete_movie_file.assert_awaited_once_with(3, 30)
+    assert history.deleted_from_arr is True

@@ -17,6 +17,11 @@ from app.core.config import settings
 from app.models import DeletionHistory, DuplicateFile, DuplicateSet
 from app.models.duplicate import DuplicateStatus, MediaType
 from app.services.arr.client import ArrClientError
+from app.services.arr.helpers import (
+    FOLLOW_KEPT_COPY_KEY,
+    follow_kept_copy_enabled,
+    kept_file_is_in_item,
+)
 from app.services.media_server import (
     MediaServerType,
     get_media_server,
@@ -409,14 +414,7 @@ class DeletionPipeline:
         arr_type = None
         item_hash = None
         arr_media_id = None
-        kept_file = next(
-            (
-                file
-                for file in duplicate_file.duplicate_set.files
-                if file.keep and file.id != duplicate_file.id
-            ),
-            None,
-        )
+        kept_file = self._kept_file(duplicate_file)
         # Resolved before any stage removes the file, so later stages still
         # know where it lived.
         located_path = self._locate_file(file_path, duplicate_file.file_size)
@@ -454,6 +452,40 @@ class DeletionPipeline:
             logger.error(f"Deletion stage failed, attempting rollback: {e}")
             await self._rollback_deletion(history, item_hash, arr_type, file_path)
             raise
+
+    @staticmethod
+    def _kept_file(duplicate_file: DuplicateFile) -> Optional[DuplicateFile]:
+        """The file kept in the set of the one being deleted, if there is one"""
+        return next(
+            (
+                file
+                for file in duplicate_file.duplicate_set.files
+                if file.keep and file.id != duplicate_file.id
+            ),
+            None,
+        )
+
+    def _check_kept_copy_is_in_item(
+        self, duplicate_file: DuplicateFile, item_path: str, arr_name: str
+    ) -> None:
+        """
+        Refuse to delete what the *arr tracks when the kept copy is elsewhere.
+
+        Only with the setting that lets the *arr follow a kept copy switched
+        off. Following means deleting the tracked file and then pointing the
+        item at the kept copy's folder, which leaves the item without a file
+        when that folder cannot be imported, and moves a series away from its
+        other seasons. Nothing has been removed yet when this raises.
+        """
+        kept_file = self._kept_file(duplicate_file)
+        if kept_file and not kept_file_is_in_item(item_path, kept_file.file_path):
+            raise ValueError(
+                f"{arr_name} tracks {duplicate_file.file_path} in {item_path}, and "
+                f"the kept copy {kept_file.file_path} is in another folder. "
+                f"Following it is off ({FOLLOW_KEPT_COPY_KEY}), so nothing was "
+                f"deleted. Point {arr_name} at the kept copy's folder and rescan "
+                "it, or keep the file it tracks."
+            )
 
     async def _stage_qbittorrent_removal(
         self,
@@ -580,6 +612,10 @@ class DeletionPipeline:
                 movie = await self.radarr_service.find_movie_by_file_path(file_path)
                 if movie and "movieFile" in movie:
                     movie_id = movie["id"]
+                    if not await follow_kept_copy_enabled(self.db):
+                        self._check_kept_copy_is_in_item(
+                            duplicate_file, movie.get("path", ""), "Radarr"
+                        )
 
                     logger.info(
                         f"Found movie '{movie.get('title')}' (ID: {movie_id}) in Radarr. "
@@ -616,6 +652,12 @@ class DeletionPipeline:
                 episode = await self.sonarr_service.find_episode_by_file_path(file_path)
                 if episode and "episodeFile" in episode:
                     series_id = episode["seriesId"]
+                    if not await follow_kept_copy_enabled(self.db):
+                        self._check_kept_copy_is_in_item(
+                            duplicate_file,
+                            await self.sonarr_service.get_series_path(series_id),
+                            "Sonarr",
+                        )
 
                     logger.info(
                         f"Found {file_path} in Sonarr (series {series_id}). "

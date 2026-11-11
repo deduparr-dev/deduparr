@@ -7,6 +7,10 @@ import logging
 import os
 from typing import Optional, Union
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import Config
 from app.services.arr.client import (
     ArrFile,
     Episode,
@@ -16,6 +20,27 @@ from app.services.arr.client import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Whether Radarr/Sonarr may be pointed at the folder of the copy that is kept
+# when it is not the one they track. On unless set to "false".
+FOLLOW_KEPT_COPY_KEY = "arr_follow_kept_copy"
+
+
+async def follow_kept_copy_enabled(db: AsyncSession) -> bool:
+    """Whether a kept copy in another folder may take over the *arr's item"""
+    result = await db.execute(
+        select(Config.value).where(Config.key == FOLLOW_KEPT_COPY_KEY)
+    )
+    return (result.scalar_one_or_none() or "true").strip().lower() != "false"
+
+
+def kept_file_is_in_item(item_path: str, kept_file_path: str) -> bool:
+    """
+    Whether the kept file sits in the folder the *arr keeps the item in, so a
+    rescan imports it as it is. False means the item would have to be moved
+    to the kept file's folder first.
+    """
+    return not item_path or _within(item_path, os.path.dirname(kept_file_path))
 
 
 async def rescan_media_item(
@@ -80,10 +105,11 @@ async def rescan_media_item(
                 f"{folder}, and none of {arr}'s root folders holds it. Move it "
                 f"into {current_path} and refresh the {kind} in {arr}."
             )
+        new_path = _item_folder(client, roots, folder)
         logger_instance.info(
-            f"{arr} keeps this {kind} in {current_path}; pointing it at {folder}"
+            f"{arr} keeps this {kind} in {current_path}; pointing it at {new_path}"
         )
-        item["path"] = folder
+        item["path"] = new_path
         await (
             client.update_movie(item)
             if isinstance(client, RadarrClient)
@@ -92,6 +118,26 @@ async def rescan_media_item(
 
     await client.post_command(command, **{id_param: media_id})
     logger_instance.info(f"Asked {arr} to rescan {kind} {media_id} from disk")
+
+
+def _item_folder(
+    client: Union[RadarrClient, SonarrClient], roots: list, folder: str
+) -> str:
+    """
+    The folder the item is pointed at for a kept file in ``folder``.
+
+    A movie owns the folder its file is in. A series owns the folder under its
+    root folder, with its season folders inside, so a kept episode points it at
+    that one and not at its own season, which would leave the other seasons
+    outside the series.
+    """
+    if isinstance(client, RadarrClient):
+        return folder
+    for root in roots:
+        root_path = root.get("path", "").rstrip("/")
+        if root_path and folder.startswith(root_path + "/"):
+            return root_path + "/" + folder[len(root_path) + 1 :].split("/")[0]
+    return folder
 
 
 def _within(folder: str, path: str) -> bool:

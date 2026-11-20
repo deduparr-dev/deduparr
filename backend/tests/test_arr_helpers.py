@@ -9,7 +9,13 @@ from unittest.mock import create_autospec
 import pytest
 
 from app.services.arr.client import RadarrClient, SonarrClient
-from app.services.arr.helpers import rescan_media_item
+from app.models import Config
+from app.services.arr.helpers import (
+    FOLLOW_KEPT_COPY_KEY,
+    follow_kept_copy_enabled,
+    kept_file_is_in_item,
+    rescan_media_item,
+)
 from app.services.arr.path_mapping import PathMapper
 
 LOG = logging.getLogger("test")
@@ -146,3 +152,64 @@ async def test_rescan_media_item_leaves_a_kept_file_in_a_root_folder(
     assert os.listdir(root) == [kept.name]
     client.update_movie.assert_not_awaited()
     client.post_command.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rescan_media_item_points_a_series_at_its_folder_not_its_season():
+    """
+    A kept episode in another series' folder points the series at that
+    folder. Pointing it at the episode's own season folder would leave every
+    other season outside the series.
+    """
+    client = create_autospec(SonarrClient, instance=True)
+    client.get_series.return_value = {
+        "id": 1,
+        "title": "Test Series",
+        "path": "/tv/Old Series (2024)",
+    }
+    client.get_root_folder.return_value = [{"path": "/tv/"}]
+
+    await rescan_media_item(client, 1, "/tv/New Series (2024)/Season 2/S02E01.mkv", LOG)
+
+    client.update_series.assert_awaited_once()
+    assert client.update_series.await_args.args[0]["path"] == "/tv/New Series (2024)"
+    client.post_command.assert_awaited_once_with("RescanSeries", seriesId=1)
+
+
+@pytest.mark.parametrize(
+    "item_path, kept_file_path, expected",
+    [
+        ("/movies/A (2020)", "/movies/A (2020)/a.mkv", True),
+        ("/movies/A (2020)", "/movies/B (2020)/b.mkv", False),
+        ("/movies/A (2020)", "/movies/b.mkv", False),
+        ("/tv/Show", "/tv/Show/Season 1/e.mkv", True),
+        ("/tv/Show", "/tv/Other/Season 1/e.mkv", False),
+        ("", "/anywhere/e.mkv", True),
+    ],
+    ids=[
+        "the movie folder",
+        "another movie folder",
+        "a library root",
+        "a season of the series",
+        "another series",
+        "no path known",
+    ],
+)
+def test_kept_file_is_in_item(item_path, kept_file_path, expected):
+    """The kept file is imported as it is only inside the item's own folder."""
+    assert kept_file_is_in_item(item_path, kept_file_path) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored, expected",
+    [(None, True), ("true", True), ("false", False), (" False ", False)],
+    ids=["not set", "on", "off", "off with spaces and capitals"],
+)
+async def test_follow_kept_copy_is_on_unless_switched_off(test_db, stored, expected):
+    """The *arr following a kept copy is the behaviour before the setting."""
+    if stored is not None:
+        test_db.add(Config(key=FOLLOW_KEPT_COPY_KEY, value=stored))
+        await test_db.commit()
+
+    assert await follow_kept_copy_enabled(test_db) is expected

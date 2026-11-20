@@ -256,6 +256,20 @@ The setting applies when a duplicate set is created, or re-ranked because its fi
 
 > **Paths:** Deduparr matches files by the path the media server reports, so Radarr/Sonarr have to see your media under the same paths, or have [path mappings](../DEPLOYMENT.md#when-the-media-server-and-radarrsonarr-see-different-paths), as for deletion.
 
+### Let the *arr follow the kept copy (optional)
+
+When the file to delete is the one Radarr/Sonarr track and the copy to keep is in another folder, the deletion removes the tracked file through the *arr, then points the movie or series at the kept copy's folder and rescans it so the *arr adopts that copy. For a series the folder is the series folder under its root folder, never one of its seasons. If that folder cannot be imported (a file directly in a root folder, say), the *arr is left without a file.
+
+To make that a decision instead of a side effect, switch following off:
+
+```bash
+curl -X PUT http://localhost:8655/api/config/arr-follow-kept-copy \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": false}'
+```
+
+A file the *arr tracks is then never deleted while the kept copy is outside the folder the *arr keeps the item in. It is reported with the reason before anything is removed, and its set stays pending, which also stops scheduled deletion from taking that step on its own. Point the *arr at the folder you want and rescan it, or keep the tracked file, and the set deletes normally. Following is on unless switched off, as before.
+
 ## Deletion Pipeline Stages
 
 When deletion is executed (non-dry-run), each file to delete goes through these stages:

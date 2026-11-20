@@ -20,6 +20,7 @@ from app.services.shared.security import (
     mask_secret,
 )
 from app.models.scoring_rule import ScoringRule
+from app.services.arr.helpers import FOLLOW_KEPT_COPY_KEY, follow_kept_copy_enabled
 from app.services.arr.quality import PREFER_ARR_QUALITY_PROFILE_KEY
 from app.services.scheduler import Schedule, get_scheduler, load_schedule
 
@@ -74,6 +75,12 @@ class DeepScanUpdate(BaseModel):
 
 class ArrQualityProfileSetting(BaseModel):
     """Request/response model for the 'Prefer *arr quality profile' setting"""
+
+    enabled: bool
+
+
+class ArrFollowKeptCopySetting(BaseModel):
+    """Request/response model for the 'Let the *arr follow the kept copy' setting"""
 
     enabled: bool
 
@@ -184,6 +191,40 @@ async def update_arr_quality_profile_setting(
     """
     await _set_bool_config(db, PREFER_ARR_QUALITY_PROFILE_KEY, update.enabled)
     return ArrQualityProfileSetting(enabled=update.enabled)
+
+
+@router.get("/arr-follow-kept-copy", response_model=ArrFollowKeptCopySetting)
+async def get_arr_follow_kept_copy_setting(db: AsyncSession = Depends(get_db)):
+    """
+    Get the 'Let the *arr follow the kept copy' setting
+
+    Returns:
+        enabled: True (the default) if Radarr/Sonarr may be pointed at the
+        folder of the kept copy after the file they track is deleted, False if
+        a file they track is never deleted while the kept copy is elsewhere
+    """
+    return ArrFollowKeptCopySetting(enabled=await follow_kept_copy_enabled(db))
+
+
+@router.put("/arr-follow-kept-copy", response_model=ArrFollowKeptCopySetting)
+async def update_arr_follow_kept_copy_setting(
+    update: ArrFollowKeptCopySetting, db: AsyncSession = Depends(get_db)
+):
+    """
+    Update the 'Let the *arr follow the kept copy' setting
+
+    When disabled, a deletion that would remove the file Radarr/Sonarr track
+    while the copy to keep sits in another folder is refused before anything is
+    removed: the file is reported with the reason and its set stays pending.
+
+    Args:
+        update: Setting update
+
+    Returns:
+        enabled: Updated setting
+    """
+    await _set_bool_config(db, FOLLOW_KEPT_COPY_KEY, update.enabled)
+    return ArrFollowKeptCopySetting(enabled=update.enabled)
 
 
 # Scheduler configuration endpoints (must come before /{key} catch-all route)

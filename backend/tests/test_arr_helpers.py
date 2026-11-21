@@ -162,6 +162,7 @@ async def test_rescan_media_item_points_a_series_at_its_folder_not_its_season():
     other season outside the series.
     """
     client = create_autospec(SonarrClient, instance=True)
+    client.path_mapper = None
     client.get_series.return_value = {
         "id": 1,
         "title": "Test Series",

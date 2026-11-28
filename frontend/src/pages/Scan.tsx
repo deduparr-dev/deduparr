@@ -153,12 +153,16 @@ function DuplicateSetCard({
   onDelete,
   onToggleKeep,
   isDeleting,
+  isBusy,
   isTogglingFile,
 }: {
   dupSet: ApiDuplicateSet;
   onDelete: (setId: number, dryRun: boolean) => void;
   onToggleKeep: (setId: number, fileId: number, keep: boolean) => void;
+  // This set is the one being deleted
   isDeleting: boolean;
+  // Some set is being deleted: one deletion at a time, so no set can be changed
+  isBusy: boolean;
   isTogglingFile: number | null;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -194,7 +198,7 @@ function DuplicateSetCard({
           <button
             onClick={() => setExpanded(!expanded)}
             className="flex-1 flex items-start gap-2 md:gap-3 text-left hover:opacity-80 transition-opacity"
-            disabled={isDeleting}
+            disabled={isBusy}
           >
             {expanded ? (
               <ChevronUp className="w-4 h-4 md:w-5 md:h-5 text-muted-foreground mt-0.5 flex-shrink-0" />
@@ -226,6 +230,7 @@ function DuplicateSetCard({
             <Button
               size="sm"
               variant="destructive"
+              disabled={isBusy}
               onClick={() => setShowDeleteConfirm(!showDeleteConfirm)}
               className="w-full md:w-auto md:flex-shrink-0 text-xs md:text-sm"
             >
@@ -249,7 +254,7 @@ function DuplicateSetCard({
           )}
         </div>
 
-        {showDeleteConfirm && !isDeleting && (
+        {showDeleteConfirm && !isBusy && (
           <DeleteConfirmPanel
             id={String(dupSet.id)}
             heading="Confirm Deletion"
@@ -280,7 +285,7 @@ function DuplicateSetCard({
           </div>
           {dupSet.files.map((file) => {
             const isToggling = isTogglingFile === file.id;
-            const canToggle = !isDeleting && !isToggling;
+            const canToggle = !isBusy && !isToggling;
             const isLastKeeper = file.keep && filesToKeep.length <= 1;
 
             return (
@@ -775,7 +780,8 @@ export default function Scan() {
               dupSet={dupSet}
               onDelete={handleDelete}
               onToggleKeep={handleToggleKeep}
-              isDeleting={deleteMutation.isPending}
+              isDeleting={deleteMutation.isPending && deleteMutation.variables?.setId === dupSet.id}
+              isBusy={deleteMutation.isPending}
               isTogglingFile={togglingFileId}
             />
           ))
